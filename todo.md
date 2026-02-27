@@ -31,7 +31,7 @@
 
 ## Phase 2 — Write Files (Apply Patches Safely)
 
-- [ ] Define and document the `@@EDIT` structured edit block format
+- [x] Define and document the `@@EDIT` structured edit block format
 - [ ] Implement edit block parser in extension host
 - [ ] Validate target path is inside the workspace
 - [ ] Validate `FROM` text exists (exact match); fail safely if not
