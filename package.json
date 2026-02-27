@@ -90,6 +90,10 @@
       }
     }
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/drittich/agent-86"
+  },
   "scripts": {
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",

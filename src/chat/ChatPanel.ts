@@ -172,6 +172,33 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return new OpenAIProvider(baseUrl, model, apiKey);
   }
 
+  private _buildMessages(): ChatMessage[] {
+    const systemPrompt: ChatMessage = {
+      role: 'system',
+      content: `You are a coding assistant embedded in VS Code. You can read and edit files in the workspace.
+
+When the user asks you to modify a file, produce one or more @@EDIT blocks in your response. The format is:
+
+@@EDIT path/to/file
+@@FROM
+<exact text currently in the file — or leave empty for a full-file replacement>
+@@TO
+<replacement text>
+@@END
+
+Rules:
+- The path must be workspace-relative (forward slashes, no leading slash).
+- @@FROM text must match exactly what is in the file (whitespace included).
+- An empty @@FROM section replaces the entire file.
+- An empty @@TO section deletes the matched text.
+- You may include multiple @@EDIT blocks in one response.
+- Outside of @@EDIT blocks, explain what you are doing in plain text.
+
+When the user asks a question (not requesting a file change), just answer in plain text — do not emit @@EDIT blocks.`,
+    };
+    return [systemPrompt, ...this._history];
+  }
+
   private async _handleSend(prompt: string): Promise<void> {
     if (this._abortController) {
       // Already generating — ignore duplicate sends
@@ -197,7 +224,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     try {
       await provider.stream(
-        this._history,
+        this._buildMessages(),
         this._abortController.signal,
         (event) => {
           if (event.type === 'delta') {

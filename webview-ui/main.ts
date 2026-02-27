@@ -373,7 +373,7 @@ function renderAttachedFiles(): void {
 btnSend.addEventListener('click', sendPrompt);
 
 promptInput.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     sendPrompt();
   }
