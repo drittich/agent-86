@@ -72,6 +72,11 @@
 - [ ] File tree picker (replace open dialog)
 - [ ] Auto-attach active editor / selection ("context builder")
 
+## Phase 6 — UX Improvements
+
+- [ ] Provide a user-friendly error message when the LLM server isn't running
+- [ ] Rename the extension to "Agent 86"
+
 ---
 
 ## Extension Host Checklist
