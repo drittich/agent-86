@@ -35,6 +35,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _userCancelled = false;
   private _history: ChatMessage[] = [];
   private _attachedFiles: AttachedFile[] = [];
+  /** Tracks which attached file URIs have already been injected into _history. */
+  private _injectedFileUris = new Set<string>();
   private readonly _diffProvider = new DiffContentProvider();
   /** Pending approval resolvers keyed by approvalId. */
   private readonly _approvalResolvers = new Map<string, (approved: boolean) => void>();
@@ -60,6 +62,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       this._currentSession = restored;
       this._history = restored.messages;
       this._attachedFiles = restored.attachments;
+      // All restored attachments are already baked into history — don't re-inject them
+      this._injectedFileUris = new Set(restored.attachments.map(f => f.uri));
     } else {
       this._currentSession = this._configManager.createSession();
     }
@@ -120,6 +124,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._abortController = undefined;
     this._history = [];
     this._attachedFiles = [];
+    this._injectedFileUris = new Set();
     this._currentSession = this._configManager.createSession();
     this._postMessage({ type: 'status', text: 'New session started.' });
   }
@@ -152,6 +157,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._abortController = undefined;
     this._history = session.messages;
     this._attachedFiles = session.attachments;
+    // Mark all restored attachments as already injected (they're baked into history)
+    this._injectedFileUris = new Set(session.attachments.map(f => f.uri));
     this._currentSession = session;
     this._postMessage({ type: 'status', text: `Restored session: ${session.title}` });
     this._restoreSessionUi();
@@ -231,13 +238,17 @@ PATH: path/to/file.ts
     }
     this._userCancelled = false;
 
-    // Build user message, prepending attached file contents on first turn
+    // Build user message, prepending any attached files that haven't been injected yet
     let userContent = prompt;
-    if (this._attachedFiles.length > 0 && this._history.length === 0) {
-      const fileBlocks = this._attachedFiles.map(f =>
+    const newFiles = this._attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
+    if (newFiles.length > 0) {
+      const fileBlocks = newFiles.map(f =>
         `<file path="${f.relativePath}" language="${f.languageId}">\n${f.content}\n</file>`
       ).join('\n\n');
       userContent = `${fileBlocks}\n\n${prompt}`;
+      for (const f of newFiles) {
+        this._injectedFileUris.add(f.uri);
+      }
     }
 
     this._history.push({ role: 'user', content: userContent });
@@ -299,8 +310,9 @@ PATH: path/to/file.ts
 
     const { blocks, warnings } = parseEditBlocks(assistantText);
 
-    for (const warning of warnings) {
-      this._postMessage({ type: 'status', text: `Edit parse warning: ${warning}` });
+    if (warnings.length > 0) {
+      const warningText = warnings.map(w => `> ⚠ Edit parse warning: ${w}`).join('\n');
+      this._postMessage({ type: 'delta', content: '\n\n' + warningText });
     }
 
     for (const block of blocks) {
