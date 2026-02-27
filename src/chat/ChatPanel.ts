@@ -46,6 +46,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _isViewVisible = true;
   private _deltaBuffer: string[] = [];
 
+  // Track active editor state
+  private _hasActiveEditor = false;
+
   constructor(private readonly context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, this._diffProvider)
@@ -60,6 +63,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     } else {
       this._currentSession = this._configManager.createSession();
     }
+
+    // Track active editor state changes
+    this._hasActiveEditor = !!vscode.window.activeTextEditor;
+    context.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        this._hasActiveEditor = !!vscode.window.activeTextEditor;
+        this._postMessage({ type: 'editorState', hasActiveEditor: this._hasActiveEditor });
+      })
+    );
   }
 
   public resolveWebviewView(
@@ -600,6 +612,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * the webview so the UI reflects a restored session after a VS Code restart.
    */
   private _restoreSessionUi(): void {
+    // Send the current editor state
+    this._postMessage({ type: 'editorState', hasActiveEditor: this._hasActiveEditor });
+    
     if (this._attachedFiles.length > 0) {
       this._postMessage({ type: 'attachments', files: this._attachedFiles });
     }

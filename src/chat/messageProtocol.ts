@@ -11,7 +11,8 @@ export type ExtensionToWebview =
   | { type: 'error'; message: string }
   | { type: 'status'; text: string }
   | { type: 'attachments'; files: AttachedFile[] }
-  | { type: 'approval/request'; approvalId: string; action: string; payload: unknown; reason: string };
+  | { type: 'approval/request'; approvalId: string; action: string; payload: unknown; reason: string }
+  | { type: 'editorState'; hasActiveEditor: boolean };
 
 // Messages sent from the webview to the extension host
 export type WebviewToExtension =

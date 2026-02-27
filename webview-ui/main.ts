@@ -291,6 +291,8 @@ let attachedFiles: AttachedFile[] = [];
 let isGenerating = false;
 /** Tracks whether the current generation was explicitly cancelled by the user. */
 let wasExplicitlyCancelled = false;
+/** Tracks whether there is an active editor in VS Code. */
+let hasActiveEditor = false;
 
 // Markdown rendering — buffer incoming deltas and flush on a timer
 let markdownBuffer = '';
@@ -341,6 +343,11 @@ function setGenerating(active: boolean): void {
     wasExplicitlyCancelled = false;
     outputEl.classList.remove('cancelled');
   }
+}
+
+function setEditorState(hasEditor: boolean): void {
+  hasActiveEditor = hasEditor;
+  btnAttachEditor.disabled = !hasEditor;
 }
 
 function renderAttachedFiles(): void {
@@ -708,6 +715,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     reason?: string;
     usage?: TokenUsage;
     cancelled?: boolean;
+    hasActiveEditor?: boolean;
   };
 
   switch (msg.type) {
@@ -754,6 +762,11 @@ window.addEventListener('message', (event: MessageEvent) => {
     case 'approval/request': {
       const payload = msg.payload as ApprovalPayload | undefined;
       showApprovalCard(msg.approvalId ?? '', msg.action ?? '', payload, msg.reason ?? '');
+      break;
+    }
+
+    case 'editorState': {
+      setEditorState(msg.hasActiveEditor ?? false);
       break;
     }
   }

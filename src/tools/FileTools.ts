@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
 import { AttachedFile } from '../chat/messageProtocol';
 
 const FILE_CAP_BYTES = 300 * 1024;   // 300 KB per file
@@ -312,16 +313,22 @@ export async function pickAndReadFiles(
   existing: AttachedFile[]
 ): Promise<AttachedFile[]> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders || workspaceFolders.length === 0) {
-    vscode.window.showWarningMessage('No workspace folder is open.');
-    return existing;
+  const hasWorkspace = workspaceFolders && workspaceFolders.length > 0;
+
+  // Determine default URI for the file picker
+  let defaultUri: vscode.Uri;
+  if (hasWorkspace) {
+    defaultUri = workspaceFolders[0].uri;
+  } else {
+    // Use user's home directory as default when no workspace is open
+    defaultUri = vscode.Uri.file(os.homedir());
   }
 
   const uris = await vscode.window.showOpenDialog({
     canSelectMany: true,
     canSelectFolders: false,
     openLabel: 'Attach',
-    defaultUri: workspaceFolders[0].uri,
+    defaultUri,
     title: 'Attach files to context',
   });
 
@@ -329,24 +336,14 @@ export async function pickAndReadFiles(
     return existing;
   }
 
-  // Determine the workspace root strings for boundary checks
-  const wsRoots = workspaceFolders.map(f => f.uri.fsPath);
+  // Determine the workspace root strings for relative path computation
+  const wsRoots = hasWorkspace ? workspaceFolders.map(f => f.uri.fsPath) : [];
 
   const result: AttachedFile[] = [...existing];
   const existingUris = new Set(existing.map((f: AttachedFile) => f.uri));
 
   for (const uri of uris) {
-    // Restrict to workspace
     const fsPath = uri.fsPath;
-    const inWorkspace = wsRoots.some((root: string) =>
-      fsPath === root || fsPath.startsWith(root + path.sep)
-    );
-    if (!inWorkspace) {
-      vscode.window.showWarningMessage(
-        `Skipped "${path.basename(fsPath)}" — outside workspace.`
-      );
-      continue;
-    }
 
     // Skip duplicates
     if (existingUris.has(uri.toString())) {
@@ -381,7 +378,7 @@ export async function pickAndReadFiles(
       content = decoder.decode(bytes);
     }
 
-    // Compute relative path
+    // Compute relative path (or use full path if no workspace)
     const relativePath = bestRelativePath(wsRoots, fsPath);
 
     result.push({
@@ -451,7 +448,7 @@ function formatBytes(n: number): string {
  * Read the active editor's content or selection and return as an AttachedFile.
  * If there's a selection, only the selected text is included.
  * If the file is untitled/unsaved, uses the current document content.
- * Returns null if no active editor or file is outside workspace.
+ * Returns null if no active editor.
  */
 export async function readActiveEditor(existing: AttachedFile[]): Promise<AttachedFile[] | null> {
   const editor = vscode.window.activeTextEditor;
@@ -463,22 +460,12 @@ export async function readActiveEditor(existing: AttachedFile[]): Promise<Attach
   const document = editor.document;
   const workspaceFolders = vscode.workspace.workspaceFolders;
   
-  // Check if the file is in the workspace
+  // Get workspace roots for relative path computation
   const wsRoots = workspaceFolders?.map(f => f.uri.fsPath) ?? [];
   const fsPath = document.uri.fsPath;
   
   // For untitled files, we allow attachment (they don't have a workspace path)
   const isUntitled = document.uri.scheme === 'untitled';
-  const inWorkspace = isUntitled || wsRoots.some((root: string) =>
-    fsPath === root || fsPath.startsWith(root + path.sep)
-  );
-  
-  if (!inWorkspace) {
-    vscode.window.showWarningMessage(
-      `Skipped "${path.basename(fsPath)}" — outside workspace.`
-    );
-    return null;
-  }
 
   // Check if already attached
   const uriStr = document.uri.toString();
