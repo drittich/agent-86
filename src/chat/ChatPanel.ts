@@ -4,6 +4,7 @@ import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
 import { pickAndReadFiles } from '../tools/FileTools';
 import { parseEditBlocks, resolveEditPath, validateFromText, applyEditBlock } from '../tools/editParser';
+import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
 import { ConfigManager, Session } from '../config/ConfigManager';
 
 const DIFF_SCHEME = 'agentic-diff';
@@ -144,10 +145,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         }
       );
 
-      // After streaming completes, show diffs for any @@EDIT blocks
+      // After streaming completes, process @@EDIT and @@RUN blocks
       if (fullResponse) {
         this._history.push({ role: 'assistant', content: fullResponse });
         await this._showEditDiffs(fullResponse);
+        await this._processRunBlocks(fullResponse);
       }
     } finally {
       this._abortController = undefined;
@@ -235,14 +237,67 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Parse @@RUN blocks from the assistant response, request approval for each,
+   * execute approved commands, and append a summary back into the conversation
+   * so the model can see the output.
+   */
+  private async _processRunBlocks(assistantText: string): Promise<void> {
+    const wsRoots = vscode.workspace.workspaceFolders ?? [];
+    if (wsRoots.length === 0) {
+      return;
+    }
+
+    const cwd = wsRoots[0].uri.fsPath;
+    const blocks = parseRunBlocks(assistantText);
+    if (blocks.length === 0) {
+      return;
+    }
+
+    const resultLines: string[] = [];
+
+    for (const block of blocks) {
+      const approved = await this._requestApproval(
+        'runCommand',
+        { command: block.command },
+        'The assistant wants to run a terminal command.'
+      );
+
+      if (!approved) {
+        this._postMessage({ type: 'status', text: `Command cancelled: ${block.command}` });
+        resultLines.push(`@@RUN_RESULT command: ${block.command}\nstatus: cancelled by user`);
+        continue;
+      }
+
+      this._postMessage({ type: 'status', text: `Running: ${block.command}` });
+      const result = await runCommand(block.command, cwd);
+      const summary = formatRunResult(result);
+      resultLines.push(summary);
+
+      const statusText = result.timedOut
+        ? `Timed out: ${block.command}`
+        : `Done (exit ${result.exitCode ?? '?'}): ${block.command}`;
+      this._postMessage({ type: 'status', text: statusText });
+    }
+
+    if (resultLines.length === 0) {
+      return;
+    }
+
+    // Feed results back to the model as a user message so it can continue.
+    const feedbackContent = resultLines.join('\n\n');
+    this._history.push({ role: 'user', content: feedbackContent });
+    this._saveCurrentSession();
+  }
+
+  /**
    * Send an `approval/request` to the webview and wait for the user's
    * `approval/response`. Returns `true` if approved, `false` if cancelled.
    */
-  private _requestApproval(action: string, payload: unknown): Promise<boolean> {
+  private _requestApproval(action: string, payload: unknown, reason = ''): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       const approvalId = `approval-${++this._approvalCounter}`;
       this._approvalResolvers.set(approvalId, resolve);
-      this._postMessage({ type: 'approval/request', approvalId, action, payload, reason: '' });
+      this._postMessage({ type: 'approval/request', approvalId, action, payload, reason });
     });
   }
 

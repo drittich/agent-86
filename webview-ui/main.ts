@@ -260,6 +260,11 @@ const approvalStyle = `
     margin-bottom: 6px;
     word-break: break-all;
   }
+  .approval-card .approval-reason {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    margin-bottom: 4px;
+  }
   .approval-card .approval-buttons {
     display: flex;
     gap: 6px;
@@ -285,25 +290,43 @@ const approvalsContainer = document.createElement('div');
 approvalsContainer.id = 'approvals-container';
 appEl.insertBefore(approvalsContainer, inputRowEl);
 
-function showApprovalCard(approvalId: string, path: string): void {
+function showApprovalCard(
+  approvalId: string,
+  action: string,
+  payload: { path?: string; command?: string } | undefined,
+  reason: string
+): void {
+  const isRunCommand = action === 'runCommand';
+
   const card = document.createElement('div');
   card.className = 'approval-card';
   card.dataset.approvalId = approvalId;
 
   const title = document.createElement('div');
   title.className = 'approval-title';
-  title.textContent = 'Apply edit to file?';
+  title.textContent = isRunCommand ? 'Run terminal command?' : 'Apply edit to file?';
 
-  const pathEl = document.createElement('div');
-  pathEl.className = 'approval-path';
-  pathEl.textContent = path;
+  const detailEl = document.createElement('div');
+  detailEl.className = 'approval-path';
+
+  if (isRunCommand) {
+    detailEl.textContent = payload?.command ?? action;
+  } else {
+    detailEl.textContent = payload?.path ?? action;
+  }
+
+  const reasonEl = document.createElement('div');
+  if (reason) {
+    reasonEl.className = 'approval-reason';
+    reasonEl.textContent = reason;
+  }
 
   const buttons = document.createElement('div');
   buttons.className = 'approval-buttons';
 
   const applyBtn = document.createElement('button');
   applyBtn.className = 'btn-apply';
-  applyBtn.textContent = 'Apply';
+  applyBtn.textContent = isRunCommand ? 'Run' : 'Apply';
   applyBtn.addEventListener('click', () => {
     vscode.postMessage({ type: 'approval/response', approvalId, approved: true });
     card.remove();
@@ -320,7 +343,8 @@ function showApprovalCard(approvalId: string, path: string): void {
   buttons.appendChild(applyBtn);
   buttons.appendChild(cancelBtn);
   card.appendChild(title);
-  card.appendChild(pathEl);
+  card.appendChild(detailEl);
+  if (reason) { card.appendChild(reasonEl); }
   card.appendChild(buttons);
   approvalsContainer.appendChild(card);
 }
@@ -367,8 +391,8 @@ window.addEventListener('message', (event: MessageEvent) => {
       break;
 
     case 'approval/request': {
-      const payload = msg.payload as { path?: string } | undefined;
-      showApprovalCard(msg.approvalId ?? '', payload?.path ?? msg.action ?? '');
+      const payload = msg.payload as { path?: string; command?: string } | undefined;
+      showApprovalCard(msg.approvalId ?? '', msg.action ?? '', payload, msg.reason ?? '');
       break;
     }
   }
