@@ -3,15 +3,15 @@
 ## Phase 0 — Bootstrap (Streaming-First)
 
 - [x] Create extension scaffold (TypeScript)
-- [ ] Add a webview view (sidebar) contributed via `agentic.openPanel` command
-- [ ] Implement UI layout
-  - [ ] Multiline `<textarea>` prompt input
-  - [ ] Attached files list
-  - [ ] "Attach files" button
-  - [ ] "New session" button
-  - [ ] "Send" button
-  - [ ] "Stop" button (cancel generation)
-  - [ ] Output area that renders Markdown
+- [x] Add a webview view (sidebar) contributed via `agentic.openPanel` command
+- [x] Implement UI layout
+  - [x] Multiline `<textarea>` prompt input
+  - [x] Attached files list
+  - [x] "Attach files" button
+  - [x] "New session" button
+  - [x] "Send" button
+  - [x] "Stop" button (cancel generation)
+  - [x] Output area that renders Markdown
 - [ ] Implement OpenAI-compatible streaming client
   - [ ] `POST /chat/completions` with `stream: true`
   - [ ] Parse SSE `data:` frames, append `delta.content` as it arrives
