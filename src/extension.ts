@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ChatPanel } from './chat/ChatPanel';
 import { Session } from './config/ConfigManager';
-import { FileTreeDataProvider, pickAndReadFilesFromTree } from './tools/FileTools';
+import { FileTreeDataProvider, pickAndReadFilesFromTree, readActiveEditor } from './tools/FileTools';
 
 // Quick-pick for sessions
 async function showSessionQuickPick(chatPanel: ChatPanel): Promise<void> {
@@ -87,6 +87,14 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('agentic.selectSession', () => {
       showSessionQuickPick(chatPanel);
+    }),
+    vscode.commands.registerCommand('agentic.attachActiveEditor', async () => {
+      chatPanel.reveal();
+      const existing = chatPanel.getAttachedFiles();
+      const updated = await readActiveEditor(existing);
+      if (updated) {
+        chatPanel.updateAttachedFiles(updated);
+      }
     }),
     vscode.commands.registerCommand('agenticFilePicker.focus', () => {
       // The tree view is visible in the Explorer view under "File Picker"

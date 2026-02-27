@@ -28,6 +28,10 @@
       {
         "command": "agentic.selectSession",
         "title": "Agent 86: Select Session"
+      },
+      {
+        "command": "agentic.attachActiveEditor",
+        "title": "Agent 86: Attach Active Editor"
       }
     ],
     "viewsContainers": {

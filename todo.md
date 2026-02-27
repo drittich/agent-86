@@ -70,7 +70,7 @@
 - [x] "Copy raw" and "Copy markdown" actions
 - [x] Quick-pick for sessions
 - [x] File tree picker (replace open dialog)
-- [ ] Auto-attach active editor / selection ("context builder")
+- [x] Auto-attach active editor / selection ("context builder")
 
 ## Phase 6 — UX Improvements
 

@@ -446,3 +446,107 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) { return `${(n / 1024).toFixed(1)} KB`; }
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/**
+ * Read the active editor's content or selection and return as an AttachedFile.
+ * If there's a selection, only the selected text is included.
+ * If the file is untitled/unsaved, uses the current document content.
+ * Returns null if no active editor or file is outside workspace.
+ */
+export async function readActiveEditor(existing: AttachedFile[]): Promise<AttachedFile[] | null> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showWarningMessage('No active editor to attach.');
+    return null;
+  }
+
+  const document = editor.document;
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  
+  // Check if the file is in the workspace
+  const wsRoots = workspaceFolders?.map(f => f.uri.fsPath) ?? [];
+  const fsPath = document.uri.fsPath;
+  
+  // For untitled files, we allow attachment (they don't have a workspace path)
+  const isUntitled = document.uri.scheme === 'untitled';
+  const inWorkspace = isUntitled || wsRoots.some((root: string) =>
+    fsPath === root || fsPath.startsWith(root + path.sep)
+  );
+  
+  if (!inWorkspace) {
+    vscode.window.showWarningMessage(
+      `Skipped "${path.basename(fsPath)}" — outside workspace.`
+    );
+    return null;
+  }
+
+  // Check if already attached
+  const uriStr = document.uri.toString();
+  const existingUris = new Set(existing.map((f: AttachedFile) => f.uri));
+  if (existingUris.has(uriStr)) {
+    vscode.window.showWarningMessage(
+      `"${document.fileName}" is already attached.`
+    );
+    return null;
+  }
+
+  // Get content - either selection or full document
+  const selection = editor.selection;
+  let content: string;
+  let relativePath: string;
+  let selectionInfo = '';
+
+  if (selection && !selection.isEmpty) {
+    // Use selected text only
+    content = document.getText(selection);
+    const startLine = selection.start.line + 1;
+    const endLine = selection.end.line + 1;
+    selectionInfo = startLine === endLine 
+      ? ` (line ${startLine})` 
+      : ` (lines ${startLine}-${endLine})`;
+  } else {
+    // Use full document content
+    content = document.getText();
+  }
+
+  // Compute relative path
+  if (isUntitled) {
+    relativePath = document.fileName || 'untitled';
+  } else {
+    relativePath = bestRelativePath(wsRoots, fsPath);
+  }
+
+  // Add selection info to relative path for display
+  const displayPath = relativePath + selectionInfo;
+
+  const sizeBytes = Buffer.byteLength(content, 'utf8');
+
+  // Check per-file cap
+  if (sizeBytes > FILE_CAP_BYTES) {
+    const truncated = content.slice(0, FILE_CAP_BYTES);
+    content =
+      truncated +
+      `\n\n[... TRUNCATED — content was ${formatBytes(sizeBytes)}, showing first ${formatBytes(FILE_CAP_BYTES)} ...]`;
+  }
+
+  const result: AttachedFile[] = [...existing];
+  result.push({
+    uri: uriStr,
+    relativePath: displayPath,
+    languageId: document.languageId,
+    content,
+    sizeBytes,
+  });
+
+  // Enforce total cap
+  let totalBytes = result.reduce((sum, f) => sum + Math.min(f.sizeBytes, FILE_CAP_BYTES), 0);
+  while (totalBytes > TOTAL_CAP_BYTES && result.length > 0) {
+    const dropped = result.pop()!;
+    totalBytes -= Math.min(dropped.sizeBytes, FILE_CAP_BYTES);
+    vscode.window.showWarningMessage(
+      `Dropped "${dropped.relativePath}" — total context would exceed ${formatBytes(TOTAL_CAP_BYTES)}.`
+    );
+  }
+
+  return result;
+}

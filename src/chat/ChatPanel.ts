@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
-import { pickAndReadFiles } from '../tools/FileTools';
+import { pickAndReadFiles, readActiveEditor } from '../tools/FileTools';
 import { parseEditBlocks, resolveEditPath, validateFromText, applyEditBlock } from '../tools/editParser';
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
 import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
@@ -524,6 +524,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           this._postMessage({ type: 'error', message: String(err) });
         });
         break;
+      case 'attachActiveEditor':
+        this._handleAttachActiveEditor().catch((err) => {
+          this._postMessage({ type: 'error', message: String(err) });
+        });
+        break;
       case 'selectSession':
         this._handleSelectSession().catch((err) => {
           this._postMessage({ type: 'error', message: String(err) });
@@ -545,6 +550,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._attachedFiles = updated;
     this._postMessage({ type: 'attachments', files: updated });
     this._saveCurrentSession();
+  }
+
+  private async _handleAttachActiveEditor(): Promise<void> {
+    const updated = await readActiveEditor(this._attachedFiles);
+    if (updated) {
+      this._attachedFiles = updated;
+      this._postMessage({ type: 'attachments', files: updated });
+      this._saveCurrentSession();
+    }
   }
 
   private async _handleSelectSession(): Promise<void> {

@@ -16,6 +16,7 @@ root.innerHTML = `
     <button id="btn-new-session" title="New session">New Session</button>
     <button id="btn-select-session" title="Select session">Select Session</button>
     <button id="btn-attach" title="Attach files">Attach Files</button>
+    <button id="btn-attach-editor" title="Attach active editor or selection">Attach Editor</button>
   </div>
 
   <ul id="attached-files"></ul>
@@ -274,7 +275,8 @@ const promptInput  = document.getElementById('prompt-input') as HTMLTextAreaElem
 const btnSend      = document.getElementById('btn-send') as HTMLButtonElement;
 const btnStop      = document.getElementById('btn-stop') as HTMLButtonElement;
 const btnAttach    = document.getElementById('btn-attach') as HTMLButtonElement;
-const btnNewSess   = document.getElementById('btn-new-session') as HTMLButtonElement;
+  const btnAttachEditor = document.getElementById('btn-attach-editor') as HTMLButtonElement;
+  const btnNewSess   = document.getElementById('btn-new-session') as HTMLButtonElement;
 const btnSelectSess = document.getElementById('btn-select-session') as HTMLButtonElement;
 const btnCopyMd    = document.getElementById('btn-copy-markdown') as HTMLButtonElement;
 const btnCopyRaw   = document.getElementById('btn-copy-raw') as HTMLButtonElement;
@@ -377,6 +379,10 @@ btnStop.addEventListener('click', () => {
 
 btnAttach.addEventListener('click', () => {
   vscode.postMessage({ type: 'attachFiles' });
+});
+
+btnAttachEditor.addEventListener('click', () => {
+  vscode.postMessage({ type: 'attachActiveEditor' });
 });
 
 btnNewSess.addEventListener('click', () => {
