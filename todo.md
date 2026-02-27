@@ -49,7 +49,7 @@
 ## Phase 4 — Terminal Commands and File Ops with Approvals
 
 - [x] Implement `run_command` tool with approval gate
-- [ ] Implement `move_file` tool with approval gate
+- [x] Implement `move_file` tool with approval gate
 - [ ] Implement `delete_file` tool with approval gate (prefer trash)
 - [ ] Implement approval card UI in webview
   - [ ] Show action type, target, reason, and preview
