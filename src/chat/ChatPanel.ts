@@ -1,9 +1,12 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { WebviewToExtension, ExtensionToWebview } from './messageProtocol';
+import { OpenAIProvider } from '../providers/OpenAIProvider';
+import { ChatMessage } from '../providers/IProvider';
 
 export class ChatPanel implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
+  private _abortController?: AbortController;
+  private _history: ChatMessage[] = [];
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -37,6 +40,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   public newSession(): void {
+    this._abortController?.abort();
+    this._abortController = undefined;
+    this._history = [];
     this._postMessage({ type: 'status', text: 'New session started.' });
   }
 
@@ -44,14 +50,56 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._handleMessage({ type: 'attachFiles' });
   }
 
+  private _getProvider(): OpenAIProvider {
+    const cfg = vscode.workspace.getConfiguration('agentCoder');
+    const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
+    const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
+    const apiKey = cfg.get<string>('apiKey') ?? 'local';
+    return new OpenAIProvider(baseUrl, model, apiKey);
+  }
+
+  private async _handleSend(prompt: string): Promise<void> {
+    if (this._abortController) {
+      // Already generating — ignore duplicate sends
+      return;
+    }
+
+    this._history.push({ role: 'user', content: prompt });
+
+    this._abortController = new AbortController();
+    const provider = this._getProvider();
+
+    try {
+      await provider.stream(
+        this._history,
+        this._abortController.signal,
+        (event) => {
+          if (event.type === 'delta') {
+            this._postMessage({ type: 'delta', content: event.content });
+          } else if (event.type === 'done') {
+            this._postMessage({ type: 'done' });
+          } else if (event.type === 'error') {
+            this._postMessage({ type: 'error', message: event.message });
+          }
+        }
+      );
+    } finally {
+      this._abortController = undefined;
+    }
+  }
+
   private _handleMessage(message: WebviewToExtension): void {
     switch (message.type) {
       case 'send':
-        // TODO: AgentRunner integration (Phase 0)
-        this._postMessage({ type: 'status', text: 'Agent runner not yet implemented.' });
+        this._handleSend(message.prompt).catch((err) => {
+          this._postMessage({ type: 'error', message: String(err) });
+          this._abortController = undefined;
+        });
         break;
       case 'stop':
-        // TODO: Abort controller (Phase 0)
+        this._abortController?.abort();
+        this._abortController = undefined;
+        this._postMessage({ type: 'done' });
         break;
       case 'newSession':
         this.newSession();

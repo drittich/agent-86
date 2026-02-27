@@ -12,12 +12,12 @@
   - [x] "Send" button
   - [x] "Stop" button (cancel generation)
   - [x] Output area that renders Markdown
-- [ ] Implement OpenAI-compatible streaming client
-  - [ ] `POST /chat/completions` with `stream: true`
-  - [ ] Parse SSE `data:` frames, append `delta.content` as it arrives
-  - [ ] Handle `[DONE]`, errors, and reconnect-safe cleanup
-  - [ ] `AbortController` to cancel generation
-- [ ] Hardcode initial model settings (endpoint, model, context)
+- [x] Implement OpenAI-compatible streaming client
+  - [x] `POST /chat/completions` with `stream: true`
+  - [x] Parse SSE `data:` frames, append `delta.content` as it arrives
+  - [x] Handle `[DONE]`, errors, and reconnect-safe cleanup
+  - [x] `AbortController` to cancel generation
+- [x] Hardcode initial model settings (endpoint, model, context)
 
 ## Phase 1 — File Attach + Workspace Read
 
