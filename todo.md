@@ -21,13 +21,13 @@
 
 ## Phase 1 — File Attach + Workspace Read
 
-- [ ] Attach flow using `vscode.window.showOpenDialog`
-- [ ] Restrict file selection to inside the workspace
-- [ ] Read file contents via `vscode.workspace.fs.readFile`
-- [ ] Store attachments: `uri`, `relativePath`, `languageId`, `content`, `sizeBytes`
-- [ ] Per-file content cap (e.g., 200–400 KB)
-- [ ] Total attached content cap (e.g., 1–2 MB)
-- [ ] Truncate oversized files with clear labeling
+- [x] Attach flow using `vscode.window.showOpenDialog`
+- [x] Restrict file selection to inside the workspace
+- [x] Read file contents via `vscode.workspace.fs.readFile`
+- [x] Store attachments: `uri`, `relativePath`, `languageId`, `content`, `sizeBytes`
+- [x] Per-file content cap (e.g., 200–400 KB)
+- [x] Total attached content cap (e.g., 1–2 MB)
+- [x] Truncate oversized files with clear labeling
 
 ## Phase 2 — Write Files (Apply Patches Safely)
 

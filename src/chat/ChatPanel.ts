@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
-import { WebviewToExtension, ExtensionToWebview } from './messageProtocol';
+import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
+import { pickAndReadFiles } from '../tools/FileTools';
 
 export class ChatPanel implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _abortController?: AbortController;
   private _history: ChatMessage[] = [];
+  private _attachedFiles: AttachedFile[] = [];
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -43,6 +45,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._abortController?.abort();
     this._abortController = undefined;
     this._history = [];
+    this._attachedFiles = [];
     this._postMessage({ type: 'status', text: 'New session started.' });
   }
 
@@ -64,7 +67,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       return;
     }
 
-    this._history.push({ role: 'user', content: prompt });
+    // Build user message, prepending attached file contents on first turn
+    let userContent = prompt;
+    if (this._attachedFiles.length > 0 && this._history.length === 0) {
+      const fileBlocks = this._attachedFiles.map(f =>
+        `<file path="${f.relativePath}" language="${f.languageId}">\n${f.content}\n</file>`
+      ).join('\n\n');
+      userContent = `${fileBlocks}\n\n${prompt}`;
+    }
+
+    this._history.push({ role: 'user', content: userContent });
 
     this._abortController = new AbortController();
     const provider = this._getProvider();
@@ -105,10 +117,17 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         this.newSession();
         break;
       case 'attachFiles':
-        // TODO: File attach flow (Phase 1)
-        vscode.window.showInformationMessage('File attach not yet implemented.');
+        this._handleAttachFiles().catch((err) => {
+          this._postMessage({ type: 'error', message: String(err) });
+        });
         break;
     }
+  }
+
+  private async _handleAttachFiles(): Promise<void> {
+    const updated = await pickAndReadFiles(this._attachedFiles);
+    this._attachedFiles = updated;
+    this._postMessage({ type: 'attachments', files: updated });
   }
 
   private _postMessage(message: ExtensionToWebview): void {
