@@ -41,10 +41,10 @@
 
 ## Phase 3 — Sessions (Multi-Turn Memory)
 
-- [ ] Define session schema: `sessionId`, `title`, `createdAt`, message list, attachments
-- [ ] Choose persistence strategy (workspaceState / globalState / JSON file)
-- [ ] Implement "New session" button: creates session, clears output
-- [ ] Persist and restore last session across VS Code restarts
+- [x] Define session schema: `sessionId`, `title`, `createdAt`, message list, attachments
+- [x] Choose persistence strategy (workspaceState / globalState / JSON file)
+- [x] Implement "New session" button: creates session, clears output
+- [x] Persist and restore last session across VS Code restarts
 
 ## Phase 4 — Terminal Commands and File Ops with Approvals
 

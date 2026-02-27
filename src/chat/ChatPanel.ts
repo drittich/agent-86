@@ -4,6 +4,7 @@ import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
 import { pickAndReadFiles } from '../tools/FileTools';
 import { parseEditBlocks, resolveEditPath, validateFromText, applyEditBlock } from '../tools/editParser';
+import { ConfigManager, Session } from '../config/ConfigManager';
 
 const DIFF_SCHEME = 'agentic-diff';
 
@@ -33,11 +34,23 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   /** Pending approval resolvers keyed by approvalId. */
   private readonly _approvalResolvers = new Map<string, (approved: boolean) => void>();
   private _approvalCounter = 0;
+  private readonly _configManager: ConfigManager;
+  private _currentSession: Session;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, this._diffProvider)
     );
+    this._configManager = new ConfigManager(context);
+    // Restore last session, or start a fresh one
+    const restored = this._configManager.loadLastSession();
+    if (restored) {
+      this._currentSession = restored;
+      this._history = restored.messages;
+      this._attachedFiles = restored.attachments;
+    } else {
+      this._currentSession = this._configManager.createSession();
+    }
   }
 
   public resolveWebviewView(
@@ -59,6 +72,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((message: WebviewToExtension) => {
       this._handleMessage(message);
     });
+
+    // Restore UI state from the current session once the webview is ready
+    this._restoreSessionUi();
   }
 
   public reveal(): void {
@@ -74,6 +90,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._abortController = undefined;
     this._history = [];
     this._attachedFiles = [];
+    this._currentSession = this._configManager.createSession();
     this._postMessage({ type: 'status', text: 'New session started.' });
   }
 
@@ -135,6 +152,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     } finally {
       this._abortController = undefined;
     }
+
+    // Persist session after each completed turn
+    this._saveCurrentSession();
   }
 
   /**
@@ -262,6 +282,36 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const updated = await pickAndReadFiles(this._attachedFiles);
     this._attachedFiles = updated;
     this._postMessage({ type: 'attachments', files: updated });
+    this._saveCurrentSession();
+  }
+
+  private _saveCurrentSession(): void {
+    this._currentSession = {
+      ...this._currentSession,
+      messages: this._history,
+      attachments: this._attachedFiles,
+    };
+    this._configManager.saveSession(this._currentSession);
+  }
+
+  /**
+   * Push the current session's conversation history and attachments back into
+   * the webview so the UI reflects a restored session after a VS Code restart.
+   */
+  private _restoreSessionUi(): void {
+    if (this._attachedFiles.length > 0) {
+      this._postMessage({ type: 'attachments', files: this._attachedFiles });
+    }
+    if (this._history.length > 0) {
+      // Replay the conversation as a series of delta messages followed by done,
+      // so the existing output area rendering logic is reused without changes.
+      for (const msg of this._history) {
+        const prefix = msg.role === 'user' ? '\n\n[You]\n' : '\n\n[Assistant]\n';
+        this._postMessage({ type: 'delta', content: prefix + msg.content });
+      }
+      this._postMessage({ type: 'done' });
+      this._postMessage({ type: 'status', text: 'Session restored.' });
+    }
   }
 
   private _postMessage(message: ExtensionToWebview): void {
