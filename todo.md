@@ -55,10 +55,10 @@
   - [x] Show action type, target, reason, and preview
   - [x] **Approve** / **Deny** buttons (default focus: Deny)
   - [x] Optional "Approve & Don't ask again for this session" for non-destructive actions
-- [ ] Implement approval protocol: `approval/request` → `approval/response` message bridge
-- [ ] Maintain `Map<approvalId, resolver>` in AgentRunner
-- [ ] Execute terminal commands via `child_process.spawn/exec` with capped output
-- [ ] Feed action results back to the model as a compact summary
+- [x] Implement approval protocol: `approval/request` → `approval/response` message bridge
+- [x] Maintain `Map<approvalId, resolver>` in AgentRunner
+- [x] Execute terminal commands via `child_process.spawn/exec` with capped output
+- [x] Feed action results back to the model as a compact summary
 
 ## Phase 5 — Better Streaming UX (Post-MVP)
 
