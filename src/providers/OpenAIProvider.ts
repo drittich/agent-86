@@ -1,4 +1,4 @@
-import { IProvider, ChatMessage, ProviderEvent } from './IProvider';
+import { IProvider, ChatMessage, ProviderEvent, ProviderUsage } from './IProvider';
 
 export class OpenAIProvider implements IProvider {
   constructor(
@@ -52,6 +52,7 @@ export class OpenAIProvider implements IProvider {
 
     const decoder = new TextDecoder();
     let buffer = '';
+    let usage: ProviderUsage | undefined;
 
     try {
       while (true) {
@@ -68,7 +69,7 @@ export class OpenAIProvider implements IProvider {
 
           const data = trimmed.slice(5).trim();
           if (data === '[DONE]') {
-            onEvent({ type: 'done' });
+            onEvent({ type: 'done', usage });
             return;
           }
 
@@ -78,6 +79,14 @@ export class OpenAIProvider implements IProvider {
             if (typeof delta === 'string' && delta.length > 0) {
               onEvent({ type: 'delta', content: delta });
             }
+            // Capture usage data when present (some servers send it on the last frame)
+            if (json?.usage) {
+              usage = {
+                promptTokens: json.usage.prompt_tokens ?? 0,
+                completionTokens: json.usage.completion_tokens ?? 0,
+                totalTokens: json.usage.total_tokens ?? 0,
+              };
+            }
           } catch {
             // Ignore malformed SSE frames
           }
@@ -85,7 +94,7 @@ export class OpenAIProvider implements IProvider {
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
-        onEvent({ type: 'done' });
+        onEvent({ type: 'done', usage });
         return;
       }
       onEvent({ type: 'error', message: String(err) });
@@ -93,6 +102,6 @@ export class OpenAIProvider implements IProvider {
       reader.releaseLock();
     }
 
-    onEvent({ type: 'done' });
+    onEvent({ type: 'done', usage });
   }
 }

@@ -577,6 +577,12 @@ function showApprovalCard(
 
 // ── Message handler (extension → webview) ────────────────────────────────────
 
+interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 window.addEventListener('message', (event: MessageEvent) => {
   const msg = event.data as {
     type: string;
@@ -588,6 +594,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     action?: string;
     payload?: unknown;
     reason?: string;
+    usage?: TokenUsage;
   };
 
   switch (msg.type) {
@@ -603,7 +610,12 @@ window.addEventListener('message', (event: MessageEvent) => {
       }
       if (markdownBuffer) { flushMarkdown(); }
       setGenerating(false);
-      setStatus('Done.');
+      if (msg.usage) {
+        const u = msg.usage;
+        setStatus(`Done. \u2022 ${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion)`);
+      } else {
+        setStatus('Done.');
+      }
       break;
 
     case 'error':

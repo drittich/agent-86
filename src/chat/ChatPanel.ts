@@ -140,7 +140,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             fullResponse += event.content;
             this._postMessage({ type: 'delta', content: event.content });
           } else if (event.type === 'done') {
-            this._postMessage({ type: 'done' });
+            this._postMessage({ type: 'done', usage: event.usage });
           } else if (event.type === 'error') {
             this._postMessage({ type: 'error', message: event.message });
           }

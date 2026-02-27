@@ -1,7 +1,13 @@
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
 // Messages sent from the extension host to the webview
 export type ExtensionToWebview =
   | { type: 'delta'; content: string }
-  | { type: 'done' }
+  | { type: 'done'; usage?: TokenUsage }
   | { type: 'error'; message: string }
   | { type: 'status'; text: string }
   | { type: 'attachments'; files: AttachedFile[] }
