@@ -253,6 +253,21 @@ function joinAndStripTrailingNewline(lines: string[]): string {
 }
 
 /**
+ * Apply an edit block to the given file content, returning the new content.
+ *
+ * - If `block.from` is empty, replaces the entire file content with `block.to`.
+ * - Otherwise, replaces the first occurrence of `block.from` with `block.to`.
+ *
+ * Assumes `validateFromText` has already confirmed the block is valid.
+ */
+export function applyEditBlock(block: EditBlock, fileContent: string): string {
+  if (block.from === '') {
+    return block.to;
+  }
+  return fileContent.replace(block.from, block.to);
+}
+
+/**
  * Validate a workspace-relative path.
  * Returns an error message string if invalid, or `null` if valid.
  */

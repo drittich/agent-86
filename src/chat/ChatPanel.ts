@@ -3,14 +3,39 @@ import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageP
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
 import { pickAndReadFiles } from '../tools/FileTools';
+import { parseEditBlocks, resolveEditPath, validateFromText, applyEditBlock } from '../tools/editParser';
+
+const DIFF_SCHEME = 'agentic-diff';
+
+/** In-memory content provider for diff previews. */
+class DiffContentProvider implements vscode.TextDocumentContentProvider {
+  private _contents = new Map<string, string>();
+
+  set(key: string, content: string): void {
+    this._contents.set(key, content);
+  }
+
+  delete(key: string): void {
+    this._contents.delete(key);
+  }
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this._contents.get(uri.path) ?? '';
+  }
+}
 
 export class ChatPanel implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _abortController?: AbortController;
   private _history: ChatMessage[] = [];
   private _attachedFiles: AttachedFile[] = [];
+  private readonly _diffProvider = new DiffContentProvider();
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    context.subscriptions.push(
+      vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, this._diffProvider)
+    );
+  }
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -81,12 +106,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._abortController = new AbortController();
     const provider = this._getProvider();
 
+    let fullResponse = '';
+
     try {
       await provider.stream(
         this._history,
         this._abortController.signal,
         (event) => {
           if (event.type === 'delta') {
+            fullResponse += event.content;
             this._postMessage({ type: 'delta', content: event.content });
           } else if (event.type === 'done') {
             this._postMessage({ type: 'done' });
@@ -95,8 +123,74 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           }
         }
       );
+
+      // After streaming completes, show diffs for any @@EDIT blocks
+      if (fullResponse) {
+        this._history.push({ role: 'assistant', content: fullResponse });
+        await this._showEditDiffs(fullResponse);
+      }
     } finally {
       this._abortController = undefined;
+    }
+  }
+
+  /**
+   * Parse @@EDIT blocks from the assistant response and open a VS Code diff
+   * tab for each one so the user can review changes before applying.
+   */
+  private async _showEditDiffs(assistantText: string): Promise<void> {
+    const wsRoots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+    if (wsRoots.length === 0) {
+      return;
+    }
+
+    const { blocks, warnings } = parseEditBlocks(assistantText);
+
+    for (const warning of warnings) {
+      this._postMessage({ type: 'status', text: `Edit parse warning: ${warning}` });
+    }
+
+    for (const block of blocks) {
+      const pathResult = resolveEditPath(block.path, wsRoots);
+      if (pathResult.error) {
+        this._postMessage({ type: 'status', text: `Edit error: ${pathResult.error}` });
+        continue;
+      }
+
+      const fileUri = vscode.Uri.file(pathResult.resolvedPath);
+
+      // Read current file content (may not exist yet for new-file blocks)
+      let originalContent = '';
+      try {
+        const bytes = await vscode.workspace.fs.readFile(fileUri);
+        originalContent = Buffer.from(bytes).toString('utf8');
+      } catch {
+        // File doesn't exist — treat as empty (new file)
+      }
+
+      // Validate FROM text
+      const fromError = validateFromText(block, originalContent);
+      if (fromError) {
+        this._postMessage({ type: 'status', text: `Edit error: ${fromError}` });
+        continue;
+      }
+
+      // Compute the new content
+      const newContent = applyEditBlock(block, originalContent);
+
+      // Register both sides with the in-memory provider
+      const oldKey = `${block.path}?side=old`;
+      const newKey = `${block.path}?side=new`;
+      this._diffProvider.set(oldKey, originalContent);
+      this._diffProvider.set(newKey, newContent);
+
+      const oldUri = vscode.Uri.parse(`${DIFF_SCHEME}:${oldKey}`);
+      const newUri = vscode.Uri.parse(`${DIFF_SCHEME}:${newKey}`);
+      const title = `Review: ${block.path}`;
+
+      await vscode.commands.executeCommand('vscode.diff', oldUri, newUri, title, {
+        preview: true,
+      });
     }
   }
 
