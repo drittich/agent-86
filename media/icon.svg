@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Shoe body: toe box curves up, heel is lower -->
+  <path d="M1 13 Q1 14.5 2.5 14.5 L12.5 14.5 Q15 14.5 15 12.5 Q15 11 13 11 L8.5 11 L8.5 9.5 Q8.5 8.5 7.5 8.5 L6.5 8.5 L6 7 Q5.5 4.5 4 4 L2.5 4 Q1 4.5 1 6 Z" fill="black"/>
+  <!-- Phone handset receiver sitting on top of shoe -->
+  <path d="M2.5 4 Q2 2.5 3 1.5 Q3.5 1 4.5 1.5 Q5 2 4.5 3.5 L4 4 Z" fill="black"/>
+  <!-- Heel -->
+  <path d="M1 11.5 Q0.5 12.5 1 13.5 L2 13.5 L2 11.5 Z" fill="black"/>
+</svg>

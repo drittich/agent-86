@@ -40,7 +40,7 @@
         {
           "id": "agenticCoder",
           "title": "Agent 86",
-          "icon": "$(robot)"
+          "icon": "media/icon.svg"
         }
       ]
     },
