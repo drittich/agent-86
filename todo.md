@@ -81,44 +81,44 @@
 
 ## Extension Host Checklist
 
-- [ ] Commands: `agentic.openPanel`, `agentic.newSession`, `agentic.attachFiles`
-- [ ] Webview panel + message bridge (`messageProtocol.ts`)
-- [ ] LLM client — OpenAI-compatible with streaming (`OpenAIProvider.ts`)
-- [ ] Workspace file read (`FileTools.ts`)
-- [ ] Edit parser + diff preview + write (`editParser.ts`)
-- [ ] Session storage (`ConfigManager.ts` / state)
-- [ ] Terminal command approval + execution (`TerminalTool.ts`)
-- [ ] Workspace boundary checks (never read/write outside workspace)
-- [ ] Content caps (truncate attachments and terminal output)
+- [x] Commands: `agentic.openPanel`, `agentic.newSession`, `agentic.attachFiles`
+- [x] Webview panel + message bridge (`messageProtocol.ts`)
+- [x] LLM client — OpenAI-compatible with streaming (`OpenAIProvider.ts`)
+- [x] Workspace file read (`FileTools.ts`)
+- [x] Edit parser + diff preview + write (`editParser.ts`)
+- [x] Session storage (`ConfigManager.ts` / state)
+- [x] Terminal command approval + execution (`TerminalTool.ts`)
+- [x] Workspace boundary checks (never read/write outside workspace)
+- [x] Content caps (truncate attachments and terminal output)
 
 ## Webview UI Checklist
 
-- [ ] Textarea prompt
-- [ ] Attach files button + attached files list
-- [ ] New session button
-- [ ] Send button
-- [ ] Stop button
-- [ ] Markdown renderer (`marked` + DOMPurify)
-- [ ] Status/error display
-- [ ] Approval card UI (action type, target, reason, preview, Approve/Deny)
+- [x] Textarea prompt
+- [x] Attach files button + attached files list
+- [x] New session button
+- [x] Send button
+- [x] Stop button
+- [x] Markdown renderer (`marked` + DOMPurify)
+- [x] Status/error display
+- [x] Approval card UI (action type, target, reason, preview, Approve/Deny)
 
 ---
 
 ## Build & Tooling
 
-- [ ] Set up `package.json` with extension manifest and scripts
-- [ ] Set up `tsconfig.json`
-- [ ] Configure esbuild with two bundles:
-  - [ ] Extension host: `src/extension.ts` → `dist/extension.js` (Node/CJS, external: `vscode`)
-  - [ ] Webview: `webview-ui/main.ts` → `dist/webview.js` (browser)
-- [ ] Scripts: `build`, `watch`, `typecheck`, `vscode:prepublish`
-- [ ] `.vscodeignore` and `.gitignore`
-- [ ] VS Code settings schema under `agentCoder.*`:
-  - [ ] `agentCoder.baseUrl`
-  - [ ] `agentCoder.model`
-  - [ ] `agentCoder.maxContextTokens`
-  - [ ] `agentCoder.provider`
-  - [ ] API key storage via `context.secrets`
+- [x] Set up `package.json` with extension manifest and scripts
+- [x] Set up `tsconfig.json`
+- [x] Configure esbuild with two bundles:
+  - [x] Extension host: `src/extension.ts` → `dist/extension.js` (Node/CJS, external: `vscode`)
+  - [x] Webview: `webview-ui/main.ts` → `dist/webview.js` (browser)
+- [x] Scripts: `build`, `watch`, `typecheck`, `vscode:prepublish`
+- [x] `.vscodeignore` and `.gitignore`
+- [x] VS Code settings schema under `agentCoder.*`:
+  - [x] `agentCoder.baseUrl`
+  - [x] `agentCoder.model`
+  - [x] `agentCoder.maxContextTokens`
+  - [x] `agentCoder.provider`
+  - [x] API key storage via `context.secrets`
 
 ## Testing
 
