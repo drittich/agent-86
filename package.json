@@ -88,6 +88,8 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@types/dompurify": "^3.0.5",
+    "dompurify": "^3.3.1",
     "marked": "^17.0.3",
     "openai": "^4.28.0"
   }

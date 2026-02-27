@@ -1,6 +1,7 @@
 // Webview-side entry point — full UI layout (Phase 0)
 
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const acquireVsCodeApi: () => any;
@@ -242,7 +243,7 @@ function setStatus(text: string): void {
 function flushMarkdown(): void {
   const wasAtBottom =
     outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 8;
-  outputEl.innerHTML = marked.parse(markdownBuffer) as string;
+  outputEl.innerHTML = DOMPurify.sanitize(marked.parse(markdownBuffer) as string);
   if (wasAtBottom) {
     outputEl.scrollTop = outputEl.scrollHeight;
   }
