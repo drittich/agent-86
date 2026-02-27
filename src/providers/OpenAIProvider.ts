@@ -35,7 +35,26 @@ export class OpenAIProvider implements IProvider {
         onEvent({ type: 'done' });
         return;
       }
-      onEvent({ type: 'error', message: String(err) });
+      // Provide a user-friendly error message for common connection issues
+      const errMsg = err instanceof Error ? err.message : String(err);
+      let friendlyMessage = errMsg;
+      
+      // Detect common connection errors
+      if (errMsg.includes('fetch failed') || 
+          errMsg.includes('ECONNREFUSED') || 
+          errMsg.includes('ENOTFOUND') ||
+          errMsg.includes('ETIMEDOUT') ||
+          errMsg.includes('socket hang up') ||
+          errMsg.includes('Connection refused') ||
+          errMsg.includes('Connection timed out') ||
+          errMsg.includes('getaddrinfo')) {
+        friendlyMessage = `Cannot connect to LLM server at ${this.baseURL}.\n\n` +
+          'Please ensure your LLM server is running.\n' +
+          'You can start it with: `llama-server --model <model> --port 8083`\n' +
+          'Or check your settings: File > Preferences > Settings > Agent 86';
+      }
+      
+      onEvent({ type: 'error', message: friendlyMessage });
       return;
     }
 

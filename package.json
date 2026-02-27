@@ -1,6 +1,6 @@
 {
-  "name": "vscode-agent-extension",
-  "displayName": "Agentic Coder",
+  "name": "agent-86",
+  "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
   "version": "0.0.1",
   "engines": {
@@ -15,26 +15,26 @@
     "commands": [
       {
         "command": "agentic.openPanel",
-        "title": "Agentic Coder: Open Panel"
+        "title": "Agent 86: Open Panel"
       },
       {
         "command": "agentic.newSession",
-        "title": "Agentic Coder: New Session"
+        "title": "Agent 86: New Session"
       },
       {
         "command": "agentic.attachFiles",
-        "title": "Agentic Coder: Attach Files"
+        "title": "Agent 86: Attach Files"
       },
       {
         "command": "agentic.selectSession",
-        "title": "Agentic Coder: Select Session"
+        "title": "Agent 86: Select Session"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "agenticCoder",
-          "title": "Agentic Coder",
+          "title": "Agent 86",
           "icon": "$(robot)"
         }
       ]
@@ -44,12 +44,12 @@
         {
           "type": "webview",
           "id": "agenticCoder.panel",
-          "name": "Agentic Coder"
+          "name": "Agent 86"
         }
       ]
     },
     "configuration": {
-      "title": "Agentic Coder",
+      "title": "Agent 86",
       "properties": {
         "agentCoder.baseUrl": {
           "type": "string",

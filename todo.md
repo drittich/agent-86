@@ -74,8 +74,8 @@
 
 ## Phase 6 — UX Improvements
 
-- [ ] Provide a user-friendly error message when the LLM server isn't running
-- [ ] Rename the extension to "Agent 86"
+- [x] Provide a user-friendly error message when the LLM server isn't running
+- [x] Rename the extension to "Agent 86"
 
 ---
 

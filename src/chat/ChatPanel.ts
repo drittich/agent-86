@@ -631,7 +631,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agentic Coder</title>
+  <title>Agent 86</title>
 </head>
 <body>
   <div id="root"></div>
