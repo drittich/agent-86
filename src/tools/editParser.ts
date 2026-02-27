@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 /**
  * @@EDIT Structured Edit Block Format
  * ====================================
@@ -96,6 +98,44 @@ const EDIT_OPEN_RE = /^@@EDIT[ \t]+(.+)$/;
 const FROM_MARKER = '@@FROM';
 const TO_MARKER = '@@TO';
 const END_MARKER = '@@END';
+
+/**
+ * Resolve a workspace-relative path against the workspace roots and verify
+ * the resulting absolute path is actually inside one of those roots.
+ *
+ * Returns the resolved absolute path (using the first matching workspace root)
+ * or an error message string if the path is invalid or escapes the workspace.
+ *
+ * @param relativePath  The workspace-relative path from an @@EDIT block.
+ * @param wsRoots       Array of `fsPath` strings from `vscode.workspace.workspaceFolders`.
+ */
+export function resolveEditPath(
+  relativePath: string,
+  wsRoots: string[]
+): { resolvedPath: string; error?: undefined } | { resolvedPath?: undefined; error: string } {
+  if (wsRoots.length === 0) {
+    return { error: 'no workspace folder is open' };
+  }
+
+  const formatError = validatePath(relativePath);
+  if (formatError) {
+    return { error: formatError };
+  }
+
+  // Normalise forward-slash separators to the platform separator
+  const normalized = relativePath.replace(/\//g, path.sep);
+
+  for (const root of wsRoots) {
+    const resolved = path.resolve(root, normalized);
+    // Ensure the resolved path starts with the workspace root + separator
+    // (or equals it exactly, though that would be writing the root dir itself)
+    if (resolved === root || resolved.startsWith(root + path.sep)) {
+      return { resolvedPath: resolved };
+    }
+  }
+
+  return { error: `path "${relativePath}" resolves outside all workspace folders` };
+}
 
 /**
  * Parse all `@@EDIT` blocks found in an assistant message.

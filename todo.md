@@ -32,8 +32,8 @@
 ## Phase 2 — Write Files (Apply Patches Safely)
 
 - [x] Define and document the `@@EDIT` structured edit block format
-- [ ] Implement edit block parser in extension host
-- [ ] Validate target path is inside the workspace
+- [x] Implement edit block parser in extension host
+- [x] Validate target path is inside the workspace
 - [ ] Validate `FROM` text exists (exact match); fail safely if not
 - [ ] Show diff via VS Code diff API before applying
 - [ ] Require explicit user approval (Apply / Cancel) before writing
