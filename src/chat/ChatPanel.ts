@@ -42,6 +42,10 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private readonly _configManager: ConfigManager;
   private _currentSession: Session;
 
+  // Backpressure handling: buffer deltas when webview is hidden
+  private _isViewVisible = true;
+  private _deltaBuffer: string[] = [];
+
   constructor(private readonly context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, this._diffProvider)
@@ -76,6 +80,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage((message: WebviewToExtension) => {
       this._handleMessage(message);
+    });
+
+    // Track visibility for backpressure handling
+    this._isViewVisible = webviewView.visible;
+    webviewView.onDidChangeVisibility(() => {
+      this._isViewVisible = webviewView.visible;
+      if (this._isViewVisible && this._deltaBuffer.length > 0) {
+        this._flushDeltaBuffer();
+      }
     });
 
     // Restore UI state from the current session once the webview is ready
@@ -523,7 +536,36 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _postMessage(message: ExtensionToWebview): void {
+    // Handle backpressure: buffer delta messages when webview is hidden
+    if (message.type === 'delta' && !this._isViewVisible) {
+      this._deltaBuffer.push(message.content);
+      return;
+    }
+
+    // Flush any buffered deltas before sending non-delta messages
+    if (message.type !== 'delta' && this._deltaBuffer.length > 0) {
+      this._flushDeltaBuffer();
+    }
+
     this._view?.webview.postMessage(message);
+  }
+
+  /**
+   * Flush all buffered delta messages to the webview.
+   * Called when the webview becomes visible again.
+   */
+  private _flushDeltaBuffer(): void {
+    if (this._deltaBuffer.length === 0) {
+      return;
+    }
+
+    // Send all buffered deltas as individual messages
+    for (const content of this._deltaBuffer) {
+      this._view?.webview.postMessage({ type: 'delta', content });
+    }
+
+    // Clear the buffer
+    this._deltaBuffer = [];
   }
 
   private _getHtml(webview: vscode.Webview): string {
