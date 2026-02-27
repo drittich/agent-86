@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
-import { pickAndReadFiles, readActiveEditor } from '../tools/FileTools';
+import { pickAndReadFiles, readActiveEditor, autoDetectAndAttachFiles } from '../tools/FileTools';
 import { parseEditBlocks, resolveEditPath, validateFromText, applyEditBlock } from '../tools/editParser';
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
 import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
@@ -237,6 +237,13 @@ PATH: path/to/file.ts
       return;
     }
     this._userCancelled = false;
+
+    // Auto-detect file references in the prompt and attach them before sending
+    const autoAttached = await autoDetectAndAttachFiles(prompt, this._attachedFiles);
+    if (autoAttached.length > this._attachedFiles.length) {
+      this._attachedFiles = autoAttached;
+      this._postMessage({ type: 'attachments', files: this._attachedFiles });
+    }
 
     // Build user message, prepending any attached files that haven't been injected yet
     let userContent = prompt;

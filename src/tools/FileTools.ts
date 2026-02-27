@@ -445,6 +445,197 @@ function formatBytes(n: number): string {
 }
 
 /**
+ * Read a single file URI and return an AttachedFile, or null on failure.
+ */
+async function readFileToAttachedFile(
+  uri: vscode.Uri,
+  wsRoots: string[]
+): Promise<AttachedFile | null> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await vscode.workspace.fs.readFile(uri);
+  } catch {
+    return null;
+  }
+
+  const sizeBytes = bytes.length;
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  let content: string;
+  if (sizeBytes > FILE_CAP_BYTES) {
+    content =
+      decoder.decode(bytes.slice(0, FILE_CAP_BYTES)) +
+      `\n\n[... TRUNCATED — file was ${formatBytes(sizeBytes)}, showing first ${formatBytes(FILE_CAP_BYTES)} ...]`;
+  } else {
+    content = decoder.decode(bytes);
+  }
+
+  const languageId = await detectLanguageId(uri);
+  const relativePath = bestRelativePath(wsRoots, uri.fsPath);
+
+  return {
+    uri: uri.toString(),
+    relativePath,
+    languageId,
+    content,
+    sizeBytes,
+  };
+}
+
+/** Alias map: lowercase keyword → glob pattern to search for */
+const ALIAS_MAP: Record<string, string> = {
+  readme:    'README.md',
+  changelog: 'CHANGELOG.md',
+  license:   'LICENSE',
+  gitignore: '.gitignore',
+  package:   'package.json',
+  tsconfig:  'tsconfig.json',
+};
+
+/** Extensions we consider when scanning the prompt for filename-like tokens. */
+const KNOWN_EXTENSIONS =
+  'ts|tsx|js|jsx|json|md|yaml|yml|py|rs|go|sh|bash|css|html|txt|env|lock|toml|xml|csv';
+
+/**
+ * Extract candidate file mentions from a prompt string.
+ * Returns deduplicated lowercase candidates.
+ */
+function extractMentions(prompt: string): string[] {
+  const candidates = new Set<string>();
+
+  // 1. Explicit alias keywords (readme, changelog, etc.)
+  for (const alias of Object.keys(ALIAS_MAP)) {
+    const re = new RegExp(`\\b${alias}\\b`, 'i');
+    if (re.test(prompt)) {
+      candidates.add(alias);
+    }
+  }
+
+  // 2. Tokens that look like filenames or relative paths (contain a dot or slash)
+  const fileRe = new RegExp(
+    `[\\w./\\-]+\\.(?:${KNOWN_EXTENSIONS})(?=[^\\w]|$)`,
+    'gi'
+  );
+  for (const match of prompt.matchAll(fileRe)) {
+    candidates.add(match[0].toLowerCase());
+  }
+
+  return Array.from(candidates);
+}
+
+/**
+ * Given a single mention string, find matching workspace files.
+ * Returns an array of matching URIs (may be empty or contain multiple entries).
+ */
+async function findFilesForMention(mention: string): Promise<vscode.Uri[]> {
+  // Resolve alias first
+  const normalized = ALIAS_MAP[mention.toLowerCase()] ?? mention;
+
+  // Exclude common non-source directories
+  const exclude = '{**/node_modules/**,**/.git/**,**/dist/**,**/build/**}';
+
+  // Try exact relative-path match first
+  const exact = await vscode.workspace.findFiles(normalized, exclude, 10);
+  if (exact.length > 0) {
+    return exact;
+  }
+
+  // Fall back to basename search anywhere in workspace
+  const basename = path.posix.basename(normalized);
+  if (!basename || basename === normalized) {
+    // Already tried this pattern; nothing found
+    return [];
+  }
+  return vscode.workspace.findFiles(`**/${basename}`, exclude, 10);
+}
+
+/**
+ * Scan a prompt for implied file references and return an updated AttachedFile
+ * list that includes any newly discovered files.
+ *
+ * - Finds filenames / aliases mentioned in the prompt.
+ * - Skips files already attached.
+ * - When multiple workspace files match a mention, shows a quick-pick.
+ */
+export async function autoDetectAndAttachFiles(
+  prompt: string,
+  existing: AttachedFile[]
+): Promise<AttachedFile[]> {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    return existing;
+  }
+
+  const wsRoots = workspaceFolders.map(f => f.uri.fsPath);
+  const existingUris = new Set(existing.map(f => f.uri));
+
+  const mentions = extractMentions(prompt);
+  if (mentions.length === 0) {
+    return existing;
+  }
+
+  // Collect new files to attach, keyed by URI string to avoid duplicates
+  const toAttach = new Map<string, vscode.Uri>();
+
+  for (const mention of mentions) {
+    const found = await findFilesForMention(mention);
+
+    // Filter out already-attached files
+    const novel = found.filter(u => !existingUris.has(u.toString()) && !toAttach.has(u.toString()));
+    if (novel.length === 0) {
+      continue;
+    }
+
+    if (novel.length === 1) {
+      toAttach.set(novel[0].toString(), novel[0]);
+    } else {
+      // Multiple matches — ask the user to pick
+      const items = novel.map(u => ({
+        label: bestRelativePath(wsRoots, u.fsPath),
+        uri: u,
+      }));
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `Multiple files match "${mention}" — select files to attach`,
+        canPickMany: true,
+        matchOnDescription: true,
+      });
+      if (picked && picked.length > 0) {
+        for (const p of picked) {
+          toAttach.set(p.uri.toString(), p.uri);
+        }
+      }
+    }
+  }
+
+  if (toAttach.size === 0) {
+    return existing;
+  }
+
+  const result: AttachedFile[] = [...existing];
+  let totalBytes = result.reduce((sum, f) => sum + Math.min(f.sizeBytes, FILE_CAP_BYTES), 0);
+
+  for (const uri of toAttach.values()) {
+    const attached = await readFileToAttachedFile(uri, wsRoots);
+    if (!attached) {
+      continue;
+    }
+
+    const fileCapped = Math.min(attached.sizeBytes, FILE_CAP_BYTES);
+    if (totalBytes + fileCapped > TOTAL_CAP_BYTES) {
+      vscode.window.showWarningMessage(
+        `Auto-attach skipped "${attached.relativePath}" — total context would exceed ${formatBytes(TOTAL_CAP_BYTES)}.`
+      );
+      continue;
+    }
+
+    result.push(attached);
+    existingUris.add(attached.uri);
+    totalBytes += fileCapped;
+  }
+
+  return result;
+}
+
+/**
  * Read the active editor's content or selection and return as an AttachedFile.
  * If there's a selection, only the selected text is included.
  * If the file is untitled/unsaved, uses the current document content.
