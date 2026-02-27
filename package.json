@@ -1,0 +1,87 @@
+{
+  "name": "vscode-agent-extension",
+  "displayName": "Agentic Coder",
+  "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentic.openPanel",
+        "title": "Agentic Coder: Open Panel"
+      },
+      {
+        "command": "agentic.newSession",
+        "title": "Agentic Coder: New Session"
+      },
+      {
+        "command": "agentic.attachFiles",
+        "title": "Agentic Coder: Attach Files"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agenticCoder",
+          "title": "Agentic Coder",
+          "icon": "$(robot)"
+        }
+      ]
+    },
+    "views": {
+      "agenticCoder": [
+        {
+          "type": "webview",
+          "id": "agenticCoder.panel",
+          "name": "Agentic Coder"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Agentic Coder",
+      "properties": {
+        "agentCoder.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8083/v1",
+          "description": "Base URL for the OpenAI-compatible LLM endpoint"
+        },
+        "agentCoder.model": {
+          "type": "string",
+          "default": "OpenAI-20B-NEO-CODEPlus-Uncensored-IQ4_NL.gguf",
+          "description": "Model name to use"
+        },
+        "agentCoder.maxContextTokens": {
+          "type": "number",
+          "default": 16384,
+          "description": "Maximum context tokens for the model"
+        },
+        "agentCoder.provider": {
+          "type": "string",
+          "enum": ["openai-compatible", "anthropic"],
+          "default": "openai-compatible",
+          "description": "LLM provider type"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "node esbuild.js --production"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "openai": "^4.28.0"
+  }
+}

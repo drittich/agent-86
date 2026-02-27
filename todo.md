@@ -1,0 +1,125 @@
+# Agentic Coding VS Code Extension — TODO
+
+## Phase 0 — Bootstrap (Streaming-First)
+
+- [x] Create extension scaffold (TypeScript)
+- [ ] Add a webview view (sidebar) contributed via `agentic.openPanel` command
+- [ ] Implement UI layout
+  - [ ] Multiline `<textarea>` prompt input
+  - [ ] Attached files list
+  - [ ] "Attach files" button
+  - [ ] "New session" button
+  - [ ] "Send" button
+  - [ ] "Stop" button (cancel generation)
+  - [ ] Output area that renders Markdown
+- [ ] Implement OpenAI-compatible streaming client
+  - [ ] `POST /chat/completions` with `stream: true`
+  - [ ] Parse SSE `data:` frames, append `delta.content` as it arrives
+  - [ ] Handle `[DONE]`, errors, and reconnect-safe cleanup
+  - [ ] `AbortController` to cancel generation
+- [ ] Hardcode initial model settings (endpoint, model, context)
+
+## Phase 1 — File Attach + Workspace Read
+
+- [ ] Attach flow using `vscode.window.showOpenDialog`
+- [ ] Restrict file selection to inside the workspace
+- [ ] Read file contents via `vscode.workspace.fs.readFile`
+- [ ] Store attachments: `uri`, `relativePath`, `languageId`, `content`, `sizeBytes`
+- [ ] Per-file content cap (e.g., 200–400 KB)
+- [ ] Total attached content cap (e.g., 1–2 MB)
+- [ ] Truncate oversized files with clear labeling
+
+## Phase 2 — Write Files (Apply Patches Safely)
+
+- [ ] Define and document the `@@EDIT` structured edit block format
+- [ ] Implement edit block parser in extension host
+- [ ] Validate target path is inside the workspace
+- [ ] Validate `FROM` text exists (exact match); fail safely if not
+- [ ] Show diff via VS Code diff API before applying
+- [ ] Require explicit user approval (Apply / Cancel) before writing
+- [ ] Apply edits via `vscode.workspace.fs.writeFile`
+
+## Phase 3 — Sessions (Multi-Turn Memory)
+
+- [ ] Define session schema: `sessionId`, `title`, `createdAt`, message list, attachments
+- [ ] Choose persistence strategy (workspaceState / globalState / JSON file)
+- [ ] Implement "New session" button: creates session, clears output
+- [ ] Persist and restore last session across VS Code restarts
+
+## Phase 4 — Terminal Commands and File Ops with Approvals
+
+- [ ] Implement `run_command` tool with approval gate
+- [ ] Implement `move_file` tool with approval gate
+- [ ] Implement `delete_file` tool with approval gate (prefer trash)
+- [ ] Implement approval card UI in webview
+  - [ ] Show action type, target, reason, and preview
+  - [ ] **Approve** / **Deny** buttons (default focus: Deny)
+  - [ ] Optional "Approve & Don't ask again for this session" for non-destructive actions
+- [ ] Implement approval protocol: `approval/request` → `approval/response` message bridge
+- [ ] Maintain `Map<approvalId, resolver>` in AgentRunner
+- [ ] Execute terminal commands via `child_process.spawn/exec` with capped output
+- [ ] Feed action results back to the model as a compact summary
+
+## Phase 5 — Better Streaming UX (Post-MVP)
+
+- [ ] Buffer text deltas and re-render Markdown on a timer (~100ms)
+- [ ] Sanitize rendered HTML with DOMPurify
+- [ ] Add token/throughput stats display (if server returns usage)
+- [ ] Resilient cancellation + cleanup ("Cancelled" vs "Completed" states)
+- [ ] Backpressure handling when webview is hidden
+- [ ] "Copy raw" and "Copy markdown" actions
+- [ ] Quick-pick for sessions
+- [ ] File tree picker (replace open dialog)
+- [ ] Auto-attach active editor / selection ("context builder")
+
+---
+
+## Extension Host Checklist
+
+- [ ] Commands: `agentic.openPanel`, `agentic.newSession`, `agentic.attachFiles`
+- [ ] Webview panel + message bridge (`messageProtocol.ts`)
+- [ ] LLM client — OpenAI-compatible with streaming (`OpenAIProvider.ts`)
+- [ ] Workspace file read (`FileTools.ts`)
+- [ ] Edit parser + diff preview + write (`editParser.ts`)
+- [ ] Session storage (`ConfigManager.ts` / state)
+- [ ] Terminal command approval + execution (`TerminalTool.ts`)
+- [ ] Workspace boundary checks (never read/write outside workspace)
+- [ ] Content caps (truncate attachments and terminal output)
+
+## Webview UI Checklist
+
+- [ ] Textarea prompt
+- [ ] Attach files button + attached files list
+- [ ] New session button
+- [ ] Send button
+- [ ] Stop button
+- [ ] Markdown renderer (`marked` + DOMPurify)
+- [ ] Status/error display
+- [ ] Approval card UI (action type, target, reason, preview, Approve/Deny)
+
+---
+
+## Build & Tooling
+
+- [ ] Set up `package.json` with extension manifest and scripts
+- [ ] Set up `tsconfig.json`
+- [ ] Configure esbuild with two bundles:
+  - [ ] Extension host: `src/extension.ts` → `dist/extension.js` (Node/CJS, external: `vscode`)
+  - [ ] Webview: `webview-ui/main.ts` → `dist/webview.js` (browser)
+- [ ] Scripts: `build`, `watch`, `typecheck`, `vscode:prepublish`
+- [ ] `.vscodeignore` and `.gitignore`
+- [ ] VS Code settings schema under `agentCoder.*`:
+  - [ ] `agentCoder.baseUrl`
+  - [ ] `agentCoder.model`
+  - [ ] `agentCoder.maxContextTokens`
+  - [ ] `agentCoder.provider`
+  - [ ] API key storage via `context.secrets`
+
+## Testing
+
+- [ ] Set up a small demo repo for manual testing
+- [ ] Unit tests for edit block parser
+- [ ] Unit tests for command JSON extraction
+- [ ] Manual: attach file → ask for explanation
+- [ ] Manual: ask for small edit → preview diff → apply
+- [ ] Manual: ask to run tests → approve command
