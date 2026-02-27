@@ -6,6 +6,7 @@ import { pickAndReadFiles } from '../tools/FileTools';
 import { parseEditBlocks, resolveEditPath, validateFromText, applyEditBlock } from '../tools/editParser';
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
 import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
+import { parseDeleteBlocks, resolveDeleteBlockPath, deleteFile, formatDeleteResult } from '../tools/DeleteFileTool';
 import { ConfigManager, Session } from '../config/ConfigManager';
 
 const DIFF_SCHEME = 'agentic-diff';
@@ -152,6 +153,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         await this._showEditDiffs(fullResponse);
         await this._processRunBlocks(fullResponse);
         await this._processMoveBlocks(fullResponse);
+        await this._processDeleteBlocks(fullResponse);
       }
     } finally {
       this._abortController = undefined;
@@ -348,6 +350,68 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       const statusText = result.success
         ? `Moved: ${block.from} → ${block.to}`
         : `Move failed: ${result.error}`;
+      this._postMessage({ type: 'status', text: statusText });
+    }
+
+    if (resultLines.length === 0) {
+      return;
+    }
+
+    // Feed results back to the model as a user message so it can continue.
+    const feedbackContent = resultLines.join('\n\n');
+    this._history.push({ role: 'user', content: feedbackContent });
+    this._saveCurrentSession();
+  }
+
+  /**
+   * Parse @@DELETE blocks from the assistant response, request approval for each,
+   * execute approved deletions (to trash), and append a summary back into the
+   * conversation so the model can see the result.
+   */
+  private async _processDeleteBlocks(assistantText: string): Promise<void> {
+    const wsRoots = vscode.workspace.workspaceFolders ?? [];
+    if (wsRoots.length === 0) {
+      return;
+    }
+
+    const wsRootPaths = wsRoots.map(f => f.uri.fsPath);
+    const blocks = parseDeleteBlocks(assistantText);
+    if (blocks.length === 0) {
+      return;
+    }
+
+    const resultLines: string[] = [];
+
+    for (const block of blocks) {
+      const fileAbsolute = resolveDeleteBlockPath(block.filePath, wsRootPaths);
+
+      if (!fileAbsolute) {
+        const msg = `Delete blocked: path "${block.filePath}" is outside the workspace.`;
+        this._postMessage({ type: 'status', text: msg });
+        resultLines.push(`@@DELETE_RESULT\npath: ${block.filePath}\nstatus: failed\nerror: ${msg}`);
+        continue;
+      }
+
+      const approved = await this._requestApproval(
+        'deleteFile',
+        { path: block.filePath },
+        'The assistant wants to delete a file (will be moved to trash).'
+      );
+
+      if (!approved) {
+        this._postMessage({ type: 'status', text: `Delete cancelled: ${block.filePath}` });
+        resultLines.push(`@@DELETE_RESULT\npath: ${block.filePath}\nstatus: cancelled by user`);
+        continue;
+      }
+
+      this._postMessage({ type: 'status', text: `Deleting: ${block.filePath}` });
+      const result = await deleteFile(fileAbsolute);
+      const summary = formatDeleteResult(result);
+      resultLines.push(summary);
+
+      const statusText = result.success
+        ? `Deleted (trashed): ${block.filePath}`
+        : `Delete failed: ${result.error}`;
       this._postMessage({ type: 'status', text: statusText });
     }
 
