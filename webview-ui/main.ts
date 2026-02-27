@@ -306,8 +306,7 @@ promptInput.addEventListener('keydown', (e: KeyboardEvent) => {
 
 btnStop.addEventListener('click', () => {
   vscode.postMessage({ type: 'stop' });
-  setGenerating(false);
-  setStatus('Cancelled.');
+  // UI update is deferred until the extension replies with done(cancelled:true)
 });
 
 btnAttach.addEventListener('click', () => {
@@ -595,6 +594,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     payload?: unknown;
     reason?: string;
     usage?: TokenUsage;
+    cancelled?: boolean;
   };
 
   switch (msg.type) {
@@ -610,7 +610,11 @@ window.addEventListener('message', (event: MessageEvent) => {
       }
       if (markdownBuffer) { flushMarkdown(); }
       setGenerating(false);
-      if (msg.usage) {
+      // Dismiss any approval cards left over from a cancelled run
+      if (msg.cancelled) {
+        approvalsContainer.innerHTML = '';
+        setStatus('Cancelled.');
+      } else if (msg.usage) {
         const u = msg.usage;
         setStatus(`Done. \u2022 ${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion)`);
       } else {

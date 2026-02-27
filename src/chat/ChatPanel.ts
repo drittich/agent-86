@@ -31,6 +31,8 @@ class DiffContentProvider implements vscode.TextDocumentContentProvider {
 export class ChatPanel implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _abortController?: AbortController;
+  /** Set to true when the user explicitly clicks Stop; cleared on new send. */
+  private _userCancelled = false;
   private _history: ChatMessage[] = [];
   private _attachedFiles: AttachedFile[] = [];
   private readonly _diffProvider = new DiffContentProvider();
@@ -114,6 +116,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       // Already generating — ignore duplicate sends
       return;
     }
+    this._userCancelled = false;
 
     // Build user message, prepending attached file contents on first turn
     let userContent = prompt;
@@ -140,15 +143,20 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             fullResponse += event.content;
             this._postMessage({ type: 'delta', content: event.content });
           } else if (event.type === 'done') {
-            this._postMessage({ type: 'done', usage: event.usage });
+            // Only send 'done' here if the stop handler hasn't already sent it
+            // (stop handler sends its own done with cancelled:true)
+            if (!this._userCancelled) {
+              this._postMessage({ type: 'done', usage: event.usage });
+            }
           } else if (event.type === 'error') {
             this._postMessage({ type: 'error', message: event.message });
           }
         }
       );
 
-      // After streaming completes, process @@EDIT and @@RUN blocks
-      if (fullResponse) {
+      // After streaming completes, process @@EDIT and @@RUN blocks —
+      // but only if the user didn't cancel mid-stream.
+      if (fullResponse && !this._userCancelled) {
         this._history.push({ role: 'assistant', content: fullResponse });
         await this._showEditDiffs(fullResponse);
         await this._processRunBlocks(fullResponse);
@@ -159,8 +167,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       this._abortController = undefined;
     }
 
-    // Persist session after each completed turn
-    this._saveCurrentSession();
+    // Persist session after each completed turn (skip if cancelled mid-stream
+    // with no content, to avoid storing an empty assistant turn)
+    if (fullResponse || !this._userCancelled) {
+      this._saveCurrentSession();
+    }
   }
 
   /**
@@ -446,9 +457,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         });
         break;
       case 'stop':
+        this._userCancelled = true;
         this._abortController?.abort();
         this._abortController = undefined;
-        this._postMessage({ type: 'done' });
+        // Reject any approval cards that are still pending
+        for (const [id, resolve] of this._approvalResolvers) {
+          this._approvalResolvers.delete(id);
+          resolve(false);
+        }
+        this._postMessage({ type: 'done', cancelled: true });
         break;
       case 'newSession':
         this.newSession();
