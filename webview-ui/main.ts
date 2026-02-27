@@ -182,6 +182,36 @@ style.textContent = `
     font-size: 11px;
     color: var(--vscode-descriptionForeground);
     min-height: 16px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .status-badge.completed {
+    background: var(--vscode-testing-passedBackground, #1e3a1e);
+    color: var(--vscode-testing-passedForeground, #4ec94e);
+  }
+
+  .status-badge.cancelled {
+    background: var(--vscode-inputValidation-warningBackground, #352a05);
+    color: var(--vscode-inputValidation-warningForeground, #cca700);
+  }
+
+  /* Dimmed output content when cancelled */
+  #output.cancelled {
+    opacity: 0.7;
+    border-color: var(--vscode-inputValidation-warningBorder, #b89500);
   }
 
   #input-row {
@@ -228,6 +258,8 @@ interface AttachedFile { uri: string; relativePath: string; }
 
 let attachedFiles: AttachedFile[] = [];
 let isGenerating = false;
+/** Tracks whether the current generation was explicitly cancelled by the user. */
+let wasExplicitlyCancelled = false;
 
 // Markdown rendering — buffer incoming deltas and flush on a timer
 let markdownBuffer = '';
@@ -273,6 +305,11 @@ function setGenerating(active: boolean): void {
   btnSend.disabled = active;
   btnStop.disabled = !active;
   promptInput.disabled = active;
+  // Reset cancelled state when starting new generation
+  if (active) {
+    wasExplicitlyCancelled = false;
+    outputEl.classList.remove('cancelled');
+  }
 }
 
 function renderAttachedFiles(): void {

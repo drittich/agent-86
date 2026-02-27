@@ -65,7 +65,7 @@
 - [x] Buffer text deltas and re-render Markdown on a timer (~100ms)
 - [x] Sanitize rendered HTML with DOMPurify
 - [x] Add token/throughput stats display (if server returns usage)
-- [ ] Resilient cancellation + cleanup ("Cancelled" vs "Completed" states)
+- [x] Resilient cancellation + cleanup ("Cancelled" vs "Completed" states)
 - [ ] Backpressure handling when webview is hidden
 - [ ] "Copy raw" and "Copy markdown" actions
 - [ ] Quick-pick for sessions
