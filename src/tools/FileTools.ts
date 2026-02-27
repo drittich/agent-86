@@ -533,16 +533,21 @@ async function findFilesForMention(mention: string): Promise<vscode.Uri[]> {
   // Exclude common non-source directories
   const exclude = '{**/node_modules/**,**/.git/**,**/dist/**,**/build/**}';
 
-  // Try exact relative-path match first
-  const exact = await vscode.workspace.findFiles(normalized, exclude, 10);
-  if (exact.length > 0) {
-    return exact;
+  const basename = path.posix.basename(normalized);
+  const hasPathSeparator = normalized.includes('/');
+
+  if (hasPathSeparator) {
+    // User mentioned a path like "src/foo.ts" — try exact match first,
+    // then fall back to basename-only search.
+    const exact = await vscode.workspace.findFiles(normalized, exclude, 10);
+    if (exact.length > 0) {
+      return exact;
+    }
   }
 
-  // Fall back to basename search anywhere in workspace
-  const basename = path.posix.basename(normalized);
-  if (!basename || basename === normalized) {
-    // Already tried this pattern; nothing found
+  // Always search by basename with **/ prefix so VS Code finds the file
+  // regardless of depth (findFiles needs **/ to match non-root files).
+  if (!basename) {
     return [];
   }
   return vscode.workspace.findFiles(`**/${basename}`, exclude, 10);
