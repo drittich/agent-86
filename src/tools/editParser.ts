@@ -213,6 +213,35 @@ export function parseEditBlocks(text: string): ParseResult {
   return { blocks, warnings };
 }
 
+/**
+ * Validate that the `from` text in an edit block exists exactly once in the
+ * given file content.
+ *
+ * - If `block.from` is empty the block is a full-file replacement, which is
+ *   always valid regardless of current content.
+ * - Returns `null` if valid (from text found exactly once).
+ * - Returns an error message string if the text is not found or is ambiguous
+ *   (appears more than once).
+ */
+export function validateFromText(block: EditBlock, fileContent: string): string | null {
+  // Empty FROM means full-file replacement — always valid.
+  if (block.from === '') {
+    return null;
+  }
+
+  const firstIndex = fileContent.indexOf(block.from);
+  if (firstIndex === -1) {
+    return `FROM text not found in "${block.path}"`;
+  }
+
+  const secondIndex = fileContent.indexOf(block.from, firstIndex + block.from.length);
+  if (secondIndex !== -1) {
+    return `FROM text is ambiguous — found more than once in "${block.path}"`;
+  }
+
+  return null;
+}
+
 /** Join lines back to a string, stripping one trailing newline if present. */
 function joinAndStripTrailingNewline(lines: string[]): string {
   if (lines.length === 0) {
