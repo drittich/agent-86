@@ -30,6 +30,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _history: ChatMessage[] = [];
   private _attachedFiles: AttachedFile[] = [];
   private readonly _diffProvider = new DiffContentProvider();
+  /** Pending approval resolvers keyed by approvalId. */
+  private readonly _approvalResolvers = new Map<string, (approved: boolean) => void>();
+  private _approvalCounter = 0;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     context.subscriptions.push(
@@ -157,7 +160,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         continue;
       }
 
-      const fileUri = vscode.Uri.file(pathResult.resolvedPath);
+      const fileUri = vscode.Uri.file(pathResult.resolvedPath!);
 
       // Read current file content (may not exist yet for new-file blocks)
       let originalContent = '';
@@ -191,7 +194,36 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       await vscode.commands.executeCommand('vscode.diff', oldUri, newUri, title, {
         preview: true,
       });
+
+      // Ask the user whether to apply
+      const approved = await this._requestApproval('applyEdit', { path: block.path });
+
+      // Clean up diff provider entries
+      this._diffProvider.delete(oldKey);
+      this._diffProvider.delete(newKey);
+
+      if (!approved) {
+        this._postMessage({ type: 'status', text: `Edit cancelled: ${block.path}` });
+        continue;
+      }
+
+      // Write the file
+      const encoder = new TextEncoder();
+      await vscode.workspace.fs.writeFile(fileUri, encoder.encode(newContent));
+      this._postMessage({ type: 'status', text: `Applied: ${block.path}` });
     }
+  }
+
+  /**
+   * Send an `approval/request` to the webview and wait for the user's
+   * `approval/response`. Returns `true` if approved, `false` if cancelled.
+   */
+  private _requestApproval(action: string, payload: unknown): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const approvalId = `approval-${++this._approvalCounter}`;
+      this._approvalResolvers.set(approvalId, resolve);
+      this._postMessage({ type: 'approval/request', approvalId, action, payload, reason: '' });
+    });
   }
 
   private _handleMessage(message: WebviewToExtension): void {
@@ -215,6 +247,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           this._postMessage({ type: 'error', message: String(err) });
         });
         break;
+      case 'approval/response': {
+        const resolver = this._approvalResolvers.get(message.approvalId);
+        if (resolver) {
+          this._approvalResolvers.delete(message.approvalId);
+          resolver(message.approved);
+        }
+        break;
+      }
     }
   }
 

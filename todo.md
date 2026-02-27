@@ -36,8 +36,8 @@
 - [x] Validate target path is inside the workspace
 - [x] Validate `FROM` text exists (exact match); fail safely if not
 - [x] Show diff via VS Code diff API before applying
-- [ ] Require explicit user approval (Apply / Cancel) before writing
-- [ ] Apply edits via `vscode.workspace.fs.writeFile`
+- [x] Require explicit user approval (Apply / Cancel) before writing
+- [x] Apply edits via `vscode.workspace.fs.writeFile`
 
 ## Phase 3 — Sessions (Multi-Turn Memory)
 

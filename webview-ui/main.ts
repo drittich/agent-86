@@ -239,6 +239,92 @@ function sendPrompt(): void {
   promptInput.value = '';
 }
 
+// ── Approval card ─────────────────────────────────────────────────────────────
+
+const approvalStyle = `
+  .approval-card {
+    border: 1px solid var(--vscode-inputValidation-warningBorder, #b89500);
+    background: var(--vscode-inputValidation-warningBackground, #352a05);
+    border-radius: 3px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    font-size: 12px;
+  }
+  .approval-card .approval-title {
+    font-weight: bold;
+    margin-bottom: 4px;
+    color: var(--vscode-foreground);
+  }
+  .approval-card .approval-path {
+    font-family: var(--vscode-editor-font-family, monospace);
+    margin-bottom: 6px;
+    word-break: break-all;
+  }
+  .approval-card .approval-buttons {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .approval-card .btn-apply {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+  .approval-card .btn-cancel {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+  }
+`;
+const approvalStyleEl = document.createElement('style');
+approvalStyleEl.textContent = approvalStyle;
+document.head.appendChild(approvalStyleEl);
+
+// Container for approval cards — inserted before the input row
+const appEl = document.getElementById('app')!;
+const inputRowEl = document.getElementById('input-row')!;
+const approvalsContainer = document.createElement('div');
+approvalsContainer.id = 'approvals-container';
+appEl.insertBefore(approvalsContainer, inputRowEl);
+
+function showApprovalCard(approvalId: string, path: string): void {
+  const card = document.createElement('div');
+  card.className = 'approval-card';
+  card.dataset.approvalId = approvalId;
+
+  const title = document.createElement('div');
+  title.className = 'approval-title';
+  title.textContent = 'Apply edit to file?';
+
+  const pathEl = document.createElement('div');
+  pathEl.className = 'approval-path';
+  pathEl.textContent = path;
+
+  const buttons = document.createElement('div');
+  buttons.className = 'approval-buttons';
+
+  const applyBtn = document.createElement('button');
+  applyBtn.className = 'btn-apply';
+  applyBtn.textContent = 'Apply';
+  applyBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'approval/response', approvalId, approved: true });
+    card.remove();
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'approval/response', approvalId, approved: false });
+    card.remove();
+  });
+
+  buttons.appendChild(applyBtn);
+  buttons.appendChild(cancelBtn);
+  card.appendChild(title);
+  card.appendChild(pathEl);
+  card.appendChild(buttons);
+  approvalsContainer.appendChild(card);
+}
+
 // ── Message handler (extension → webview) ────────────────────────────────────
 
 window.addEventListener('message', (event: MessageEvent) => {
@@ -248,6 +334,10 @@ window.addEventListener('message', (event: MessageEvent) => {
     text?: string;
     message?: string;
     files?: AttachedFile[];
+    approvalId?: string;
+    action?: string;
+    payload?: unknown;
+    reason?: string;
   };
 
   switch (msg.type) {
@@ -275,6 +365,12 @@ window.addEventListener('message', (event: MessageEvent) => {
         renderAttachedFiles();
       }
       break;
+
+    case 'approval/request': {
+      const payload = msg.payload as { path?: string } | undefined;
+      showApprovalCard(msg.approvalId ?? '', payload?.path ?? msg.action ?? '');
+      break;
+    }
   }
 });
 
