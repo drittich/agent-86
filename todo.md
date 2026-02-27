@@ -67,7 +67,7 @@
 - [x] Add token/throughput stats display (if server returns usage)
 - [x] Resilient cancellation + cleanup ("Cancelled" vs "Completed" states)
 - [x] Backpressure handling when webview is hidden
-- [ ] "Copy raw" and "Copy markdown" actions
+- [x] "Copy raw" and "Copy markdown" actions
 - [ ] Quick-pick for sessions
 - [ ] File tree picker (replace open dialog)
 - [ ] Auto-attach active editor / selection ("context builder")

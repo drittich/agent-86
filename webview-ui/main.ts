@@ -19,7 +19,13 @@ root.innerHTML = `
 
   <ul id="attached-files"></ul>
 
-  <div id="output" aria-live="polite"></div>
+  <div id="output-wrapper">
+    <div id="output-toolbar">
+      <button id="btn-copy-markdown" title="Copy rendered markdown">Copy Markdown</button>
+      <button id="btn-copy-raw" title="Copy raw text">Copy Raw</button>
+    </div>
+    <div id="output" aria-live="polite"></div>
+  </div>
 
   <div id="status-bar"></div>
 
@@ -101,6 +107,25 @@ style.textContent = `
     opacity: 0.7;
   }
   #attached-files li button:hover { opacity: 1; }
+
+  #output-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  #output-toolbar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+  }
+
+  #output-toolbar button {
+    font-size: 11px;
+    padding: 2px 8px;
+  }
 
   #output {
     flex: 1;
@@ -249,6 +274,8 @@ const btnSend      = document.getElementById('btn-send') as HTMLButtonElement;
 const btnStop      = document.getElementById('btn-stop') as HTMLButtonElement;
 const btnAttach    = document.getElementById('btn-attach') as HTMLButtonElement;
 const btnNewSess   = document.getElementById('btn-new-session') as HTMLButtonElement;
+const btnCopyMd    = document.getElementById('btn-copy-markdown') as HTMLButtonElement;
+const btnCopyRaw   = document.getElementById('btn-copy-raw') as HTMLButtonElement;
 const filesList    = document.getElementById('attached-files') as HTMLUListElement;
 const statusBar    = document.getElementById('status-bar')!;
 
@@ -356,6 +383,43 @@ btnNewSess.addEventListener('click', () => {
   renderAttachedFiles();
   setStatus('');
   vscode.postMessage({ type: 'newSession' });
+});
+
+// ── Copy actions ──────────────────────────────────────────────────────────────
+
+/**
+ * Copy the rendered markdown (HTML) to clipboard as plain text.
+ * This gives the user the markdown source that was rendered.
+ */
+btnCopyMd.addEventListener('click', async () => {
+  if (!markdownBuffer) {
+    setStatus('Nothing to copy.');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(markdownBuffer);
+    setStatus('Markdown copied to clipboard.');
+  } catch {
+    setStatus('Failed to copy markdown.');
+  }
+});
+
+/**
+ * Copy the raw text content from the output element.
+ * This strips all formatting and gives plain text.
+ */
+btnCopyRaw.addEventListener('click', async () => {
+  const rawText = outputEl.textContent ?? '';
+  if (!rawText.trim()) {
+    setStatus('Nothing to copy.');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(rawText);
+    setStatus('Raw text copied to clipboard.');
+  } catch {
+    setStatus('Failed to copy raw text.');
+  }
 });
 
 function sendPrompt(): void {
