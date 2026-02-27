@@ -69,7 +69,7 @@
 - [x] Backpressure handling when webview is hidden
 - [x] "Copy raw" and "Copy markdown" actions
 - [x] Quick-pick for sessions
-- [ ] File tree picker (replace open dialog)
+- [x] File tree picker (replace open dialog)
 - [ ] Auto-attach active editor / selection ("context builder")
 
 ## Phase 6 — UX Improvements

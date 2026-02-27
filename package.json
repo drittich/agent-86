@@ -46,6 +46,13 @@
           "id": "agenticCoder.panel",
           "name": "Agent 86"
         }
+      ],
+      "explorer": [
+        {
+          "id": "agenticFilePicker",
+          "name": "File Picker",
+          "when": "agenticFilePicker.count > 0"
+        }
       ]
     },
     "configuration": {

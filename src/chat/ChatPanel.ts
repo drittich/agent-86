@@ -117,6 +117,22 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Get the currently attached files (used by the file tree picker).
+   */
+  public getAttachedFiles(): AttachedFile[] {
+    return this._attachedFiles;
+  }
+
+  /**
+   * Update the attached files list (used by the file tree picker).
+   */
+  public updateAttachedFiles(files: AttachedFile[]): void {
+    this._attachedFiles = files;
+    this._postMessage({ type: 'attachments', files });
+    this._saveCurrentSession();
+  }
+
+  /**
    * Restore a session (used by the quick-pick feature).
    */
   public restoreSession(session: Session): void {
