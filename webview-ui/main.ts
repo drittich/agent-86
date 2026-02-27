@@ -14,6 +14,7 @@ root.innerHTML = `
 <div id="app">
   <div id="toolbar">
     <button id="btn-new-session" title="New session">New Session</button>
+    <button id="btn-select-session" title="Select session">Select Session</button>
     <button id="btn-attach" title="Attach files">Attach Files</button>
   </div>
 
@@ -274,6 +275,7 @@ const btnSend      = document.getElementById('btn-send') as HTMLButtonElement;
 const btnStop      = document.getElementById('btn-stop') as HTMLButtonElement;
 const btnAttach    = document.getElementById('btn-attach') as HTMLButtonElement;
 const btnNewSess   = document.getElementById('btn-new-session') as HTMLButtonElement;
+const btnSelectSess = document.getElementById('btn-select-session') as HTMLButtonElement;
 const btnCopyMd    = document.getElementById('btn-copy-markdown') as HTMLButtonElement;
 const btnCopyRaw   = document.getElementById('btn-copy-raw') as HTMLButtonElement;
 const filesList    = document.getElementById('attached-files') as HTMLUListElement;
@@ -383,6 +385,10 @@ btnNewSess.addEventListener('click', () => {
   renderAttachedFiles();
   setStatus('');
   vscode.postMessage({ type: 'newSession' });
+});
+
+btnSelectSess.addEventListener('click', () => {
+  vscode.postMessage({ type: 'selectSession' });
 });
 
 // ── Copy actions ──────────────────────────────────────────────────────────────

@@ -116,6 +116,26 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._handleMessage({ type: 'attachFiles' });
   }
 
+  /**
+   * Restore a session (used by the quick-pick feature).
+   */
+  public restoreSession(session: Session): void {
+    this._abortController?.abort();
+    this._abortController = undefined;
+    this._history = session.messages;
+    this._attachedFiles = session.attachments;
+    this._currentSession = session;
+    this._postMessage({ type: 'status', text: `Restored session: ${session.title}` });
+    this._restoreSessionUi();
+  }
+
+  /**
+   * Get the ConfigManager instance (used by quick-pick).
+   */
+  public getConfigManager(): ConfigManager {
+    return this._configManager;
+  }
+
   private _getProvider(): OpenAIProvider {
     const cfg = vscode.workspace.getConfiguration('agentCoder');
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
@@ -488,6 +508,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           this._postMessage({ type: 'error', message: String(err) });
         });
         break;
+      case 'selectSession':
+        this._handleSelectSession().catch((err) => {
+          this._postMessage({ type: 'error', message: String(err) });
+        });
+        break;
       case 'approval/response': {
         const resolver = this._approvalResolvers.get(message.approvalId);
         if (resolver) {
@@ -504,6 +529,31 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._attachedFiles = updated;
     this._postMessage({ type: 'attachments', files: updated });
     this._saveCurrentSession();
+  }
+
+  private async _handleSelectSession(): Promise<void> {
+    const sessions = this._configManager.loadAllSessions();
+    if (!sessions || sessions.length === 0) {
+      this._postMessage({ type: 'status', text: 'No sessions found.' });
+      return;
+    }
+
+    // Use VS Code's quick pick
+    const vscode = await import('vscode');
+    const items = sessions.map(s => ({
+      label: s.title,
+      description: new Date(s.createdAt).toLocaleString(),
+      session: s
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Select a session to restore',
+      matchOnDescription: true
+    });
+
+    if (selected) {
+      this.restoreSession(selected.session);
+    }
   }
 
   private _saveCurrentSession(): void {

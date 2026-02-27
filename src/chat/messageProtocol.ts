@@ -19,6 +19,7 @@ export type WebviewToExtension =
   | { type: 'stop' }
   | { type: 'newSession' }
   | { type: 'attachFiles' }
+  | { type: 'selectSession' }
   | { type: 'approval/response'; approvalId: string; approved: boolean };
 
 export interface AttachedFile {

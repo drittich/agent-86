@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { ChatMessage } from '../providers/IProvider';
 import { AttachedFile } from '../chat/messageProtocol';
 
+// Session storage key prefix
+const SESSION_STORAGE_PREFIX = 'agentic.session.';
+
 // ── Session schema ────────────────────────────────────────────────────────────
 
 export interface Session {
@@ -91,6 +94,46 @@ export class ConfigManager {
   /** Erase the persisted last session (called on explicit "New Session"). */
   clearLastSession(): void {
     this.context.workspaceState.update(LAST_SESSION_KEY, undefined);
+  }
+
+  /**
+   * Load all stored sessions (last session + any additional ones).
+   * Returns sessions sorted by creation date (newest first).
+   */
+  loadAllSessions(): Session[] {
+    const sessions: Session[] = [];
+    
+    // Load the last session
+    const lastSession = this.loadLastSession();
+    if (lastSession) {
+      sessions.push(lastSession);
+    }
+    
+    // Load additional sessions from workspace state
+    const allKeys = this.context.workspaceState.keys();
+    for (const key of allKeys) {
+      if (key.startsWith(SESSION_STORAGE_PREFIX) && key !== LAST_SESSION_KEY) {
+        const raw = this.context.workspaceState.get<unknown>(key);
+        if (raw && typeof raw === 'object') {
+          const candidate = raw as Partial<Session>;
+          if (
+            typeof candidate.sessionId === 'string' &&
+            typeof candidate.title === 'string' &&
+            typeof candidate.createdAt === 'number' &&
+            Array.isArray(candidate.messages) &&
+            Array.isArray(candidate.attachments)
+          ) {
+            // Avoid duplicates if lastSession is also stored with a prefix key
+            if (!sessions.find(s => s.sessionId === candidate.sessionId)) {
+              sessions.push(candidate as Session);
+            }
+          }
+        }
+      }
+    }
+    
+    // Sort by creation date, newest first
+    return sessions.sort((a, b) => b.createdAt - a.createdAt);
   }
 
   private _persist(session: Session): void {

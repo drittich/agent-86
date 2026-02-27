@@ -24,6 +24,10 @@
       {
         "command": "agentic.attachFiles",
         "title": "Agentic Coder: Attach Files"
+      },
+      {
+        "command": "agentic.selectSession",
+        "title": "Agentic Coder: Select Session"
       }
     ],
     "viewsContainers": {
