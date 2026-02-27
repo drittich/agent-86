@@ -1,5 +1,6 @@
 {
   "name": "agent-86",
+  "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
   "version": "0.0.1",

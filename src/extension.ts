@@ -36,22 +36,22 @@ async function showSessionQuickPick(chatPanel: ChatPanel): Promise<void> {
 let fileTreeProvider: FileTreeDataProvider | undefined;
 let fileTreeView: vscode.TreeView<any> | undefined;
 
-function getFileTreeProvider(): FileTreeDataProvider {
+function getFileTreeProvider(): FileTreeDataProvider | undefined {
   if (!fileTreeProvider) {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
-      throw new Error('No workspace folder open');
+      return undefined;
     }
     fileTreeProvider = new FileTreeDataProvider(workspaceFolders[0].uri);
   }
   return fileTreeProvider;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
-  const chatPanel = new ChatPanel(context);
-
-  // Register file tree view in the sidebar
+function initializeFileTreeView(context: vscode.ExtensionContext): void {
   const treeProvider = getFileTreeProvider();
+  if (!treeProvider) {
+    return; // No workspace open, skip tree view creation
+  }
   fileTreeView = vscode.window.createTreeView('agenticFilePicker', {
     treeDataProvider: treeProvider,
     canSelectMany: true,
@@ -61,6 +61,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     fileTreeView.onDidChangeCheckboxState((e) => {
       const provider = getFileTreeProvider();
+      if (!provider) return;
       for (const [item, state] of e.items) {
         if (state === vscode.TreeItemCheckboxState.Checked) {
           provider.toggleCheck(item.uri);
@@ -70,6 +71,13 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  const chatPanel = new ChatPanel(context);
+
+  // Register file tree view in the sidebar (only if workspace is open)
+  initializeFileTreeView(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('agentic.openPanel', () => {
@@ -82,8 +90,13 @@ export function activate(context: vscode.ExtensionContext): void {
       chatPanel.reveal();
       // Use the file tree picker instead of the old dialog
       const existing = chatPanel.getAttachedFiles();
-      const updated = await pickAndReadFilesFromTree(existing, treeProvider, fileTreeView);
-      chatPanel.updateAttachedFiles(updated);
+      const treeProvider = getFileTreeProvider();
+      if (treeProvider && fileTreeView) {
+        const updated = await pickAndReadFilesFromTree(existing, treeProvider, fileTreeView);
+        chatPanel.updateAttachedFiles(updated);
+      } else {
+        vscode.window.showWarningMessage('Please open a workspace folder to attach files.');
+      }
     }),
     vscode.commands.registerCommand('agentic.selectSession', () => {
       showSessionQuickPick(chatPanel);
