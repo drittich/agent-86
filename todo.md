@@ -51,10 +51,10 @@
 - [x] Implement `run_command` tool with approval gate
 - [x] Implement `move_file` tool with approval gate
 - [x] Implement `delete_file` tool with approval gate (prefer trash)
-- [ ] Implement approval card UI in webview
-  - [ ] Show action type, target, reason, and preview
-  - [ ] **Approve** / **Deny** buttons (default focus: Deny)
-  - [ ] Optional "Approve & Don't ask again for this session" for non-destructive actions
+- [x] Implement approval card UI in webview
+  - [x] Show action type, target, reason, and preview
+  - [x] **Approve** / **Deny** buttons (default focus: Deny)
+  - [x] Optional "Approve & Don't ask again for this session" for non-destructive actions
 - [ ] Implement approval protocol: `approval/request` → `approval/response` message bridge
 - [ ] Maintain `Map<approvalId, resolver>` in AgentRunner
 - [ ] Execute terminal commands via `child_process.spawn/exec` with capped output
