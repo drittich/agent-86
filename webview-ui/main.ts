@@ -1,5 +1,7 @@
 // Webview-side entry point — full UI layout (Phase 0)
 
+import { marked } from 'marked';
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const acquireVsCodeApi: () => any;
 const vscode = acquireVsCodeApi();
@@ -104,7 +106,6 @@ style.textContent = `
     overflow-y: auto;
     border: 1px solid var(--vscode-widget-border, #444);
     padding: 8px;
-    white-space: pre-wrap;
     word-break: break-word;
     line-height: 1.5;
     background: var(--vscode-editor-background);
@@ -112,6 +113,69 @@ style.textContent = `
     border-radius: 2px;
     min-height: 60px;
   }
+
+  /* Markdown prose styles */
+  #output p { margin: 0 0 0.6em; }
+  #output p:last-child { margin-bottom: 0; }
+  #output h1, #output h2, #output h3,
+  #output h4, #output h5, #output h6 {
+    margin: 0.8em 0 0.3em;
+    line-height: 1.3;
+  }
+  #output h1 { font-size: 1.4em; }
+  #output h2 { font-size: 1.2em; }
+  #output h3 { font-size: 1.05em; }
+  #output ul, #output ol {
+    margin: 0 0 0.6em 1.4em;
+    padding: 0;
+  }
+  #output li { margin-bottom: 0.2em; }
+  #output code {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 0.9em;
+    background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+  #output pre {
+    background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
+    border: 1px solid var(--vscode-panel-border, #444);
+    border-radius: 3px;
+    padding: 8px;
+    overflow-x: auto;
+    margin: 0 0 0.6em;
+  }
+  #output pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: 0.88em;
+    white-space: pre;
+  }
+  #output blockquote {
+    border-left: 3px solid var(--vscode-widget-border, #555);
+    margin: 0 0 0.6em 0;
+    padding: 0 0 0 10px;
+    color: var(--vscode-descriptionForeground);
+  }
+  #output hr {
+    border: none;
+    border-top: 1px solid var(--vscode-widget-border, #444);
+    margin: 0.8em 0;
+  }
+  #output a {
+    color: var(--vscode-textLink-foreground, #4e9fde);
+  }
+  #output table {
+    border-collapse: collapse;
+    margin: 0 0 0.6em;
+    font-size: 0.9em;
+  }
+  #output th, #output td {
+    border: 1px solid var(--vscode-panel-border, #444);
+    padding: 3px 8px;
+  }
+  #output th { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); }
 
   #status-bar {
     font-size: 11px;
@@ -164,15 +228,43 @@ interface AttachedFile { uri: string; relativePath: string; }
 let attachedFiles: AttachedFile[] = [];
 let isGenerating = false;
 
+// Markdown rendering — buffer incoming deltas and flush on a timer
+let markdownBuffer = '';
+let renderTimer: ReturnType<typeof setTimeout> | null = null;
+const RENDER_INTERVAL_MS = 100;
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function setStatus(text: string): void {
   statusBar.textContent = text;
 }
 
+function flushMarkdown(): void {
+  const wasAtBottom =
+    outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 8;
+  outputEl.innerHTML = marked.parse(markdownBuffer) as string;
+  if (wasAtBottom) {
+    outputEl.scrollTop = outputEl.scrollHeight;
+  }
+}
+
 function appendOutput(text: string): void {
-  outputEl.textContent += text;
-  outputEl.scrollTop = outputEl.scrollHeight;
+  markdownBuffer += text;
+  if (renderTimer === null) {
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      flushMarkdown();
+    }, RENDER_INTERVAL_MS);
+  }
+}
+
+function clearOutput(): void {
+  markdownBuffer = '';
+  if (renderTimer !== null) {
+    clearTimeout(renderTimer);
+    renderTimer = null;
+  }
+  outputEl.innerHTML = '';
 }
 
 function setGenerating(active: boolean): void {
@@ -222,7 +314,7 @@ btnAttach.addEventListener('click', () => {
 });
 
 btnNewSess.addEventListener('click', () => {
-  outputEl.textContent = '';
+  clearOutput();
   attachedFiles = [];
   renderAttachedFiles();
   setStatus('');
@@ -232,7 +324,7 @@ btnNewSess.addEventListener('click', () => {
 function sendPrompt(): void {
   const prompt = promptInput.value.trim();
   if (!prompt || isGenerating) { return; }
-  outputEl.textContent = '';
+  clearOutput();
   setStatus('');
   setGenerating(true);
   vscode.postMessage({ type: 'send', prompt });
@@ -503,6 +595,12 @@ window.addEventListener('message', (event: MessageEvent) => {
       break;
 
     case 'done':
+      // Flush any remaining buffered markdown before marking done
+      if (renderTimer !== null) {
+        clearTimeout(renderTimer);
+        renderTimer = null;
+      }
+      if (markdownBuffer) { flushMarkdown(); }
       setGenerating(false);
       setStatus('Done.');
       break;
