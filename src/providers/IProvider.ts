@@ -2,6 +2,8 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   tool_call_id?: string;
+  /** Human-readable display text (omits injected file chunks). Used for session restore. */
+  displayContent?: string;
 }
 
 export interface ProviderUsage {

@@ -401,7 +401,7 @@ PATH: path/to/file.ts
       }
     }
 
-    this._history.push({ role: 'user', content: userContent });
+    this._history.push({ role: 'user', content: userContent, displayContent: prompt });
 
     const MAX_CHUNK_ROUNDS = 2;
     let chunkRound = 0;
@@ -912,8 +912,12 @@ PATH: path/to/file.ts
       // Replay the conversation as a series of delta messages followed by done,
       // so the existing output area rendering logic is reused without changes.
       for (const msg of this._history) {
-        const prefix = msg.role === 'user' ? '\n\n[You]\n' : '\n\n[Assistant]\n';
-        this._postMessage({ type: 'delta', content: prefix + msg.content });
+        if (msg.role === 'user') {
+          const display = msg.displayContent ?? msg.content;
+          this._postMessage({ type: 'delta', content: `\n\n**You:** ${display}\n\n---\n\n` });
+        } else if (msg.role === 'assistant') {
+          this._postMessage({ type: 'delta', content: msg.content });
+        }
       }
       this._postMessage({ type: 'done' });
       this._postMessage({ type: 'status', text: 'Session restored.' });
