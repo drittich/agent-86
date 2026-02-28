@@ -561,19 +561,23 @@ PATH: path/to/file.ts
       }
       const newContent = result;
 
-      // Register both sides with the in-memory provider
-      const oldKey = `${op.uri}?side=old`;
-      const newKey = `${op.uri}?side=new`;
-      this._diffProvider.set(oldKey, originalContent);
-      this._diffProvider.set(newKey, newContent);
+      // Register both sides with the in-memory provider (only when diffing existing files)
+      let oldUri: vscode.Uri | undefined;
+      let newUri: vscode.Uri | undefined;
+      if (fileExists) {
+        const oldKey = `${op.uri}?side=old`;
+        const newKey = `${op.uri}?side=new`;
+        this._diffProvider.set(oldKey, originalContent);
+        this._diffProvider.set(newKey, newContent);
 
-      const oldUri = vscode.Uri.parse(`${DIFF_SCHEME}:${oldKey}`);
-      const newUri = vscode.Uri.parse(`${DIFF_SCHEME}:${newKey}`);
-      const title = `Review: ${op.uri}`;
+        oldUri = vscode.Uri.parse(`${DIFF_SCHEME}:${oldKey}`);
+        newUri = vscode.Uri.parse(`${DIFF_SCHEME}:${newKey}`);
+        const title = `Review: ${op.uri}`;
 
-      await vscode.commands.executeCommand('vscode.diff', oldUri, newUri, title, {
-        preview: true,
-      });
+        await vscode.commands.executeCommand('vscode.diff', oldUri, newUri, title, {
+          preview: true,
+        });
+      }
 
       // Ask via the in-chat approval card (cannot be accidentally dismissed).
       const approved = await this._requestApproval(
@@ -583,23 +587,27 @@ PATH: path/to/file.ts
       );
 
       // Close the diff editor tab and clean up the in-memory provider entries.
-      const diffTabsToClose: vscode.Tab[] = [];
-      for (const group of vscode.window.tabGroups.all) {
-        for (const tab of group.tabs) {
-          if (tab.input instanceof vscode.TabInputTextDiff) {
-            const oUri = tab.input.original.toString();
-            const mUri = tab.input.modified.toString();
-            if (oUri === oldUri.toString() || mUri === newUri.toString()) {
-              diffTabsToClose.push(tab);
+      if (fileExists && oldUri && newUri) {
+        const oldKey = `${op.uri}?side=old`;
+        const newKey = `${op.uri}?side=new`;
+        const diffTabsToClose: vscode.Tab[] = [];
+        for (const group of vscode.window.tabGroups.all) {
+          for (const tab of group.tabs) {
+            if (tab.input instanceof vscode.TabInputTextDiff) {
+              const oUri = tab.input.original.toString();
+              const mUri = tab.input.modified.toString();
+              if (oUri === oldUri.toString() || mUri === newUri.toString()) {
+                diffTabsToClose.push(tab);
+              }
             }
           }
         }
+        if (diffTabsToClose.length > 0) {
+          await vscode.window.tabGroups.close(diffTabsToClose);
+        }
+        this._diffProvider.delete(oldKey);
+        this._diffProvider.delete(newKey);
       }
-      if (diffTabsToClose.length > 0) {
-        await vscode.window.tabGroups.close(diffTabsToClose);
-      }
-      this._diffProvider.delete(oldKey);
-      this._diffProvider.delete(newKey);
 
       this._log.appendLine(`[edit] user answered: ${approved ? 'Apply' : 'Deny'} for ${op.uri}`);
       if (!approved) {
