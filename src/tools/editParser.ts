@@ -171,14 +171,28 @@ function stripModelTokens(text: string): string {
  */
 export function parseEditBlocks(text: string): ParseResult {
   // Strip internal model tokens and markdown code fences before parsing.
-  const lines = stripCodeFences(stripModelTokens(text)).split('\n');
+  const strippedText = stripCodeFences(stripModelTokens(text));
+  const lines = strippedText.split('\n');
   const blocks: EditBlock[] = [];
   const warnings: string[] = [];
+
+  // Debug: log the stripped text around any EDIT occurrence
+  if (process.env['DEBUG_EDIT_PARSER']) {
+    const editIdx = strippedText.indexOf('EDIT');
+    if (editIdx !== -1) {
+      console.error(`[parseEditBlocks] EDIT found at index ${editIdx}`);
+      console.error(`[parseEditBlocks] Context: ${JSON.stringify(strippedText.slice(Math.max(0, editIdx - 50), editIdx + 100))}`);
+    }
+  }
 
   let i = 0;
   while (i < lines.length) {
     const openMatch = EDIT_OPEN_RE.exec(lines[i]);
     if (!openMatch) {
+      // Debug: log lines that contain 'EDIT' but don't match the regex
+      if (lines[i].includes('EDIT')) {
+        warnings.push(`Line ${i + 1} contains 'EDIT' but doesn't match opener regex: ${JSON.stringify(lines[i].slice(0, 100))}`);
+      }
       i++;
       continue;
     }
