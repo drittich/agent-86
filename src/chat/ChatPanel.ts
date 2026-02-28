@@ -127,6 +127,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._injectedFileUris = new Set();
     this._currentSession = this._configManager.createSession();
     this._saveCurrentSession();
+    this._postMessage({ type: 'attachments', files: [] });
     this._postMessage({ type: 'status', text: 'New session started.' });
   }
 
