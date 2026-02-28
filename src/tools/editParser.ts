@@ -72,7 +72,7 @@ const VALID_OPS = new Set<string>(['insert_after', 'insert_before', 'replace_fir
  * Extract all top-level JSON object substrings from text.
  * Walks char-by-char tracking brace depth and skipping string literals.
  */
-function extractJsonCandidates(text: string): string[] {
+export function extractJsonCandidates(text: string): string[] {
   const candidates: string[] = [];
   let depth = 0;
   let start = -1;

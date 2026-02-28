@@ -4,6 +4,10 @@ import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
 import { pickAndReadFiles, readActiveEditor, autoDetectAndAttachFiles } from '../tools/FileTools';
 import { parseEditOps, resolveEditPath, applyAnchorOp } from '../tools/editParser';
+import {
+  chunkFile, formatChunkBlock, buildChunkMeta, parseChunkRequests,
+  FileChunkMeta, FileChunk, ChunkRequest,
+} from '../tools/ChunkManager';
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
 import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
 import { parseDeleteBlocks, resolveDeleteBlockPath, deleteFile, formatDeleteResult } from '../tools/DeleteFileTool';
@@ -38,6 +42,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _attachedFiles: AttachedFile[] = [];
   /** Tracks which attached file URIs have already been injected into _history. */
   private _injectedFileUris = new Set<string>();
+  /** Maps workspace-relative URI → chunk metadata for files chunked in the current session. */
+  private _chunkMeta = new Map<string, FileChunkMeta>();
   private readonly _diffProvider = new DiffContentProvider();
   /** Pending approval resolvers keyed by approvalId. */
   private readonly _approvalResolvers = new Map<string, (approved: boolean) => void>();
@@ -127,6 +133,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._history = [];
     this._attachedFiles = [];
     this._injectedFileUris = new Set();
+    this._chunkMeta = new Map();
     this._currentSession = this._configManager.createSession();
     this._saveCurrentSession();
     this._postMessage({ type: 'attachments', files: [] });
@@ -163,6 +170,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._attachedFiles = session.attachments;
     // Mark all restored attachments as already injected (they're baked into history)
     this._injectedFileUris = new Set(session.attachments.map(f => f.uri));
+    this._chunkMeta = new Map();
     this._currentSession = session;
     this._postMessage({ type: 'status', text: `Restored session: ${session.title}` });
     this._restoreSessionUi();
@@ -173,6 +181,69 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    */
   public getConfigManager(): ConfigManager {
     return this._configManager;
+  }
+
+  /**
+   * Read, chunk, and cache metadata for a single file.
+   * Returns the chunks array, or null if the file cannot be read.
+   */
+  private async _getChunksForUri(
+    relativePath: string,
+    wsRoots: string[]
+  ): Promise<FileChunk[] | null> {
+    const pathResult = resolveEditPath(relativePath, wsRoots);
+    if (pathResult.error) {
+      this._log.appendLine(`[chunks] cannot resolve "${relativePath}": ${pathResult.error}`);
+      return null;
+    }
+    const fileUri = vscode.Uri.file(pathResult.resolvedPath!);
+    let content: string;
+    let docVersion: number;
+    try {
+      const doc = await vscode.workspace.openTextDocument(fileUri);
+      content = doc.getText();
+      docVersion = doc.version;
+    } catch {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(fileUri);
+        content = Buffer.from(bytes).toString('utf8');
+        docVersion = 0;
+      } catch {
+        this._log.appendLine(`[chunks] cannot read "${relativePath}"`);
+        return null;
+      }
+    }
+    const chunks = chunkFile(relativePath, content, docVersion);
+    this._chunkMeta.set(relativePath, buildChunkMeta(chunks));
+    return chunks;
+  }
+
+  /**
+   * Select chunks to fulfil a `request_chunks` request.
+   * Centres on `preferred.near_line` if given; defaults to first N chunks.
+   */
+  private _selectChunksForRequest(
+    chunks: FileChunk[],
+    preferred?: ChunkRequest['preferred']
+  ): FileChunk[] {
+    const maxChunks = preferred?.max_chunks ?? 2;
+    const nearLine = preferred?.near_line;
+    if (!nearLine) {
+      return chunks.slice(0, maxChunks);
+    }
+    // Find chunk whose lineStart is closest to nearLine
+    let bestIdx = 0;
+    let bestDist = Math.abs(chunks[0].lineStart - nearLine);
+    for (let i = 1; i < chunks.length; i++) {
+      const dist = Math.abs(chunks[i].lineStart - nearLine);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    const half = Math.floor(maxChunks / 2);
+    const start = Math.max(0, bestIdx - half);
+    return chunks.slice(start, start + maxChunks);
   }
 
   private _getProvider(): OpenAIProvider {
@@ -189,6 +260,44 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       content: `You are a coding assistant embedded in VS Code. You can read, edit, run commands in, move, and delete files in the workspace.
 
 Always explain what you are doing in plain text outside of any action blocks.
+
+## How files are delivered
+
+Files are sent as chunks, not in full. Each chunk looks like:
+
+<file_chunk path="src/foo.ts" chunk_id="src/foo.ts:chunk:0" lines="1-120" total_chunks="5" doc_version="3" hash="abc123">
+...content of lines 1-120...
+</file_chunk>
+
+- \`lines\` is the 1-based inclusive range included in this chunk.
+- \`total_chunks\` tells you how many chunks the file has in total.
+- \`doc_version\` is the VS Code document version when the chunk was read.
+- \`hash\` is an MD5 of the chunk content for staleness detection.
+
+You may receive only the first one or two chunks initially. If you need to see other parts of the file before editing, request them (see below).
+
+## Requesting additional chunks
+
+If you need more of a file before you can make a correct edit, output a JSON object with a \`request_chunks\` array **instead of** outputting \`edits\`. Do not output both in the same response.
+
+\`\`\`json
+{
+  "request_chunks": [
+    {
+      "uri": "src/foo.ts",
+      "reason": "Need to see the class definition in the second half",
+      "preferred": { "near_line": 250, "max_chunks": 2 }
+    }
+  ]
+}
+\`\`\`
+
+- \`uri\` — workspace-relative path, forward slashes, no leading slash.
+- \`reason\` — brief explanation (helps with debugging).
+- \`preferred.near_line\` — the line number you are most interested in.
+- \`preferred.max_chunks\` — maximum chunks to return (default: 2).
+
+The client will fetch those chunks and send them back as another user message. You may request chunks at most 2 times per turn. After receiving the chunks, output your \`edits\` JSON.
 
 ## Editing files
 
@@ -216,7 +325,7 @@ Operations:
 
 Rules:
 - "uri" is workspace-relative, forward slashes, no leading slash.
-- "anchor" must match the file exactly (whitespace included). If you have not read the file, use "replace_all" instead of guessing an anchor.
+- "anchor" must match the file exactly (whitespace included). Copy it verbatim from the chunk you were shown. If you have not read the file, use "replace_all" instead of guessing an anchor.
 - Multiple edits may appear in a single "edits" array and are applied in order.
 - Wrap the JSON in a \`\`\`json fence if you prefer.
 
@@ -267,56 +376,114 @@ PATH: path/to/file.ts
 
     // Build user message, prepending any attached files that haven't been injected yet
     let userContent = prompt;
+    const wsRoots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
     const newFiles = this._attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
     if (newFiles.length > 0) {
-      const fileBlocks = newFiles.map(f =>
-        `<file path="${f.relativePath}" language="${f.languageId}">\n${f.content}\n</file>`
-      ).join('\n\n');
-      userContent = `${fileBlocks}\n\n${prompt}`;
+      const chunkBlocks: string[] = [];
       for (const f of newFiles) {
+        const chunks = await this._getChunksForUri(f.relativePath, wsRoots);
+        if (chunks && chunks.length > 0) {
+          // Send first 2 chunks initially; model can request more via request_chunks
+          for (const chunk of chunks.slice(0, 2)) {
+            chunkBlocks.push(formatChunkBlock(chunk));
+          }
+        } else {
+          // Fallback for unreadable/unsaved files
+          chunkBlocks.push(
+            `<file path="${f.relativePath}" language="${f.languageId}">\n${f.content}\n</file>`
+          );
+        }
         this._injectedFileUris.add(f.uri);
+      }
+      if (chunkBlocks.length > 0) {
+        userContent = `${chunkBlocks.join('\n\n')}\n\n${prompt}`;
       }
     }
 
     this._history.push({ role: 'user', content: userContent });
 
-    this._abortController = new AbortController();
-    const provider = this._getProvider();
-
-    let fullResponse = '';
+    const MAX_CHUNK_ROUNDS = 2;
+    let chunkRound = 0;
+    let finalResponse = '';
+    let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
 
     try {
-      this._log.appendLine(`[stream] starting request`);
-      await provider.stream(
-        this._buildMessages(),
-        this._abortController.signal,
-        (event) => {
-          if (event.type === 'delta') {
-            fullResponse += event.content;
-            this._postMessage({ type: 'delta', content: event.content });
-          } else if (event.type === 'done') {
-            this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}`);
-            // Only send 'done' here if the stop handler hasn't already sent it
-            // (stop handler sends its own done with cancelled:true)
-            if (!this._userCancelled) {
-              this._postMessage({ type: 'done', usage: event.usage });
-            }
-          } else if (event.type === 'error') {
-            this._log.appendLine(`[stream] error event: ${event.message}`);
-            this._postMessage({ type: 'error', message: event.message });
-          }
-        }
-      );
-      this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
+      while (true) {
+        let fullResponse = '';
+        this._abortController = new AbortController();
+        const provider = this._getProvider();
 
-      // After streaming completes, process @@EDIT and @@RUN blocks —
-      // but only if the user didn't cancel mid-stream.
-      if (fullResponse && !this._userCancelled) {
+        this._log.appendLine(`[stream] starting request (chunk round ${chunkRound})`);
+        await provider.stream(
+          this._buildMessages(),
+          this._abortController.signal,
+          (event) => {
+            if (event.type === 'delta') {
+              fullResponse += event.content;
+              this._postMessage({ type: 'delta', content: event.content });
+            } else if (event.type === 'done') {
+              this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}`);
+              lastUsage = event.usage;
+            } else if (event.type === 'error') {
+              this._log.appendLine(`[stream] error event: ${event.message}`);
+              this._postMessage({ type: 'error', message: event.message });
+            }
+          }
+        );
+        this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
+        this._abortController = undefined;
+
+        if (this._userCancelled || !fullResponse) {
+          break;
+        }
+
+        // Tentatively record assistant turn
         this._history.push({ role: 'assistant', content: fullResponse });
-        await this._showEditDiffs(fullResponse);
-        await this._processRunBlocks(fullResponse);
-        await this._processMoveBlocks(fullResponse);
-        await this._processDeleteBlocks(fullResponse);
+
+        // Check if the model is requesting more file chunks
+        const chunkRequests = parseChunkRequests(fullResponse);
+
+        if (chunkRequests && chunkRound < MAX_CHUNK_ROUNDS) {
+          chunkRound++;
+          this._log.appendLine(`[chunks] model requested ${chunkRequests.length} chunk(s), round ${chunkRound}/${MAX_CHUNK_ROUNDS}`);
+          this._postMessage({ type: 'status', text: `Fetching ${chunkRequests.length} requested chunk(s)…` });
+
+          const parts: string[] = [];
+          for (const req of chunkRequests) {
+            const chunks = await this._getChunksForUri(req.uri, wsRoots);
+            if (!chunks) {
+              parts.push(`<!-- Could not read chunks for "${req.uri}" -->`);
+              continue;
+            }
+            for (const chunk of this._selectChunksForRequest(chunks, req.preferred)) {
+              parts.push(formatChunkBlock(chunk));
+            }
+          }
+          this._history.push({ role: 'user', content: parts.join('\n\n') });
+          continue; // stream again with expanded context
+        }
+
+        if (chunkRequests) {
+          // Limit reached while model still wants more
+          this._log.appendLine(`[chunks] retry limit reached`);
+          this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
+        }
+
+        finalResponse = fullResponse;
+        break;
+      }
+
+      // Post 'done' exactly once after all rounds complete
+      if (!this._userCancelled) {
+        this._postMessage({ type: 'done', usage: lastUsage });
+      }
+
+      // Process action blocks on the final response only
+      if (finalResponse && !this._userCancelled) {
+        await this._showEditDiffs(finalResponse);
+        await this._processRunBlocks(finalResponse);
+        await this._processMoveBlocks(finalResponse);
+        await this._processDeleteBlocks(finalResponse);
       }
     } catch (err) {
       this._log.appendLine(`[stream] caught exception: ${err}`);
@@ -327,7 +494,7 @@ PATH: path/to/file.ts
 
     // Persist session after each completed turn (skip if cancelled mid-stream
     // with no content, to avoid storing an empty assistant turn)
-    if (fullResponse || !this._userCancelled) {
+    if (finalResponse || !this._userCancelled) {
       this._saveCurrentSession();
     }
   }
