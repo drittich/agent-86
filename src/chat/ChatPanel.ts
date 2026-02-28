@@ -320,9 +320,8 @@ PATH: path/to/file.ts
 
     const { blocks, warnings } = parseEditBlocks(assistantText);
 
-    if (warnings.length > 0) {
-      const warningText = warnings.map(w => `> ⚠ Edit parse warning: ${w}`).join('\n');
-      this._postMessage({ type: 'delta', content: '\n\n' + warningText });
+    for (const w of warnings) {
+      this._postMessage({ type: 'warning', text: `Edit parse warning: ${w}` });
     }
 
     for (const block of blocks) {

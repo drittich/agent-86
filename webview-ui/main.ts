@@ -452,6 +452,69 @@ function sendPrompt(): void {
   promptInput.value = '';
 }
 
+// ── Warning notice ────────────────────────────────────────────────────────────
+
+const warningStyle = document.createElement('style');
+warningStyle.textContent = `
+  .warning-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    border: 1px solid var(--vscode-inputValidation-warningBorder, #b89500);
+    background: var(--vscode-inputValidation-warningBackground, #352a05);
+    color: var(--vscode-inputValidation-warningForeground, #cca700);
+    border-radius: 3px;
+    padding: 6px 10px;
+    margin: 6px 0;
+    font-size: 12px;
+  }
+  .warning-notice .warning-icon {
+    flex-shrink: 0;
+    font-style: normal;
+  }
+  .warning-notice .warning-text {
+    flex: 1;
+    word-break: break-word;
+  }
+  .warning-notice .warning-dismiss {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: inherit;
+    opacity: 0.7;
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .warning-notice .warning-dismiss:hover { opacity: 1; }
+`;
+document.head.appendChild(warningStyle);
+
+function showWarningNotice(text: string): void {
+  const notice = document.createElement('div');
+  notice.className = 'warning-notice';
+
+  const icon = document.createElement('span');
+  icon.className = 'warning-icon';
+  icon.textContent = '⚠';
+
+  const textEl = document.createElement('span');
+  textEl.className = 'warning-text';
+  textEl.textContent = text;
+
+  const dismiss = document.createElement('button');
+  dismiss.className = 'warning-dismiss';
+  dismiss.title = 'Dismiss';
+  dismiss.textContent = '×';
+  dismiss.addEventListener('click', () => notice.remove());
+
+  notice.appendChild(icon);
+  notice.appendChild(textEl);
+  notice.appendChild(dismiss);
+  approvalsContainer.appendChild(notice);
+}
+
 // ── Approval card ─────────────────────────────────────────────────────────────
 
 const approvalStyle = `
@@ -742,6 +805,10 @@ window.addEventListener('message', (event: MessageEvent) => {
       } else {
         setStatus('Done.');
       }
+      break;
+
+    case 'warning':
+      showWarningNotice(msg.text ?? 'Unknown warning');
       break;
 
     case 'error':
