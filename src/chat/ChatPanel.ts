@@ -3,7 +3,7 @@ import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageP
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
 import { pickAndReadFiles, readActiveEditor, autoDetectAndAttachFiles } from '../tools/FileTools';
-import { parseEditBlocks, resolveEditPath, validateFromText, applyEditBlock } from '../tools/editParser';
+import { parseEditOps, resolveEditPath, applyAnchorOp } from '../tools/editParser';
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
 import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
 import { parseDeleteBlocks, resolveDeleteBlockPath, deleteFile, formatDeleteResult } from '../tools/DeleteFileTool';
@@ -190,21 +190,35 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
 Always explain what you are doing in plain text outside of any action blocks.
 
-## Editing files — <EDIT>
+## Editing files
 
-<EDIT path="path/to/file">
-<FROM>
-exact text currently in the file — leave empty for a full-file replacement
-</FROM>
-<TO>
-replacement text — leave empty to delete the matched text
-</TO>
-</EDIT>
+Output a JSON object (anywhere in your response) with an "edits" array to edit files.
+
+\`\`\`json
+{
+  "edits": [
+    {
+      "uri": "src/file.ts",
+      "op": "replace_first",
+      "anchor": "exact text currently in the file",
+      "text": "replacement text"
+    }
+  ]
+}
+\`\`\`
+
+Operations:
+- "replace_first" — replaces the first occurrence of "anchor" with "text"
+- "delete_first"  — deletes the first occurrence of "anchor" (omit "text")
+- "insert_after"  — inserts "text" immediately after the first occurrence of "anchor"
+- "insert_before" — inserts "text" immediately before the first occurrence of "anchor"
+- "replace_all"   — replaces the entire file content with "text" (omit "anchor")
 
 Rules:
-- path is workspace-relative, forward slashes, no leading slash.
-- <FROM> text must match the file exactly (whitespace included). If you have not read the file, use an empty <FROM></FROM> section (full-file replacement) rather than guessing.
-- Multiple <EDIT> blocks are applied in order.
+- "uri" is workspace-relative, forward slashes, no leading slash.
+- "anchor" must match the file exactly (whitespace included). If you have not read the file, use "replace_all" instead of guessing an anchor.
+- Multiple edits may appear in a single "edits" array and are applied in order.
+- Wrap the JSON in a \`\`\`json fence if you prefer.
 
 ## Running shell commands — <RUN>
 
@@ -319,8 +333,8 @@ PATH: path/to/file.ts
   }
 
   /**
-   * Parse @@EDIT blocks from the assistant response and open a VS Code diff
-   * tab for each one so the user can review changes before applying.
+   * Parse JSON anchor edit ops from the assistant response and open a VS Code
+   * diff tab for each one so the user can review changes before applying.
    */
   private async _showEditDiffs(assistantText: string): Promise<void> {
     const wsRoots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
@@ -328,32 +342,16 @@ PATH: path/to/file.ts
       return;
     }
 
-    const { blocks, warnings } = parseEditBlocks(assistantText);
+    const { ops, warnings } = parseEditOps(assistantText);
 
-    this._log.appendLine(`[edit] raw response length: ${assistantText.length}`);
-    // Log all occurrences of EDIT in the raw text
-    let searchFrom = 0;
-    while (true) {
-      const idx = assistantText.indexOf('EDIT', searchFrom);
-      if (idx === -1) { break; }
-      this._log.appendLine(`[edit] 'EDIT' at raw[${idx}]: ${JSON.stringify(assistantText.slice(Math.max(0, idx - 30), idx + 60))}`);
-      searchFrom = idx + 1;
-    }
-    // Log what the text looks like after token stripping
-    const stripped = assistantText.replace(/<\|[^|>]*\|>/g, '');
-    const strippedEditIdx = stripped.indexOf('EDIT');
-    this._log.appendLine(`[edit] after strip, first 'EDIT' at [${strippedEditIdx}]: ${JSON.stringify(stripped.slice(Math.max(0, strippedEditIdx - 10), strippedEditIdx + 80))}`);
-    this._log.appendLine(`[edit] blocks found: ${blocks.length}, warnings: ${warnings.length}`);
+    this._log.appendLine(`[edit] ops found: ${ops.length}, warnings: ${warnings.length}`);
     for (const w of warnings) {
       this._log.appendLine(`[edit] warning: ${w}`);
       this._postMessage({ type: 'status', text: `Edit parse warning: ${w}` });
     }
-    for (const b of blocks) {
-      this._log.appendLine(`[edit] block path="${b.path}" from.length=${b.from.length} to.length=${b.to.length}`);
-    }
 
-    for (const block of blocks) {
-      const pathResult = resolveEditPath(block.path, wsRoots);
+    for (const op of ops) {
+      const pathResult = resolveEditPath(op.uri, wsRoots);
       if (pathResult.error) {
         const errMsg = `\n\n> **Edit error**: ${pathResult.error}`;
         this._postMessage({ type: 'delta', content: errMsg });
@@ -362,35 +360,35 @@ PATH: path/to/file.ts
 
       const fileUri = vscode.Uri.file(pathResult.resolvedPath!);
 
-      // Read current file content (may not exist yet for new-file blocks)
+      // Read current file content (may not exist yet for new-file ops)
       let originalContent = '';
+      let fileExists = true;
       try {
         const bytes = await vscode.workspace.fs.readFile(fileUri);
         originalContent = Buffer.from(bytes).toString('utf8');
       } catch {
         // File doesn't exist — treat as empty (new file)
+        fileExists = false;
       }
 
-      // Validate FROM text
-      const fromError = validateFromText(block, originalContent);
-      if (fromError) {
-        const errMsg = `\n\n> **Edit error** (${block.path}): ${fromError}. The FROM text must exactly match the current file content. Try attaching the file first so the model can read the current content.`;
+      // Apply the operation to compute new content
+      const result = applyAnchorOp(op, originalContent);
+      if (typeof result === 'object') {
+        const errMsg = `\n\n> **Edit error** (${op.uri}): ${result.error}. Try attaching the file first so the model can read the current content.`;
         this._postMessage({ type: 'delta', content: errMsg });
         continue;
       }
-
-      // Compute the new content
-      const newContent = applyEditBlock(block, originalContent);
+      const newContent = result;
 
       // Register both sides with the in-memory provider
-      const oldKey = `${block.path}?side=old`;
-      const newKey = `${block.path}?side=new`;
+      const oldKey = `${op.uri}?side=old`;
+      const newKey = `${op.uri}?side=new`;
       this._diffProvider.set(oldKey, originalContent);
       this._diffProvider.set(newKey, newContent);
 
       const oldUri = vscode.Uri.parse(`${DIFF_SCHEME}:${oldKey}`);
       const newUri = vscode.Uri.parse(`${DIFF_SCHEME}:${newKey}`);
-      const title = `Review: ${block.path}`;
+      const title = `Review: ${op.uri}`;
 
       await vscode.commands.executeCommand('vscode.diff', oldUri, newUri, title, {
         preview: true,
@@ -399,7 +397,7 @@ PATH: path/to/file.ts
       // Ask the user whether to apply via a VS Code notification (visible even
       // when the diff tab steals focus away from the chat panel webview).
       const answer = await vscode.window.showInformationMessage(
-        `Apply edit to ${block.path}?`,
+        `Apply edit to ${op.uri}?`,
         { modal: false },
         'Apply',
         'Skip'
@@ -410,14 +408,22 @@ PATH: path/to/file.ts
       this._diffProvider.delete(newKey);
 
       if (answer !== 'Apply') {
-        this._postMessage({ type: 'status', text: `Edit cancelled: ${block.path}` });
+        this._postMessage({ type: 'status', text: `Edit cancelled: ${op.uri}` });
         continue;
       }
 
-      // Write the file
-      const encoder = new TextEncoder();
-      await vscode.workspace.fs.writeFile(fileUri, encoder.encode(newContent));
-      this._postMessage({ type: 'status', text: `Applied: ${block.path}` });
+      // Apply via WorkspaceEdit for undo history support; fall back to writeFile for new files
+      if (fileExists) {
+        const wsEdit = new vscode.WorkspaceEdit();
+        const doc = await vscode.workspace.openTextDocument(fileUri);
+        const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
+        wsEdit.replace(fileUri, fullRange, newContent);
+        await vscode.workspace.applyEdit(wsEdit);
+      } else {
+        const encoder = new TextEncoder();
+        await vscode.workspace.fs.writeFile(fileUri, encoder.encode(newContent));
+      }
+      this._postMessage({ type: 'status', text: `Applied: ${op.uri}` });
     }
   }
 

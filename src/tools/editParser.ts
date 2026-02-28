@@ -1,114 +1,239 @@
 import * as path from 'path';
 
 /**
- * <EDIT> Structured Edit Block Format
- * ====================================
+ * JSON Anchor-Based Edit Format
+ * ==============================
  *
- * The model produces one or more `<EDIT>` blocks inside its assistant message
- * to describe file modifications. The extension host parses these blocks,
- * validates them, shows a diff preview, and—after explicit user approval—
- * applies the edits via `vscode.workspace.fs.writeFile`.
+ * The model produces a JSON object with an "edits" array anywhere in its
+ * assistant message. The extension parses this, shows a diff preview, and—
+ * after user approval—applies the edits via VS Code WorkspaceEdit.
  *
- * ## Block syntax
+ * ## JSON shape
  *
- * ```
- * <EDIT path="path/to/file.ts">
- * <FROM>
- * <exact text that currently exists in the file>
- * </FROM>
- * <TO>
- * <replacement text>
- * </TO>
- * </EDIT>
- * ```
- *
- * Rules:
- *  - `<EDIT path="...">` — opens a block. `path` is the workspace-relative path
- *    (forward slashes on all platforms). The path MUST NOT start with `/`,
- *    `..`, or contain drive letters. Paths outside the workspace root are
- *    rejected.
- *  - `<FROM>` / `</FROM>` — delimiters that wrap the "search" text.
- *  - `<TO>` / `</TO>` — delimiters that wrap the replacement text.
- *  - `</EDIT>` — closes the block.
- *  - Leading/trailing blank lines inside `<FROM>`/`<TO>` sections are
- *    significant and preserved.
- *  - Multiple `<EDIT>` blocks may appear in a single assistant message and
- *    are applied in the order they appear.
- *  - A block with an empty `<FROM>` section is a **full-file replacement**:
- *    the entire file is overwritten with the `<TO>` content.
- *  - A block with an empty `<TO>` section **deletes** the matched text.
- *
- * ## Example — partial edit
- *
- * ```
- * <EDIT path="src/utils/math.ts">
- * <FROM>
- * function add(a: number, b: number) {
- *   return a + b;
+ * ```json
+ * {
+ *   "edits": [
+ *     {
+ *       "uri": "src/file.ts",
+ *       "op": "replace_first",
+ *       "anchor": "exact text currently in the file",
+ *       "text": "replacement text"
+ *     }
+ *   ]
  * }
- * </FROM>
- * <TO>
- * function add(a: number, b: number): number {
- *   return a + b;
- * }
- * </TO>
- * </EDIT>
  * ```
  *
- * ## Example — full-file replacement
+ * ## Operations
  *
- * ```
- * <EDIT path="src/hello.ts">
- * <FROM>
- * </FROM>
- * <TO>
- * console.log('hello world');
- * </TO>
- * </EDIT>
- * ```
+ * - "replace_first" — replaces the first occurrence of "anchor" with "text"
+ * - "delete_first"  — deletes the first occurrence of "anchor" (omit "text")
+ * - "insert_after"  — inserts "text" immediately after the first occurrence of "anchor"
+ * - "insert_before" — inserts "text" immediately before the first occurrence of "anchor"
+ * - "replace_all"   — replaces the entire file content with "text" (omit "anchor")
  *
- * ## Example — delete a block
- *
- * ```
- * <EDIT path="src/hello.ts">
- * <FROM>
- * // TODO: remove this
- * console.log('debug');
- * </FROM>
- * <TO>
- * </TO>
- * </EDIT>
- * ```
+ * ## Rules
+ * - "uri" is workspace-relative, forward slashes, no leading slash.
+ * - "anchor" must match the file exactly (whitespace included).
+ * - Multiple edits may appear in a single "edits" array and are applied in order.
+ * - The JSON may be wrapped in a ```json code fence.
  */
 
-/** A fully parsed and validated edit block ready for preview/application. */
-export interface EditBlock {
+export type AnchorOp = 'insert_after' | 'insert_before' | 'replace_first' | 'delete_first' | 'replace_all';
+
+export interface AnchorEditOp {
   /** Workspace-relative path (forward slashes, no leading slash). */
-  path: string;
+  uri: string;
+  /** Operation to perform. */
+  op: AnchorOp;
   /**
-   * Text to find in the file. Empty string means full-file replacement
-   * (match the entire current content).
+   * Text to locate in the file. Required for all ops except replace_all.
+   * For insert_after/insert_before: the insertion anchor point.
+   * For replace_first/delete_first: the text to replace/delete.
    */
-  from: string;
-  /** Replacement text. Empty string means deletion of the `from` text. */
-  to: string;
+  anchor?: string;
+  /**
+   * Replacement / inserted text.
+   * Omitted or empty for delete_first.
+   * Required for insert_after, insert_before, replace_first, replace_all.
+   */
+  text?: string;
 }
 
 /** Result of parsing an assistant message. */
 export interface ParseResult {
-  blocks: EditBlock[];
-  /** Non-fatal warnings encountered during parsing (e.g. extra whitespace). */
+  ops: AnchorEditOp[];
+  /** Non-fatal warnings encountered during parsing. */
   warnings: string[];
 }
 
-// The leading `<?` makes the `<` optional to handle cases where a model token
-// like `<|channel|>` was stripped, leaving `EDIT path=...>` without its `<`.
-const EDIT_OPEN_RE = /^<?EDIT[ \t]+path="([^"]+)"[ \t]*>$/;
-const FROM_OPEN  = '<FROM>';
-const FROM_CLOSE = '</FROM>';
-const TO_OPEN    = '<TO>';
-const TO_CLOSE   = '</TO>';
-const EDIT_CLOSE = '</EDIT>';
+const VALID_OPS = new Set<string>(['insert_after', 'insert_before', 'replace_first', 'delete_first', 'replace_all']);
+
+/**
+ * Extract all top-level JSON object substrings from text.
+ * Walks char-by-char tracking brace depth and skipping string literals.
+ */
+function extractJsonCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === '\\') {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      if (depth === 0) {
+        start = i;
+      }
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        candidates.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return candidates;
+}
+
+/** Strip markdown code fences (``` or ~~~, with optional language tag) from text. */
+function stripCodeFences(text: string): string {
+  return text.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n/gm, '');
+}
+
+/**
+ * Parse all edit operations from an assistant message.
+ *
+ * Scans for any JSON object containing an "edits" array, validates each op,
+ * and returns the collected operations plus any warnings.
+ */
+export function parseEditOps(text: string): ParseResult {
+  const ops: AnchorEditOp[] = [];
+  const warnings: string[] = [];
+
+  const strippedText = stripCodeFences(text);
+  const candidates = extractJsonCandidates(strippedText);
+
+  for (const candidate of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      !Array.isArray((parsed as Record<string, unknown>)['edits'])
+    ) {
+      continue;
+    }
+
+    const edits = (parsed as { edits: unknown[] }).edits;
+
+    for (let i = 0; i < edits.length; i++) {
+      const item = edits[i];
+      if (typeof item !== 'object' || item === null) {
+        warnings.push(`edits[${i}]: not an object`);
+        continue;
+      }
+
+      const obj = item as Record<string, unknown>;
+
+      if (typeof obj['uri'] !== 'string' || !obj['uri']) {
+        warnings.push(`edits[${i}]: missing or invalid "uri"`);
+        continue;
+      }
+
+      if (typeof obj['op'] !== 'string' || !VALID_OPS.has(obj['op'])) {
+        warnings.push(`edits[${i}]: invalid "op" "${obj['op']}"`);
+        continue;
+      }
+
+      const op = obj['op'] as AnchorOp;
+
+      if (op !== 'replace_all' && (typeof obj['anchor'] !== 'string' || !obj['anchor'])) {
+        warnings.push(`edits[${i}]: op "${op}" requires a non-empty "anchor"`);
+        continue;
+      }
+
+      const pathError = validatePath(obj['uri'] as string);
+      if (pathError) {
+        warnings.push(`edits[${i}]: invalid uri — ${pathError}`);
+        continue;
+      }
+
+      ops.push({
+        uri: obj['uri'] as string,
+        op,
+        anchor: typeof obj['anchor'] === 'string' ? obj['anchor'] : undefined,
+        text: typeof obj['text'] === 'string' ? obj['text'] : '',
+      });
+    }
+  }
+
+  return { ops, warnings };
+}
+
+/**
+ * Apply an anchor edit operation to the given file content.
+ *
+ * Returns the new file content string, or an `{ error }` object if the
+ * operation cannot be applied (anchor not found, anchor ambiguous).
+ */
+export function applyAnchorOp(
+  op: AnchorEditOp,
+  fileContent: string
+): string | { error: string } {
+  const text = op.text ?? '';
+
+  if (op.op === 'replace_all') {
+    return text;
+  }
+
+  const anchor = op.anchor!;
+  const firstIndex = fileContent.indexOf(anchor);
+
+  if (firstIndex === -1) {
+    return { error: `anchor not found in "${op.uri}"` };
+  }
+
+  const secondIndex = fileContent.indexOf(anchor, firstIndex + anchor.length);
+  if (secondIndex !== -1) {
+    return { error: `anchor is ambiguous (found more than once) in "${op.uri}"` };
+  }
+
+  switch (op.op) {
+    case 'replace_first':
+      return fileContent.slice(0, firstIndex) + text + fileContent.slice(firstIndex + anchor.length);
+    case 'delete_first':
+      return fileContent.slice(0, firstIndex) + fileContent.slice(firstIndex + anchor.length);
+    case 'insert_after':
+      return fileContent.slice(0, firstIndex + anchor.length) + text + fileContent.slice(firstIndex + anchor.length);
+    case 'insert_before':
+      return fileContent.slice(0, firstIndex) + text + fileContent.slice(firstIndex);
+  }
+}
 
 /**
  * Resolve a workspace-relative path against the workspace roots and verify
@@ -116,9 +241,6 @@ const EDIT_CLOSE = '</EDIT>';
  *
  * Returns the resolved absolute path (using the first matching workspace root)
  * or an error message string if the path is invalid or escapes the workspace.
- *
- * @param relativePath  The workspace-relative path from an <EDIT> block.
- * @param wsRoots       Array of `fsPath` strings from `vscode.workspace.workspaceFolders`.
  */
 export function resolveEditPath(
   relativePath: string,
@@ -133,209 +255,16 @@ export function resolveEditPath(
     return { error: formatError };
   }
 
-  // Normalise forward-slash separators to the platform separator
   const normalized = relativePath.replace(/\//g, path.sep);
 
   for (const root of wsRoots) {
     const resolved = path.resolve(root, normalized);
-    // Ensure the resolved path starts with the workspace root + separator
-    // (or equals it exactly, though that would be writing the root dir itself)
     if (resolved === root || resolved.startsWith(root + path.sep)) {
       return { resolvedPath: resolved };
     }
   }
 
   return { error: `path "${relativePath}" resolves outside all workspace folders` };
-}
-
-/** Strip markdown code fences (``` or ~~~, with optional language tag) from text. */
-function stripCodeFences(text: string): string {
-  // Remove lines that are solely opening/closing code fences
-  return text.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n/gm, '');
-}
-
-/**
- * Strip internal channel/role tokens that some local models leak into output,
- * e.g. <|channel|>, <|message|>, <|end|>, <|start|>, <|assistant|> etc.
- * These tokens bleed into XML tag names and break parsing.
- */
-function stripModelTokens(text: string): string {
-  // First strip the <|...|> tokens
-  let result = text.replace(/<\|[^|>]*\|>/g, '');
-  // Then handle role markers that may be left behind after stripping
-  // e.g., "<|start|>assistant<|channel|>EDIT" -> "assistantEDIT" after first pass
-  // Also handle cases where there's a > before the role marker: ">assistantEDIT"
-  result = result.replace(/^[>\s]*(system|user|assistant|tool)(EDIT|MOVE|RUN|DELETE)/gm, '$2');
-  return result;
-}
-
-/**
- * Parse all `<EDIT>` blocks found in an assistant message.
- *
- * Returns `{ blocks, warnings }`. Individual malformed blocks are skipped and
- * a warning is added; valid blocks are still returned.
- */
-export function parseEditBlocks(text: string): ParseResult {
-  // Strip internal model tokens and markdown code fences before parsing.
-  const strippedText = stripCodeFences(stripModelTokens(text));
-  const lines = strippedText.split('\n');
-  const blocks: EditBlock[] = [];
-  const warnings: string[] = [];
-
-  // Debug: log the stripped text around any EDIT occurrence
-  if (process.env['DEBUG_EDIT_PARSER']) {
-    const editIdx = strippedText.indexOf('EDIT');
-    if (editIdx !== -1) {
-      console.error(`[parseEditBlocks] EDIT found at index ${editIdx}`);
-      console.error(`[parseEditBlocks] Context: ${JSON.stringify(strippedText.slice(Math.max(0, editIdx - 50), editIdx + 100))}`);
-    }
-  }
-
-  let i = 0;
-  while (i < lines.length) {
-    const openMatch = EDIT_OPEN_RE.exec(lines[i]);
-    if (!openMatch) {
-      // Debug: log lines that contain 'EDIT' but don't match the regex
-      if (lines[i].includes('EDIT')) {
-        warnings.push(`Line ${i + 1} contains 'EDIT' but doesn't match opener regex: ${JSON.stringify(lines[i].slice(0, 100))}`);
-      }
-      i++;
-      continue;
-    }
-
-    const filePath = openMatch[1].trim();
-    const blockStart = i;
-    i++;
-
-    // Skip any blank lines between <EDIT> and <FROM> (weaker models may emit them)
-    while (i < lines.length && lines[i].trim() === '') {
-      i++;
-    }
-
-    // Expect <FROM> next
-    if (i >= lines.length || lines[i].trimEnd() !== FROM_OPEN) {
-      warnings.push(`<EDIT> block at line ${blockStart + 1}: expected ${FROM_OPEN}, got "${lines[i] ?? '<EOF>'}"`);
-      continue;
-    }
-    i++;
-
-    // Collect FROM lines until </FROM>
-    const fromLines: string[] = [];
-    while (i < lines.length && lines[i].trimEnd() !== FROM_CLOSE) {
-      if (lines[i].trimEnd() === EDIT_CLOSE) {
-        warnings.push(`<EDIT> block at line ${blockStart + 1}: reached ${EDIT_CLOSE} before ${FROM_CLOSE}`);
-        break;
-      }
-      fromLines.push(lines[i]);
-      i++;
-    }
-
-    if (i >= lines.length || lines[i].trimEnd() !== FROM_CLOSE) {
-      warnings.push(`<EDIT> block at line ${blockStart + 1}: ${FROM_CLOSE} marker not found`);
-      continue;
-    }
-    i++;
-
-    // Skip any blank lines between </FROM> and <TO>
-    while (i < lines.length && lines[i].trim() === '') {
-      i++;
-    }
-
-    // Expect <TO> next
-    if (i >= lines.length || lines[i].trimEnd() !== TO_OPEN) {
-      warnings.push(`<EDIT> block at line ${blockStart + 1}: expected ${TO_OPEN}, got "${lines[i] ?? '<EOF>'}"`);
-      continue;
-    }
-    i++;
-
-    // Collect TO lines until </TO>
-    const toLines: string[] = [];
-    while (i < lines.length && lines[i].trimEnd() !== TO_CLOSE) {
-      toLines.push(lines[i]);
-      i++;
-    }
-
-    if (i >= lines.length || lines[i].trimEnd() !== TO_CLOSE) {
-      warnings.push(`<EDIT> block at line ${blockStart + 1}: ${TO_CLOSE} marker not found`);
-      continue;
-    }
-    i++;
-
-    // Expect </EDIT> next
-    if (i >= lines.length || lines[i].trimEnd() !== EDIT_CLOSE) {
-      warnings.push(`<EDIT> block at line ${blockStart + 1}: expected ${EDIT_CLOSE}, got "${lines[i] ?? '<EOF>'}"`);
-      continue;
-    }
-    i++; // consume </EDIT>
-
-    // Strip the trailing newline that the model emits before closing tags
-    const from = joinAndStripTrailingNewline(fromLines);
-    const to = joinAndStripTrailingNewline(toLines);
-
-    const pathError = validatePath(filePath);
-    if (pathError) {
-      warnings.push(`<EDIT> block at line ${blockStart + 1}: invalid path — ${pathError}`);
-      continue;
-    }
-
-    blocks.push({ path: filePath, from, to });
-  }
-
-  return { blocks, warnings };
-}
-
-/**
- * Validate that the `from` text in an edit block exists exactly once in the
- * given file content.
- *
- * - If `block.from` is empty the block is a full-file replacement, which is
- *   always valid regardless of current content.
- * - Returns `null` if valid (from text found exactly once).
- * - Returns an error message string if the text is not found or is ambiguous
- *   (appears more than once).
- */
-export function validateFromText(block: EditBlock, fileContent: string): string | null {
-  // Empty FROM means full-file replacement — always valid.
-  if (block.from === '') {
-    return null;
-  }
-
-  const firstIndex = fileContent.indexOf(block.from);
-  if (firstIndex === -1) {
-    return `FROM text not found in "${block.path}"`;
-  }
-
-  const secondIndex = fileContent.indexOf(block.from, firstIndex + block.from.length);
-  if (secondIndex !== -1) {
-    return `FROM text is ambiguous — found more than once in "${block.path}"`;
-  }
-
-  return null;
-}
-
-/** Join lines back to a string, stripping one trailing newline if present. */
-function joinAndStripTrailingNewline(lines: string[]): string {
-  if (lines.length === 0) {
-    return '';
-  }
-  const joined = lines.join('\n');
-  // Strip a single trailing newline that the model adds before the next marker
-  return joined.endsWith('\n') ? joined.slice(0, -1) : joined;
-}
-
-/**
- * Apply an edit block to the given file content, returning the new content.
- *
- * - If `block.from` is empty, replaces the entire file content with `block.to`.
- * - Otherwise, replaces the first occurrence of `block.from` with `block.to`.
- *
- * Assumes `validateFromText` has already confirmed the block is valid.
- */
-export function applyEditBlock(block: EditBlock, fileContent: string): string {
-  if (block.from === '') {
-    return block.to;
-  }
-  return fileContent.replace(block.from, () => block.to);
 }
 
 /**
