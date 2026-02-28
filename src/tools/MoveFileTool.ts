@@ -2,10 +2,10 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 
 /**
- * @@MOVE Structured Move Block Format
+ * <MOVE> Structured Move Block Format
  * =====================================
  *
- * The model may include one or more `@@MOVE` blocks in its assistant message to
+ * The model may include one or more `<MOVE>` blocks in its assistant message to
  * request moving (renaming) a file within the workspace. The extension host parses
  * these blocks, shows an approval card, and—after explicit user approval—performs
  * the move using the VS Code workspace filesystem API.
@@ -13,29 +13,29 @@ import * as path from 'path';
  * ## Block syntax
  *
  * ```
- * @@MOVE
+ * <MOVE>
  * FROM: path/to/source.ts
  * TO: path/to/destination.ts
- * @@END
+ * </MOVE>
  * ```
  *
  * Rules:
- *  - `@@MOVE` — opens a block.
- *  - `@@END` — closes the block.
+ *  - `<MOVE>` — opens a block.
+ *  - `</MOVE>` — closes the block.
  *  - `FROM:` specifies the source path (relative to workspace root or absolute).
  *  - `TO:` specifies the destination path (relative to workspace root or absolute).
  *  - Both paths must be inside the workspace; the operation is rejected otherwise.
  *  - The source file must exist.
  *  - If the destination directory does not exist, it is created automatically.
- *  - Multiple `@@MOVE` blocks in a single message are processed in order.
+ *  - Multiple `<MOVE>` blocks in a single message are processed in order.
  *
  * ## Example
  *
  * ```
- * @@MOVE
+ * <MOVE>
  * FROM: src/utils/helper.ts
  * TO: src/shared/helper.ts
- * @@END
+ * </MOVE>
  * ```
  */
 
@@ -55,11 +55,11 @@ export interface MoveResult {
   error?: string;
 }
 
-const MOVE_OPEN = '@@MOVE';
-const MOVE_END = '@@END';
+const MOVE_OPEN = '<MOVE>';
+const MOVE_END = '</MOVE>';
 
 /**
- * Parse all `@@MOVE` blocks from an assistant message.
+ * Parse all `<MOVE>` blocks from an assistant message.
  * Returns an array of MoveBlock objects (empty if none found).
  */
 export function parseMoveBlocks(text: string): MoveBlock[] {
@@ -88,7 +88,7 @@ export function parseMoveBlocks(text: string): MoveBlock[] {
     }
 
     if (i < lines.length) {
-      i++; // consume @@END
+      i++; // consume </MOVE>
     }
 
     if (from && to) {
@@ -169,7 +169,7 @@ export async function moveFile(
  */
 export function formatMoveResult(result: MoveResult): string {
   if (result.success) {
-    return `@@MOVE_RESULT\nfrom: ${result.from}\nto: ${result.to}\nstatus: success`;
+    return `<MOVE_RESULT from="${result.from}" to="${result.to}" status="success"/>`;
   }
-  return `@@MOVE_RESULT\nfrom: ${result.from}\nto: ${result.to}\nstatus: failed\nerror: ${result.error}`;
+  return `<MOVE_RESULT from="${result.from}" to="${result.to}" status="failed" error="${result.error}"/>`;
 }

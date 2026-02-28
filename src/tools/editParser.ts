@@ -1,10 +1,10 @@
 import * as path from 'path';
 
 /**
- * @@EDIT Structured Edit Block Format
+ * <EDIT> Structured Edit Block Format
  * ====================================
  *
- * The model produces one or more `@@EDIT` blocks inside its assistant message
+ * The model produces one or more `<EDIT>` blocks inside its assistant message
  * to describe file modifications. The extension host parses these blocks,
  * validates them, shows a diff preview, and—after explicit user approval—
  * applies the edits via `vscode.workspace.fs.writeFile`.
@@ -12,65 +12,72 @@ import * as path from 'path';
  * ## Block syntax
  *
  * ```
- * @@EDIT path/to/file.ts
- * @@FROM
+ * <EDIT path="path/to/file.ts">
+ * <FROM>
  * <exact text that currently exists in the file>
- * @@TO
+ * </FROM>
+ * <TO>
  * <replacement text>
- * @@END
+ * </TO>
+ * </EDIT>
  * ```
  *
  * Rules:
- *  - `@@EDIT <path>` — opens a block. `<path>` is the workspace-relative path
+ *  - `<EDIT path="...">` — opens a block. `path` is the workspace-relative path
  *    (forward slashes on all platforms). The path MUST NOT start with `/`,
  *    `..`, or contain drive letters. Paths outside the workspace root are
  *    rejected.
- *  - `@@FROM` — delimiter that begins the "search" text.
- *  - `@@TO` — delimiter that separates search text from replacement text.
- *  - `@@END` — closes the block. The newline immediately before `@@END` is
- *    NOT part of the replacement text (strip it).
- *  - Leading/trailing blank lines inside `@@FROM`/`@@TO` sections are
+ *  - `<FROM>` / `</FROM>` — delimiters that wrap the "search" text.
+ *  - `<TO>` / `</TO>` — delimiters that wrap the replacement text.
+ *  - `</EDIT>` — closes the block.
+ *  - Leading/trailing blank lines inside `<FROM>`/`<TO>` sections are
  *    significant and preserved.
- *  - Multiple `@@EDIT` blocks may appear in a single assistant message and
+ *  - Multiple `<EDIT>` blocks may appear in a single assistant message and
  *    are applied in the order they appear.
- *  - A block with an empty `@@FROM` section is a **full-file replacement**:
- *    the entire file is overwritten with the `@@TO` content.
- *  - A block with an empty `@@TO` section **deletes** the matched text.
+ *  - A block with an empty `<FROM>` section is a **full-file replacement**:
+ *    the entire file is overwritten with the `<TO>` content.
+ *  - A block with an empty `<TO>` section **deletes** the matched text.
  *
  * ## Example — partial edit
  *
  * ```
- * @@EDIT src/utils/math.ts
- * @@FROM
+ * <EDIT path="src/utils/math.ts">
+ * <FROM>
  * function add(a: number, b: number) {
  *   return a + b;
  * }
- * @@TO
+ * </FROM>
+ * <TO>
  * function add(a: number, b: number): number {
  *   return a + b;
  * }
- * @@END
+ * </TO>
+ * </EDIT>
  * ```
  *
  * ## Example — full-file replacement
  *
  * ```
- * @@EDIT src/hello.ts
- * @@FROM
- * @@TO
+ * <EDIT path="src/hello.ts">
+ * <FROM>
+ * </FROM>
+ * <TO>
  * console.log('hello world');
- * @@END
+ * </TO>
+ * </EDIT>
  * ```
  *
  * ## Example — delete a block
  *
  * ```
- * @@EDIT src/hello.ts
- * @@FROM
+ * <EDIT path="src/hello.ts">
+ * <FROM>
  * // TODO: remove this
  * console.log('debug');
- * @@TO
- * @@END
+ * </FROM>
+ * <TO>
+ * </TO>
+ * </EDIT>
  * ```
  */
 
@@ -94,10 +101,12 @@ export interface ParseResult {
   warnings: string[];
 }
 
-const EDIT_OPEN_RE = /^@@EDIT[ \t]+(.+)$/;
-const FROM_MARKER = '@@FROM';
-const TO_MARKER = '@@TO';
-const END_MARKER = '@@END';
+const EDIT_OPEN_RE = /^<EDIT[ \t]+path="([^"]+)"[ \t]*>$/;
+const FROM_OPEN  = '<FROM>';
+const FROM_CLOSE = '</FROM>';
+const TO_OPEN    = '<TO>';
+const TO_CLOSE   = '</TO>';
+const EDIT_CLOSE = '</EDIT>';
 
 /**
  * Resolve a workspace-relative path against the workspace roots and verify
@@ -106,7 +115,7 @@ const END_MARKER = '@@END';
  * Returns the resolved absolute path (using the first matching workspace root)
  * or an error message string if the path is invalid or escapes the workspace.
  *
- * @param relativePath  The workspace-relative path from an @@EDIT block.
+ * @param relativePath  The workspace-relative path from an <EDIT> block.
  * @param wsRoots       Array of `fsPath` strings from `vscode.workspace.workspaceFolders`.
  */
 export function resolveEditPath(
@@ -138,7 +147,7 @@ export function resolveEditPath(
 }
 
 /**
- * Parse all `@@EDIT` blocks found in an assistant message.
+ * Parse all `<EDIT>` blocks found in an assistant message.
  *
  * Returns `{ blocks, warnings }`. Individual malformed blocks are skipped and
  * a warning is added; valid blocks are still returned.
@@ -156,58 +165,72 @@ export function parseEditBlocks(text: string): ParseResult {
       continue;
     }
 
-    const path = openMatch[1].trim();
+    const filePath = openMatch[1].trim();
     const blockStart = i;
     i++;
 
-    // Expect @@FROM next
-    if (i >= lines.length || lines[i].trimEnd() !== FROM_MARKER) {
-      warnings.push(`@@EDIT block at line ${blockStart + 1}: expected @@FROM, got "${lines[i] ?? '<EOF>'}"`);
+    // Expect <FROM> next
+    if (i >= lines.length || lines[i].trimEnd() !== FROM_OPEN) {
+      warnings.push(`<EDIT> block at line ${blockStart + 1}: expected ${FROM_OPEN}, got "${lines[i] ?? '<EOF>'}"`);
       continue;
     }
     i++;
 
-    // Collect FROM lines until @@TO
+    // Collect FROM lines until </FROM>
     const fromLines: string[] = [];
-    while (i < lines.length && lines[i].trimEnd() !== TO_MARKER) {
-      if (lines[i].trimEnd() === END_MARKER) {
-        warnings.push(`@@EDIT block at line ${blockStart + 1}: reached @@END before @@TO`);
+    while (i < lines.length && lines[i].trimEnd() !== FROM_CLOSE) {
+      if (lines[i].trimEnd() === EDIT_CLOSE) {
+        warnings.push(`<EDIT> block at line ${blockStart + 1}: reached ${EDIT_CLOSE} before ${FROM_CLOSE}`);
         break;
       }
       fromLines.push(lines[i]);
       i++;
     }
 
-    if (i >= lines.length || lines[i].trimEnd() !== TO_MARKER) {
-      warnings.push(`@@EDIT block at line ${blockStart + 1}: @@TO marker not found`);
+    if (i >= lines.length || lines[i].trimEnd() !== FROM_CLOSE) {
+      warnings.push(`<EDIT> block at line ${blockStart + 1}: ${FROM_CLOSE} marker not found`);
       continue;
     }
     i++;
 
-    // Collect TO lines until @@END
+    // Expect <TO> next
+    if (i >= lines.length || lines[i].trimEnd() !== TO_OPEN) {
+      warnings.push(`<EDIT> block at line ${blockStart + 1}: expected ${TO_OPEN}, got "${lines[i] ?? '<EOF>'}"`);
+      continue;
+    }
+    i++;
+
+    // Collect TO lines until </TO>
     const toLines: string[] = [];
-    while (i < lines.length && lines[i].trimEnd() !== END_MARKER) {
+    while (i < lines.length && lines[i].trimEnd() !== TO_CLOSE) {
       toLines.push(lines[i]);
       i++;
     }
 
-    if (i >= lines.length || lines[i].trimEnd() !== END_MARKER) {
-      warnings.push(`@@EDIT block at line ${blockStart + 1}: @@END marker not found`);
+    if (i >= lines.length || lines[i].trimEnd() !== TO_CLOSE) {
+      warnings.push(`<EDIT> block at line ${blockStart + 1}: ${TO_CLOSE} marker not found`);
       continue;
     }
-    i++; // consume @@END
+    i++;
 
-    // Strip the trailing newline that the model emits before @@TO / @@END
+    // Expect </EDIT> next
+    if (i >= lines.length || lines[i].trimEnd() !== EDIT_CLOSE) {
+      warnings.push(`<EDIT> block at line ${blockStart + 1}: expected ${EDIT_CLOSE}, got "${lines[i] ?? '<EOF>'}"`);
+      continue;
+    }
+    i++; // consume </EDIT>
+
+    // Strip the trailing newline that the model emits before closing tags
     const from = joinAndStripTrailingNewline(fromLines);
     const to = joinAndStripTrailingNewline(toLines);
 
-    const pathError = validatePath(path);
+    const pathError = validatePath(filePath);
     if (pathError) {
-      warnings.push(`@@EDIT block at line ${blockStart + 1}: invalid path — ${pathError}`);
+      warnings.push(`<EDIT> block at line ${blockStart + 1}: invalid path — ${pathError}`);
       continue;
     }
 
-    blocks.push({ path, from, to });
+    blocks.push({ path: filePath, from, to });
   }
 
   return { blocks, warnings };

@@ -187,47 +187,49 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
 Always explain what you are doing in plain text outside of any action blocks.
 
-## Editing files — @@EDIT
+## Editing files — <EDIT>
 
-@@EDIT path/to/file
-@@FROM
-<exact text currently in the file — leave empty for a full-file replacement>
-@@TO
-<replacement text — leave empty to delete the matched text>
-@@END
+<EDIT path="path/to/file">
+<FROM>
+exact text currently in the file — leave empty for a full-file replacement
+</FROM>
+<TO>
+replacement text — leave empty to delete the matched text
+</TO>
+</EDIT>
 
 Rules:
 - path is workspace-relative, forward slashes, no leading slash.
-- @@FROM text must match the file exactly (whitespace included). If you have not read the file, use an empty @@FROM section (full-file replacement) rather than guessing.
-- Multiple @@EDIT blocks are applied in order.
+- <FROM> text must match the file exactly (whitespace included). If you have not read the file, use an empty <FROM></FROM> section (full-file replacement) rather than guessing.
+- Multiple <EDIT> blocks are applied in order.
 
-## Running shell commands — @@RUN
+## Running shell commands — <RUN>
 
-@@RUN
-<shell command>
-@@END
+<RUN>
+shell command
+</RUN>
 
 - The command runs in the first workspace folder.
-- stdout + stderr are fed back to you as @@RUN_RESULT so you can act on the output.
-- Only emit @@RUN when a command is genuinely needed (e.g. install deps, run tests).
+- stdout + stderr are fed back to you as <RUN_RESULT> so you can act on the output.
+- Only emit <RUN> when a command is genuinely needed (e.g. install deps, run tests).
 
-## Moving / renaming files — @@MOVE
+## Moving / renaming files — <MOVE>
 
-@@MOVE
+<MOVE>
 FROM: path/to/source.ts
 TO: path/to/destination.ts
-@@END
+</MOVE>
 
 - Both paths must be inside the workspace.
 
-## Deleting files — @@DELETE
+## Deleting files — <DELETE>
 
-@@DELETE
+<DELETE>
 PATH: path/to/file.ts
-@@END
+</DELETE>
 
 - The file is moved to the OS trash so it can be recovered.
-- Only use @@DELETE when the user explicitly asks to remove a file.`,
+- Only use <DELETE> when the user explicitly asks to remove a file.`,
     };
     return [systemPrompt, ...this._history];
   }
@@ -414,7 +416,7 @@ PATH: path/to/file.ts
 
       if (!approved) {
         this._postMessage({ type: 'status', text: `Command cancelled: ${block.command}` });
-        resultLines.push(`@@RUN_RESULT command: ${block.command}\nstatus: cancelled by user`);
+        resultLines.push(`<RUN_RESULT command="${block.command}" status="cancelled by user"/>`);
         continue;
       }
 
@@ -465,14 +467,14 @@ PATH: path/to/file.ts
       if (!fromAbsolute) {
         const msg = `Move blocked: source path "${block.from}" is outside the workspace.`;
         this._postMessage({ type: 'status', text: msg });
-        resultLines.push(`@@MOVE_RESULT\nfrom: ${block.from}\nto: ${block.to}\nstatus: failed\nerror: ${msg}`);
+        resultLines.push(`<MOVE_RESULT from="${block.from}" to="${block.to}" status="failed" error="${msg}"/>`);
         continue;
       }
 
       if (!toAbsolute) {
         const msg = `Move blocked: destination path "${block.to}" is outside the workspace.`;
         this._postMessage({ type: 'status', text: msg });
-        resultLines.push(`@@MOVE_RESULT\nfrom: ${block.from}\nto: ${block.to}\nstatus: failed\nerror: ${msg}`);
+        resultLines.push(`<MOVE_RESULT from="${block.from}" to="${block.to}" status="failed" error="${msg}"/>`);
         continue;
       }
 
@@ -484,7 +486,7 @@ PATH: path/to/file.ts
 
       if (!approved) {
         this._postMessage({ type: 'status', text: `Move cancelled: ${block.from} → ${block.to}` });
-        resultLines.push(`@@MOVE_RESULT\nfrom: ${block.from}\nto: ${block.to}\nstatus: cancelled by user`);
+        resultLines.push(`<MOVE_RESULT from="${block.from}" to="${block.to}" status="cancelled by user"/>`);
         continue;
       }
 
@@ -534,7 +536,7 @@ PATH: path/to/file.ts
       if (!fileAbsolute) {
         const msg = `Delete blocked: path "${block.filePath}" is outside the workspace.`;
         this._postMessage({ type: 'status', text: msg });
-        resultLines.push(`@@DELETE_RESULT\npath: ${block.filePath}\nstatus: failed\nerror: ${msg}`);
+        resultLines.push(`<DELETE_RESULT path="${block.filePath}" status="failed" error="${msg}"/>`);
         continue;
       }
 
@@ -546,7 +548,7 @@ PATH: path/to/file.ts
 
       if (!approved) {
         this._postMessage({ type: 'status', text: `Delete cancelled: ${block.filePath}` });
-        resultLines.push(`@@DELETE_RESULT\npath: ${block.filePath}\nstatus: cancelled by user`);
+        resultLines.push(`<DELETE_RESULT path="${block.filePath}" status="cancelled by user"/>`);
         continue;
       }
 

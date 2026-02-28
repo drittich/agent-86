@@ -7,10 +7,10 @@ const OUTPUT_CAP_BYTES = 32 * 1024; // 32 KB
 const COMMAND_TIMEOUT_MS = 30_000; // 30 s
 
 /**
- * @@RUN Structured Command Block Format
+ * <RUN> Structured Command Block Format
  * ======================================
  *
- * The model may include one or more `@@RUN` blocks in its assistant message to
+ * The model may include one or more `<RUN>` blocks in its assistant message to
  * request execution of a shell command. The extension host parses these blocks,
  * shows an approval card, and—after explicit user approval—executes the command
  * and feeds the result back to the model.
@@ -18,28 +18,28 @@ const COMMAND_TIMEOUT_MS = 30_000; // 30 s
  * ## Block syntax
  *
  * ```
- * @@RUN
+ * <RUN>
  * <shell command>
- * @@END
+ * </RUN>
  * ```
  *
  * Rules:
- *  - `@@RUN` — opens a block.
- *  - `@@END` — closes the block.
+ *  - `<RUN>` — opens a block.
+ *  - `</RUN>` — closes the block.
  *  - The command is the trimmed content between the markers (single line or
  *    multi-line; passed verbatim to the shell).
  *  - Commands are executed in the first workspace folder (the working directory).
  *  - stdout + stderr are captured and capped at 32 KB. Excess output is replaced
  *    with a truncation notice.
  *  - A 30-second timeout kills the process and reports a timeout error.
- *  - Multiple `@@RUN` blocks in a single message are processed in order.
+ *  - Multiple `<RUN>` blocks in a single message are processed in order.
  *
  * ## Example
  *
  * ```
- * @@RUN
+ * <RUN>
  * npm test
- * @@END
+ * </RUN>
  * ```
  */
 
@@ -59,11 +59,11 @@ export interface RunResult {
   timedOut: boolean;
 }
 
-const RUN_OPEN = '@@RUN';
-const RUN_END = '@@END';
+const RUN_OPEN = '<RUN>';
+const RUN_END = '</RUN>';
 
 /**
- * Parse all `@@RUN` blocks from an assistant message.
+ * Parse all `<RUN>` blocks from an assistant message.
  * Returns an array of RunBlock objects (empty if none found).
  */
 export function parseRunBlocks(text: string): RunBlock[] {
@@ -85,7 +85,7 @@ export function parseRunBlocks(text: string): RunBlock[] {
     }
 
     if (i < lines.length) {
-      i++; // consume @@END
+      i++; // consume </RUN>
     }
 
     const command = cmdLines.join('\n').trim();
@@ -201,13 +201,10 @@ export function runCommand(command: string, cwd: string): Promise<RunResult> {
  */
 export function formatRunResult(result: RunResult): string {
   const lines: string[] = [];
-  lines.push(`@@RUN_RESULT command: ${result.command}`);
-
-  if (result.timedOut) {
-    lines.push('status: timed out (killed after 30s)');
-  } else {
-    lines.push(`exit_code: ${result.exitCode ?? 'null'}`);
-  }
+  const status = result.timedOut
+    ? 'timed out (killed after 30s)'
+    : `exit_code=${result.exitCode ?? 'null'}`;
+  lines.push(`<RUN_RESULT command="${result.command}" status="${status}">`);
 
   if (result.stdout) {
     lines.push('stdout:');
@@ -221,5 +218,6 @@ export function formatRunResult(result: RunResult): string {
     lines.push('(no output)');
   }
 
+  lines.push('</RUN_RESULT>');
   return lines.join('\n');
 }

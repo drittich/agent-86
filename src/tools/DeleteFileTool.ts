@@ -2,10 +2,10 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 
 /**
- * @@DELETE Structured Delete Block Format
+ * <DELETE> Structured Delete Block Format
  * ========================================
  *
- * The model may include one or more `@@DELETE` blocks in its assistant message
+ * The model may include one or more `<DELETE>` blocks in its assistant message
  * to request deletion of a file within the workspace. The extension host parses
  * these blocks, shows an approval card, and—after explicit user approval—moves
  * the file to the OS trash (recycle bin) so it can be recovered if needed.
@@ -13,26 +13,26 @@ import * as path from 'path';
  * ## Block syntax
  *
  * ```
- * @@DELETE
+ * <DELETE>
  * PATH: path/to/file.ts
- * @@END
+ * </DELETE>
  * ```
  *
  * Rules:
- *  - `@@DELETE` — opens a block.
- *  - `@@END` — closes the block.
+ *  - `<DELETE>` — opens a block.
+ *  - `</DELETE>` — closes the block.
  *  - `PATH:` specifies the file to delete (relative to workspace root or absolute).
  *  - The path must be inside the workspace; the operation is rejected otherwise.
  *  - The file must exist.
  *  - The file is moved to the OS trash (useTrash: true) so it can be recovered.
- *  - Multiple `@@DELETE` blocks in a single message are processed in order.
+ *  - Multiple `<DELETE>` blocks in a single message are processed in order.
  *
  * ## Example
  *
  * ```
- * @@DELETE
+ * <DELETE>
  * PATH: src/utils/legacy.ts
- * @@END
+ * </DELETE>
  * ```
  */
 
@@ -49,11 +49,11 @@ export interface DeleteResult {
   error?: string;
 }
 
-const DELETE_OPEN = '@@DELETE';
-const DELETE_END = '@@END';
+const DELETE_OPEN = '<DELETE>';
+const DELETE_END = '</DELETE>';
 
 /**
- * Parse all `@@DELETE` blocks from an assistant message.
+ * Parse all `<DELETE>` blocks from an assistant message.
  * Returns an array of DeleteBlock objects (empty if none found).
  */
 export function parseDeleteBlocks(text: string): DeleteBlock[] {
@@ -79,7 +79,7 @@ export function parseDeleteBlocks(text: string): DeleteBlock[] {
     }
 
     if (i < lines.length) {
-      i++; // consume @@END
+      i++; // consume </DELETE>
     }
 
     if (filePath) {
@@ -149,7 +149,7 @@ export async function deleteFile(fileAbsolute: string): Promise<DeleteResult> {
  */
 export function formatDeleteResult(result: DeleteResult): string {
   if (result.success) {
-    return `@@DELETE_RESULT\npath: ${result.filePath}\nstatus: success (moved to trash)`;
+    return `<DELETE_RESULT path="${result.filePath}" status="success (moved to trash)"/>`;
   }
-  return `@@DELETE_RESULT\npath: ${result.filePath}\nstatus: failed\nerror: ${result.error}`;
+  return `<DELETE_RESULT path="${result.filePath}" status="failed" error="${result.error}"/>`;
 }
