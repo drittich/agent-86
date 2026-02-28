@@ -211,25 +211,48 @@ export function applyAnchorOp(
     return text;
   }
 
+  // Normalize to LF for searching so anchors with \n match CRLF files too.
+  // We search in the normalized string but slice from the original so the
+  // output preserves the file's original line endings.
   const anchor = op.anchor!;
-  const firstIndex = fileContent.indexOf(anchor);
+  const normalizedContent = fileContent.replace(/\r\n/g, '\n');
+  const normalizedAnchor = anchor.replace(/\r\n/g, '\n');
 
-  if (firstIndex === -1) {
+  const normFirst = normalizedContent.indexOf(normalizedAnchor);
+  if (normFirst === -1) {
     return { error: `anchor not found in "${op.uri}"` };
   }
 
-  const secondIndex = fileContent.indexOf(anchor, firstIndex + anchor.length);
-  if (secondIndex !== -1) {
+  const normSecond = normalizedContent.indexOf(normalizedAnchor, normFirst + normalizedAnchor.length);
+  if (normSecond !== -1) {
     return { error: `anchor is ambiguous (found more than once) in "${op.uri}"` };
   }
 
+  // Map normalized offsets back to original offsets.
+  // Each \r\n in the original before position p adds one extra byte vs the normalized string.
+  const toOrigOffset = (normOffset: number): number => {
+    let orig = 0;
+    let norm = 0;
+    while (norm < normOffset) {
+      if (fileContent[orig] === '\r' && fileContent[orig + 1] === '\n') {
+        orig++; // skip the \r
+      }
+      orig++;
+      norm++;
+    }
+    return orig;
+  };
+
+  const firstIndex = toOrigOffset(normFirst);
+  const anchorLen = toOrigOffset(normFirst + normalizedAnchor.length) - firstIndex;
+
   switch (op.op) {
     case 'replace_first':
-      return fileContent.slice(0, firstIndex) + text + fileContent.slice(firstIndex + anchor.length);
+      return fileContent.slice(0, firstIndex) + text + fileContent.slice(firstIndex + anchorLen);
     case 'delete_first':
-      return fileContent.slice(0, firstIndex) + fileContent.slice(firstIndex + anchor.length);
+      return fileContent.slice(0, firstIndex) + fileContent.slice(firstIndex + anchorLen);
     case 'insert_after':
-      return fileContent.slice(0, firstIndex + anchor.length) + text + fileContent.slice(firstIndex + anchor.length);
+      return fileContent.slice(0, firstIndex + anchorLen) + text + fileContent.slice(firstIndex + anchorLen);
     case 'insert_before':
       return fileContent.slice(0, firstIndex) + text + fileContent.slice(firstIndex);
   }

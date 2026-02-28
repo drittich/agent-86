@@ -5,6 +5,7 @@ const path = require('path');
 const isWatch = process.argv.includes('--watch');
 const isProduction = process.argv.includes('--production');
 const isMinorBump = process.argv.includes('--minor');
+const isBumpVersion = process.argv.includes('--bump-version');
 
 const baseOptions = {
   bundle: true,
@@ -41,7 +42,9 @@ function incrementPatchVersion() {
 }
 
 async function build() {
-  incrementPatchVersion();
+  if (isBumpVersion || isMinorBump) {
+    incrementPatchVersion();
+  }
   // Extension host bundle (Node/CJS, external: vscode)
   const extensionCtx = await esbuild.context({
     ...baseOptions,

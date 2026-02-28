@@ -386,6 +386,7 @@ PATH: path/to/file.ts
           // Send first 2 chunks initially; model can request more via request_chunks
           for (const chunk of chunks.slice(0, 2)) {
             chunkBlocks.push(formatChunkBlock(chunk));
+            this._log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
           }
         } else {
           // Fallback for unreadable/unsaved files
@@ -457,6 +458,7 @@ PATH: path/to/file.ts
             }
             for (const chunk of this._selectChunksForRequest(chunks, req.preferred)) {
               parts.push(formatChunkBlock(chunk));
+              this._log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
             }
           }
           this._history.push({ role: 'user', content: parts.join('\n\n') });
@@ -512,6 +514,12 @@ PATH: path/to/file.ts
     const { ops, warnings } = parseEditOps(assistantText);
 
     this._log.appendLine(`[edit] ops found: ${ops.length}, warnings: ${warnings.length}`);
+    for (const op of ops) {
+      const anchorPreview = op.anchor !== undefined
+        ? JSON.stringify(op.anchor.length > 80 ? op.anchor.slice(0, 80) + '…' : op.anchor)
+        : '(none)';
+      this._log.appendLine(`[edit] op=${op.op} uri=${op.uri} anchor=${anchorPreview}`);
+    }
     for (const w of warnings) {
       this._log.appendLine(`[edit] warning: ${w}`);
       this._postMessage({ type: 'status', text: `Edit parse warning: ${w}` });
