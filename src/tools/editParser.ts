@@ -146,6 +146,12 @@ export function resolveEditPath(
   return { error: `path "${relativePath}" resolves outside all workspace folders` };
 }
 
+/** Strip markdown code fences (``` or ~~~, with optional language tag) from text. */
+function stripCodeFences(text: string): string {
+  // Remove lines that are solely opening/closing code fences
+  return text.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n/gm, '');
+}
+
 /**
  * Parse all `<EDIT>` blocks found in an assistant message.
  *
@@ -153,7 +159,8 @@ export function resolveEditPath(
  * a warning is added; valid blocks are still returned.
  */
 export function parseEditBlocks(text: string): ParseResult {
-  const lines = text.split('\n');
+  // Strip markdown code fences so models that wrap <EDIT> in ``` blocks still parse.
+  const lines = stripCodeFences(text).split('\n');
   const blocks: EditBlock[] = [];
   const warnings: string[] = [];
 
@@ -168,6 +175,11 @@ export function parseEditBlocks(text: string): ParseResult {
     const filePath = openMatch[1].trim();
     const blockStart = i;
     i++;
+
+    // Skip any blank lines between <EDIT> and <FROM> (weaker models may emit them)
+    while (i < lines.length && lines[i].trim() === '') {
+      i++;
+    }
 
     // Expect <FROM> next
     if (i >= lines.length || lines[i].trimEnd() !== FROM_OPEN) {
@@ -192,6 +204,11 @@ export function parseEditBlocks(text: string): ParseResult {
       continue;
     }
     i++;
+
+    // Skip any blank lines between </FROM> and <TO>
+    while (i < lines.length && lines[i].trim() === '') {
+      i++;
+    }
 
     // Expect <TO> next
     if (i >= lines.length || lines[i].trimEnd() !== TO_OPEN) {

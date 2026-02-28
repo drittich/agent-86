@@ -31,6 +31,7 @@ class DiffContentProvider implements vscode.TextDocumentContentProvider {
 export class ChatPanel implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _abortController?: AbortController;
+  private readonly _log: vscode.OutputChannel;
   /** Set to true when the user explicitly clicks Stop; cleared on new send. */
   private _userCancelled = false;
   private _history: ChatMessage[] = [];
@@ -51,7 +52,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   // Track active editor state
   private _hasActiveEditor = false;
 
-  constructor(private readonly context: vscode.ExtensionContext) {
+  constructor(private readonly context: vscode.ExtensionContext, log: vscode.OutputChannel) {
+    this._log = log;
     context.subscriptions.push(
       vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, this._diffProvider)
     );
@@ -321,8 +323,14 @@ PATH: path/to/file.ts
 
     const { blocks, warnings } = parseEditBlocks(assistantText);
 
+    this._log.appendLine(`[edit] raw response length: ${assistantText.length}`);
+    this._log.appendLine(`[edit] blocks found: ${blocks.length}, warnings: ${warnings.length}`);
     for (const w of warnings) {
-      this._postMessage({ type: 'warning', text: `Edit parse warning: ${w}` });
+      this._log.appendLine(`[edit] warning: ${w}`);
+      this._postMessage({ type: 'status', text: `Edit parse warning: ${w}` });
+    }
+    for (const b of blocks) {
+      this._log.appendLine(`[edit] block path="${b.path}" from.length=${b.from.length} to.length=${b.to.length}`);
     }
 
     for (const block of blocks) {

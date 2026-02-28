@@ -74,7 +74,10 @@ function initializeFileTreeView(context: vscode.ExtensionContext): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  const chatPanel = new ChatPanel(context);
+  const outputChannel = vscode.window.createOutputChannel('Agent 86');
+  context.subscriptions.push(outputChannel);
+
+  const chatPanel = new ChatPanel(context, outputChannel);
 
   // Register file tree view in the sidebar (only if workspace is open)
   initializeFileTreeView(context);
