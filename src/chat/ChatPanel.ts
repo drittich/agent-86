@@ -198,7 +198,7 @@ Always explain what you are doing in plain text outside of any action blocks.
 
 Rules:
 - path is workspace-relative, forward slashes, no leading slash.
-- @@FROM text must match the file exactly (whitespace included).
+- @@FROM text must match the file exactly (whitespace included). If you have not read the file, use an empty @@FROM section (full-file replacement) rather than guessing.
 - Multiple @@EDIT blocks are applied in order.
 
 ## Running shell commands — @@RUN
@@ -326,7 +326,8 @@ PATH: path/to/file.ts
     for (const block of blocks) {
       const pathResult = resolveEditPath(block.path, wsRoots);
       if (pathResult.error) {
-        this._postMessage({ type: 'status', text: `Edit error: ${pathResult.error}` });
+        const errMsg = `\n\n> **Edit error**: ${pathResult.error}`;
+        this._postMessage({ type: 'delta', content: errMsg });
         continue;
       }
 
@@ -344,7 +345,8 @@ PATH: path/to/file.ts
       // Validate FROM text
       const fromError = validateFromText(block, originalContent);
       if (fromError) {
-        this._postMessage({ type: 'status', text: `Edit error: ${fromError}` });
+        const errMsg = `\n\n> **Edit error** (${block.path}): ${fromError}. The FROM text must exactly match the current file content. Try attaching the file first so the model can read the current content.`;
+        this._postMessage({ type: 'delta', content: errMsg });
         continue;
       }
 
