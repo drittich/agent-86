@@ -46,20 +46,32 @@ const style = document.createElement('style');
 style.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+
   body {
     font-family: var(--vscode-font-family, sans-serif);
     font-size: var(--vscode-font-size, 13px);
     color: var(--vscode-foreground);
     background: var(--vscode-sideBar-background, #1e1e1e);
-    height: 100vh;
     display: flex;
     flex-direction: column;
+  }
+
+  #root {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   #app {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
     padding: 6px;
     gap: 6px;
   }
@@ -241,10 +253,15 @@ style.textContent = `
     border-color: var(--vscode-inputValidation-warningBorder, #b89500);
   }
 
+  #approvals-container {
+    flex-shrink: 0;
+  }
+
   #input-row {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    flex-shrink: 0;
   }
 
   #prompt-input {
