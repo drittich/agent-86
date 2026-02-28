@@ -272,6 +272,7 @@ PATH: path/to/file.ts
     let fullResponse = '';
 
     try {
+      this._log.appendLine(`[stream] starting request`);
       await provider.stream(
         this._buildMessages(),
         this._abortController.signal,
@@ -280,16 +281,19 @@ PATH: path/to/file.ts
             fullResponse += event.content;
             this._postMessage({ type: 'delta', content: event.content });
           } else if (event.type === 'done') {
+            this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}`);
             // Only send 'done' here if the stop handler hasn't already sent it
             // (stop handler sends its own done with cancelled:true)
             if (!this._userCancelled) {
               this._postMessage({ type: 'done', usage: event.usage });
             }
           } else if (event.type === 'error') {
+            this._log.appendLine(`[stream] error event: ${event.message}`);
             this._postMessage({ type: 'error', message: event.message });
           }
         }
       );
+      this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
 
       // After streaming completes, process @@EDIT and @@RUN blocks —
       // but only if the user didn't cancel mid-stream.
@@ -300,6 +304,9 @@ PATH: path/to/file.ts
         await this._processMoveBlocks(fullResponse);
         await this._processDeleteBlocks(fullResponse);
       }
+    } catch (err) {
+      this._log.appendLine(`[stream] caught exception: ${err}`);
+      throw err;
     } finally {
       this._abortController = undefined;
     }
