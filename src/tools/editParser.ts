@@ -101,7 +101,9 @@ export interface ParseResult {
   warnings: string[];
 }
 
-const EDIT_OPEN_RE = /^<EDIT[ \t]+path="([^"]+)"[ \t]*>$/;
+// The leading `<?` makes the `<` optional to handle cases where a model token
+// like `<|channel|>` was stripped, leaving `EDIT path=...>` without its `<`.
+const EDIT_OPEN_RE = /^<?EDIT[ \t]+path="([^"]+)"[ \t]*>$/;
 const FROM_OPEN  = '<FROM>';
 const FROM_CLOSE = '</FROM>';
 const TO_OPEN    = '<TO>';
