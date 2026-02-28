@@ -331,12 +331,18 @@ PATH: path/to/file.ts
     const { blocks, warnings } = parseEditBlocks(assistantText);
 
     this._log.appendLine(`[edit] raw response length: ${assistantText.length}`);
-    this._log.appendLine(`[edit] first 1500 chars: ${JSON.stringify(assistantText.slice(0, 1500))}`);
-    const editTagIdx = assistantText.indexOf('<EDIT');
-    this._log.appendLine(`[edit] <EDIT tag at index: ${editTagIdx}`);
-    if (editTagIdx !== -1) {
-      this._log.appendLine(`[edit] context around <EDIT: ${JSON.stringify(assistantText.slice(Math.max(0, editTagIdx - 20), editTagIdx + 200))}`);
+    // Log all occurrences of EDIT in the raw text
+    let searchFrom = 0;
+    while (true) {
+      const idx = assistantText.indexOf('EDIT', searchFrom);
+      if (idx === -1) { break; }
+      this._log.appendLine(`[edit] 'EDIT' at raw[${idx}]: ${JSON.stringify(assistantText.slice(Math.max(0, idx - 30), idx + 60))}`);
+      searchFrom = idx + 1;
     }
+    // Log what the text looks like after token stripping
+    const stripped = assistantText.replace(/<\|[^|>]*\|>/g, '');
+    const strippedEditIdx = stripped.indexOf('EDIT');
+    this._log.appendLine(`[edit] after strip, first 'EDIT' at [${strippedEditIdx}]: ${JSON.stringify(stripped.slice(Math.max(0, strippedEditIdx - 10), strippedEditIdx + 80))}`);
     this._log.appendLine(`[edit] blocks found: ${blocks.length}, warnings: ${warnings.length}`);
     for (const w of warnings) {
       this._log.appendLine(`[edit] warning: ${w}`);
