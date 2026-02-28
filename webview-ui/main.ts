@@ -447,6 +447,7 @@ function sendPrompt(): void {
   clearOutput();
   setStatus('');
   setGenerating(true);
+  appendOutput('**You:** ' + prompt + '\n\n---\n\n');
   vscode.postMessage({ type: 'send', prompt });
   promptInput.value = '';
 }
