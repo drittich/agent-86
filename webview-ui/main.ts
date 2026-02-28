@@ -209,6 +209,35 @@ style.textContent = `
   #output a {
     color: var(--vscode-textLink-foreground, #4e9fde);
   }
+
+  /* Edit accordion */
+  #output details.edit-accordion {
+    margin: 0 0 0.6em;
+    border: 1px solid var(--vscode-panel-border, #444);
+    border-radius: 3px;
+    background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.1));
+  }
+  #output details.edit-accordion summary {
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 0.9em;
+    color: var(--vscode-descriptionForeground);
+    user-select: none;
+    list-style: none;
+  }
+  #output details.edit-accordion summary::before {
+    content: '▶ ';
+    font-size: 0.75em;
+  }
+  #output details.edit-accordion[open] summary::before {
+    content: '▼ ';
+  }
+  #output details.edit-accordion pre {
+    margin: 0;
+    border: none;
+    border-top: 1px solid var(--vscode-panel-border, #444);
+    border-radius: 0 0 3px 3px;
+  }
   #output table {
     border-collapse: collapse;
     margin: 0 0 0.6em;
@@ -333,10 +362,108 @@ function setStatus(text: string): void {
   statusBar.textContent = text;
 }
 
+/**
+ * Replace JSON edit blocks (bare or ```json fenced) with collapsed <details>
+ * accordions showing the files being edited. Called before markdown rendering.
+ */
+function replaceEditJsonWithAccordions(md: string): string {
+  // Match either a ```json ... ``` fence or a bare { ... } block containing "edits"
+  // We'll process the string, finding JSON candidates that have an "edits" array.
+  const result: string[] = [];
+  let lastIndex = 0;
+
+  // Regex: matches ```json\n{...}\n``` (fenced) — non-greedy, allows multiline
+  const fencedRe = /```json\s*(\{[\s\S]*?"edits"[\s\S]*?\})\s*```/g;
+  let fencedMatch: RegExpExecArray | null;
+  const fencedMatches: Array<{ index: number; end: number; json: string }> = [];
+  while ((fencedMatch = fencedRe.exec(md)) !== null) {
+    try {
+      const parsed = JSON.parse(fencedMatch[1]);
+      if (parsed && Array.isArray(parsed.edits)) {
+        fencedMatches.push({ index: fencedMatch.index, end: fencedMatch.index + fencedMatch[0].length, json: fencedMatch[1] });
+      }
+    } catch { /* not valid JSON */ }
+  }
+
+  // Also find bare JSON objects with "edits" not inside a fence
+  // Build a list of fenced ranges to exclude
+  const fencedRanges = fencedMatches.map(m => [m.index, m.end]);
+
+  function isInFencedRange(idx: number): boolean {
+    return fencedRanges.some(([s, e]) => idx >= s && idx < e);
+  }
+
+  // Extract bare JSON candidates (top-level { }) not inside fences
+  const bareMatches: Array<{ index: number; end: number; json: string }> = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < md.length; i++) {
+    const ch = md[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) {
+      if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        if (!isInFencedRange(start)) {
+          const candidate = md.slice(start, i + 1);
+          try {
+            const parsed = JSON.parse(candidate);
+            if (parsed && Array.isArray(parsed.edits)) {
+              bareMatches.push({ index: start, end: i + 1, json: candidate });
+            }
+          } catch { /* not valid JSON */ }
+        }
+        start = -1;
+      }
+    }
+  }
+
+  // Merge and sort all matches by index
+  const allMatches = [...fencedMatches, ...bareMatches].sort((a, b) => a.index - b.index);
+
+  for (const match of allMatches) {
+    result.push(md.slice(lastIndex, match.index));
+    result.push(buildEditAccordionHtml(match.json));
+    lastIndex = match.end;
+  }
+  result.push(md.slice(lastIndex));
+  return result.join('');
+}
+
+function buildEditAccordionHtml(json: string): string {
+  let files: string[] = [];
+  try {
+    const parsed = JSON.parse(json);
+    if (parsed && Array.isArray(parsed.edits)) {
+      const uris: string[] = parsed.edits.map((e: { uri?: string }) => e.uri).filter(Boolean);
+      files = [...new Set(uris)];
+    }
+  } catch { /* ignore */ }
+
+  const title = files.length > 0
+    ? 'Editing ' + files.join(', ')
+    : 'Edit block';
+
+  const escaped = json
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  return `\n<details class="edit-accordion"><summary>${title}</summary><pre><code>${escaped}</code></pre></details>\n`;
+}
+
 function flushMarkdown(): void {
   const wasAtBottom =
     outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 8;
-  outputEl.innerHTML = DOMPurify.sanitize(marked.parse(markdownBuffer) as string);
+  const processedMd = replaceEditJsonWithAccordions(markdownBuffer);
+  outputEl.innerHTML = DOMPurify.sanitize(marked.parse(processedMd) as string);
   if (wasAtBottom) {
     outputEl.scrollTop = outputEl.scrollHeight;
   }
