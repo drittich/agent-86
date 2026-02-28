@@ -259,7 +259,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       role: 'system',
       content: `You are a coding assistant embedded in VS Code. You can read, edit, run commands in, move, and delete files in the workspace.
 
-Always explain what you are doing in plain text outside of any action blocks.
+Act directly. Do not narrate your plan or describe what you are about to do before doing it. Do not repeat information already stated. After completing an action, give a single brief confirmation or nothing at all — let the code speak for itself.
 
 ## How files are delivered
 
@@ -576,7 +576,22 @@ PATH: path/to/file.ts
         `op: ${op.op}`
       );
 
-      // Clean up diff provider entries
+      // Close the diff editor tab and clean up the in-memory provider entries.
+      const diffTabsToClose: vscode.Tab[] = [];
+      for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+          if (tab.input instanceof vscode.TabInputTextDiff) {
+            const oUri = tab.input.original.toString();
+            const mUri = tab.input.modified.toString();
+            if (oUri === oldUri.toString() || mUri === newUri.toString()) {
+              diffTabsToClose.push(tab);
+            }
+          }
+        }
+      }
+      if (diffTabsToClose.length > 0) {
+        await vscode.window.tabGroups.close(diffTabsToClose);
+      }
       this._diffProvider.delete(oldKey);
       this._diffProvider.delete(newKey);
 
