@@ -153,14 +153,23 @@ function stripCodeFences(text: string): string {
 }
 
 /**
+ * Strip internal channel/role tokens that some local models leak into output,
+ * e.g. <|channel|>, <|message|>, <|end|>, <|start|>, <|assistant|> etc.
+ * These tokens bleed into XML tag names and break parsing.
+ */
+function stripModelTokens(text: string): string {
+  return text.replace(/<\|[^|>]*\|>/g, '');
+}
+
+/**
  * Parse all `<EDIT>` blocks found in an assistant message.
  *
  * Returns `{ blocks, warnings }`. Individual malformed blocks are skipped and
  * a warning is added; valid blocks are still returned.
  */
 export function parseEditBlocks(text: string): ParseResult {
-  // Strip markdown code fences so models that wrap <EDIT> in ``` blocks still parse.
-  const lines = stripCodeFences(text).split('\n');
+  // Strip internal model tokens and markdown code fences before parsing.
+  const lines = stripCodeFences(stripModelTokens(text)).split('\n');
   const blocks: EditBlock[] = [];
   const warnings: string[] = [];
 
