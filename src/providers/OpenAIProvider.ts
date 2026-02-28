@@ -1,10 +1,11 @@
-import { IProvider, ChatMessage, ProviderEvent, ProviderUsage } from './IProvider';
+import { IProvider, ChatMessage, ProviderEvent, ProviderUsage, ILogger } from './IProvider';
 
 export class OpenAIProvider implements IProvider {
   constructor(
     private readonly baseURL: string,
     private readonly model: string,
-    private readonly apiKey: string = 'local'
+    private readonly apiKey: string = 'local',
+    private readonly log?: ILogger
   ) {}
 
   async stream(
@@ -83,7 +84,7 @@ export class OpenAIProvider implements IProvider {
         buffer += decoder.decode(value, { stream: true });
         // Log raw buffer content for debugging (first chunk only)
         if (rawLineCount === 0) {
-          console.error(`[OpenAIProvider] First chunk bytes: ${value.length}, buffer preview: ${buffer.slice(0, 500)}`);
+          this.log?.appendLine(`[OpenAIProvider] First chunk bytes: ${value.length}, buffer preview: ${buffer.slice(0, 500)}`);
         }
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
@@ -95,24 +96,35 @@ export class OpenAIProvider implements IProvider {
 
           const data = trimmed.slice(5).trim();
           if (data === '[DONE]') {
-            console.error(`[OpenAIProvider] SSE done. rawLines=${rawLineCount}, deltas=${deltaCount}`);
+            this.log?.appendLine(`[OpenAIProvider] SSE done. rawLines=${rawLineCount}, deltas=${deltaCount}`);
             onEvent({ type: 'done', usage });
             return;
           }
 
           try {
             const json = JSON.parse(data);
-            const delta = json?.choices?.[0]?.delta?.content;
-            if (typeof delta === 'string' && delta.length > 0) {
+            const deltaObj = json?.choices?.[0]?.delta;
+            
+            // Handle both 'content' and 'reasoning_content' fields
+            // Some models (like gpt-oss-20b) use reasoning_content for thinking
+            const content = deltaObj?.content;
+            const reasoning = deltaObj?.reasoning_content;
+            
+            if (typeof content === 'string' && content.length > 0) {
               deltaCount++;
-              onEvent({ type: 'delta', content: delta });
-            } else if (json?.choices?.[0]?.delta) {
+              onEvent({ type: 'delta', content });
+            }
+            if (typeof reasoning === 'string' && reasoning.length > 0) {
+              deltaCount++;
+              onEvent({ type: 'delta', content: reasoning });
+            }
+            if (deltaObj && !content && !reasoning) {
               // Log delta objects that have no content (may have other fields like role, refusal)
-              console.error(`[OpenAIProvider] delta without content: ${JSON.stringify(json.choices[0].delta)}`);
+              this.log?.appendLine(`[OpenAIProvider] delta without content: ${JSON.stringify(deltaObj)}`);
             }
             // Log the full JSON structure for the first few frames to understand the format
             if (rawLineCount <= 5) {
-              console.error(`[OpenAIProvider] frame ${rawLineCount}: ${JSON.stringify(json).slice(0, 500)}`);
+              this.log?.appendLine(`[OpenAIProvider] frame ${rawLineCount}: ${JSON.stringify(json).slice(0, 500)}`);
             }
             // Capture usage data when present (some servers send it on the last frame)
             if (json?.usage) {
@@ -124,7 +136,7 @@ export class OpenAIProvider implements IProvider {
             }
           } catch (parseErr) {
             // Log malformed SSE frames for debugging
-            console.error(`[OpenAIProvider] Failed to parse SSE data: ${data.slice(0, 200)}`);
+            this.log?.appendLine(`[OpenAIProvider] Failed to parse SSE data: ${data.slice(0, 200)}`);
           }
         }
       }

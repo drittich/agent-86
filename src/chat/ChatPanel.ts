@@ -180,7 +180,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
     const apiKey = cfg.get<string>('apiKey') ?? 'local';
-    return new OpenAIProvider(baseUrl, model, apiKey);
+    return new OpenAIProvider(baseUrl, model, apiKey, this._log);
   }
 
   private _buildMessages(): ChatMessage[] {

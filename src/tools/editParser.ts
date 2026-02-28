@@ -160,7 +160,13 @@ function stripCodeFences(text: string): string {
  * These tokens bleed into XML tag names and break parsing.
  */
 function stripModelTokens(text: string): string {
-  return text.replace(/<\|[^|>]*\|>/g, '');
+  // First strip the <|...|> tokens
+  let result = text.replace(/<\|[^|>]*\|>/g, '');
+  // Then handle role markers that may be left behind after stripping
+  // e.g., "<|start|>assistant<|channel|>EDIT" -> "assistantEDIT" after first pass
+  // Also handle cases where there's a > before the role marker: ">assistantEDIT"
+  result = result.replace(/^[>\s]*(system|user|assistant|tool)(EDIT|MOVE|RUN|DELETE)/gm, '$2');
+  return result;
 }
 
 /**

@@ -15,6 +15,11 @@ export type ProviderEvent =
   | { type: 'done'; usage?: ProviderUsage }
   | { type: 'error'; message: string };
 
+/** Simple logger interface that matches vscode.OutputChannel */
+export interface ILogger {
+  appendLine(value: string): void;
+}
+
 export interface IProvider {
   stream(
     messages: ChatMessage[],
