@@ -569,35 +569,38 @@ PATH: path/to/file.ts
         preview: true,
       });
 
-      // Ask the user whether to apply via a VS Code notification (visible even
-      // when the diff tab steals focus away from the chat panel webview).
-      const answer = await vscode.window.showInformationMessage(
-        `Apply edit to ${op.uri}?`,
-        { modal: false },
-        'Apply',
-        'Skip'
+      // Ask via the in-chat approval card (cannot be accidentally dismissed).
+      const approved = await this._requestApproval(
+        'applyEdit',
+        { path: op.uri },
+        `op: ${op.op}`
       );
 
       // Clean up diff provider entries
       this._diffProvider.delete(oldKey);
       this._diffProvider.delete(newKey);
 
-      if (answer !== 'Apply') {
+      this._log.appendLine(`[edit] user answered: ${approved ? 'Apply' : 'Deny'} for ${op.uri}`);
+      if (!approved) {
         this._postMessage({ type: 'status', text: `Edit cancelled: ${op.uri}` });
         continue;
       }
 
-      // Apply via WorkspaceEdit for undo history support; fall back to writeFile for new files
+      // Apply via WorkspaceEdit for undo history support; fall back to writeFile for new files.
+      // Use LF-only content — VSCode normalises to the document's EOL on write.
+      const lfContent = newContent.replace(/\r\n/g, '\n');
       if (fileExists) {
         const wsEdit = new vscode.WorkspaceEdit();
         const doc = await vscode.workspace.openTextDocument(fileUri);
         const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
-        wsEdit.replace(fileUri, fullRange, newContent);
+        wsEdit.replace(fileUri, fullRange, lfContent);
         await vscode.workspace.applyEdit(wsEdit);
+        await doc.save();
       } else {
         const encoder = new TextEncoder();
-        await vscode.workspace.fs.writeFile(fileUri, encoder.encode(newContent));
+        await vscode.workspace.fs.writeFile(fileUri, encoder.encode(lfContent));
       }
+      this._log.appendLine(`[edit] applied: ${op.uri}`);
       this._postMessage({ type: 'status', text: `Applied: ${op.uri}` });
     }
   }

@@ -686,7 +686,7 @@ function getActionTitle(action: string): string {
     case 'runCommand': return 'Run terminal command?';
     case 'moveFile':   return 'Move file?';
     case 'deleteFile': return 'Delete file?';
-    case 'applyEdit':  return 'Apply edit to file?';
+    case 'applyEdit':  return 'Apply edit?';
     default:           return `Approve: ${action}?`;
   }
 }
@@ -695,6 +695,7 @@ function getApproveLabel(action: string): string {
   switch (action) {
     case 'runCommand': return 'Run';
     case 'deleteFile': return 'Delete';
+    case 'applyEdit':  return 'Apply';
     default:           return 'Approve';
   }
 }
