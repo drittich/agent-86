@@ -105,20 +105,13 @@ export class OpenAIProvider implements IProvider {
             const json = JSON.parse(data);
             const deltaObj = json?.choices?.[0]?.delta;
             
-            // Handle both 'content' and 'reasoning_content' fields
-            // Some models (like gpt-oss-20b) use reasoning_content for thinking
             const content = deltaObj?.content;
-            const reasoning = deltaObj?.reasoning_content;
-            
+
             if (typeof content === 'string' && content.length > 0) {
               deltaCount++;
               onEvent({ type: 'delta', content });
             }
-            if (typeof reasoning === 'string' && reasoning.length > 0) {
-              deltaCount++;
-              onEvent({ type: 'delta', content: reasoning });
-            }
-            if (deltaObj && !content && !reasoning) {
+            if (deltaObj && !content && !deltaObj?.reasoning_content) {
               // Log delta objects that have no content (may have other fields like role, refusal)
               this.log?.appendLine(`[OpenAIProvider] delta without content: ${JSON.stringify(deltaObj)}`);
             }
