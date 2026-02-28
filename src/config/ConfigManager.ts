@@ -13,6 +13,8 @@ export interface Session {
   createdAt: number; // Unix ms
   messages: ChatMessage[];
   attachments: AttachedFile[];
+  thinkingMode?: boolean;
+  includeAgentsMd?: boolean;
 }
 
 // ── Storage keys ─────────────────────────────────────────────────────────────

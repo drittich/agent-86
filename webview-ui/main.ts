@@ -27,6 +27,9 @@ root.innerHTML = `
       <button id="btn-copy-raw" title="Copy raw text">Copy Raw</button>
     </div>
     <div id="output" aria-live="polite"></div>
+    <div id="typing-indicator" hidden>
+      <span></span><span></span><span></span>
+    </div>
   </div>
 
   <div id="status-bar"></div>
@@ -35,6 +38,7 @@ root.innerHTML = `
     <textarea id="prompt-input" rows="4" placeholder="Ask the agent…"></textarea>
     <div id="thinking-row">
       <label><input type="checkbox" id="chk-thinking"> Thinking mode</label>
+      <label id="lbl-agents-md" hidden><input type="checkbox" id="chk-agents-md"> Include AGENTS.md</label>
     </div>
     <div id="input-buttons">
       <button id="btn-send">Send</button>
@@ -155,6 +159,28 @@ style.textContent = `
     color: var(--vscode-editor-foreground);
     border-radius: 2px;
     min-height: 60px;
+  }
+
+  #typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 8px;
+  }
+  #typing-indicator[hidden] { display: none; }
+  #typing-indicator span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--vscode-foreground);
+    opacity: 0.4;
+    animation: typing-bounce 1.2s ease-in-out infinite;
+  }
+  #typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+  #typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes typing-bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+    40% { transform: translateY(-5px); opacity: 1; }
   }
 
   /* Markdown prose styles */
@@ -326,7 +352,8 @@ document.head.appendChild(style);
 
 // ── Element refs ─────────────────────────────────────────────────────────────
 
-const outputEl     = document.getElementById('output')!;
+const outputEl         = document.getElementById('output')!;
+const typingIndicator  = document.getElementById('typing-indicator')!;
 const promptInput  = document.getElementById('prompt-input') as HTMLTextAreaElement;
 const btnSend      = document.getElementById('btn-send') as HTMLButtonElement;
 const btnStop      = document.getElementById('btn-stop') as HTMLButtonElement;
@@ -339,6 +366,8 @@ const btnCopyRaw   = document.getElementById('btn-copy-raw') as HTMLButtonElemen
 const filesList    = document.getElementById('attached-files') as HTMLUListElement;
 const statusBar    = document.getElementById('status-bar')!;
 const chkThinking  = document.getElementById('chk-thinking') as HTMLInputElement;
+const chkAgentsMd  = document.getElementById('chk-agents-md') as HTMLInputElement;
+const lblAgentsMd  = document.getElementById('lbl-agents-md') as HTMLElement;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -507,6 +536,9 @@ function setGenerating(active: boolean): void {
   if (active) {
     wasExplicitlyCancelled = false;
     outputEl.classList.remove('cancelled');
+    typingIndicator.hidden = false;
+  } else {
+    typingIndicator.hidden = true;
   }
 }
 
@@ -613,7 +645,7 @@ function sendPrompt(): void {
   setStatus('');
   setGenerating(true);
   appendOutput('**You:** ' + prompt + '\n\n---\n\n');
-  vscode.postMessage({ type: 'send', prompt, thinkingMode: chkThinking.checked });
+  vscode.postMessage({ type: 'send', prompt, thinkingMode: chkThinking.checked, includeAgentsMd: chkAgentsMd.checked });
   promptInput.value = '';
 }
 
@@ -948,10 +980,14 @@ window.addEventListener('message', (event: MessageEvent) => {
     hasActiveEditor?: boolean;
     uri?: string;
     outcome?: 'applied' | 'cancelled';
+    available?: boolean;
+    thinkingMode?: boolean;
+    includeAgentsMd?: boolean;
   };
 
   switch (msg.type) {
     case 'delta':
+      typingIndicator.hidden = true;
       appendOutput(msg.content ?? '');
       break;
 
@@ -1011,6 +1047,20 @@ window.addEventListener('message', (event: MessageEvent) => {
         editOutcomes.set(msg.uri, msg.outcome);
         flushMarkdown();
       }
+      break;
+    }
+
+    case 'agentsMdAvailable': {
+      lblAgentsMd.hidden = !msg.available;
+      if (!msg.available) {
+        chkAgentsMd.checked = false;
+      }
+      break;
+    }
+
+    case 'checkboxState': {
+      chkThinking.checked = msg.thinkingMode ?? false;
+      chkAgentsMd.checked = msg.includeAgentsMd ?? false;
       break;
     }
   }

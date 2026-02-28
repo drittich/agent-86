@@ -13,11 +13,13 @@ export type ExtensionToWebview =
   | { type: 'attachments'; files: AttachedFile[] }
   | { type: 'approval/request'; approvalId: string; action: string; payload: unknown; reason: string }
   | { type: 'editorState'; hasActiveEditor: boolean }
-  | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' };
+  | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' }
+  | { type: 'agentsMdAvailable'; available: boolean }
+  | { type: 'checkboxState'; thinkingMode: boolean; includeAgentsMd: boolean };
 
 // Messages sent from the webview to the extension host
 export type WebviewToExtension =
-  | { type: 'send'; prompt: string; thinkingMode?: boolean }
+  | { type: 'send'; prompt: string; thinkingMode?: boolean; includeAgentsMd?: boolean }
   | { type: 'stop' }
   | { type: 'newSession' }
   | { type: 'attachFiles' }

@@ -58,6 +58,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   // Track active editor state
   private _hasActiveEditor = false;
   private _thinkingMode = false;
+  private _includeAgentsMd = false;
 
   constructor(private readonly context: vscode.ExtensionContext, log: vscode.OutputChannel) {
     this._log = log;
@@ -73,6 +74,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       this._attachedFiles = restored.attachments;
       // All restored attachments are already baked into history — don't re-inject them
       this._injectedFileUris = new Set(restored.attachments.map(f => f.uri));
+      this._thinkingMode = restored.thinkingMode ?? false;
+      this._includeAgentsMd = restored.includeAgentsMd ?? false;
     } else {
       this._currentSession = this._configManager.createSession();
     }
@@ -118,6 +121,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     // Restore UI state from the current session once the webview is ready
     this._restoreSessionUi();
+
+    // Notify webview whether AGENTS.md exists in the workspace root
+    this._notifyAgentsMdAvailability();
   }
 
   public reveal(): void {
@@ -136,6 +142,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._injectedFileUris = new Set();
     this._chunkMeta = new Map();
     this._thinkingMode = false;
+    this._includeAgentsMd = false;
     this._currentSession = this._configManager.createSession();
     this._saveCurrentSession();
     this._postMessage({ type: 'attachments', files: [] });
@@ -173,6 +180,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     // Mark all restored attachments as already injected (they're baked into history)
     this._injectedFileUris = new Set(session.attachments.map(f => f.uri));
     this._chunkMeta = new Map();
+    this._thinkingMode = session.thinkingMode ?? false;
+    this._includeAgentsMd = session.includeAgentsMd ?? false;
     this._currentSession = session;
     this._postMessage({ type: 'status', text: `Restored session: ${session.title}` });
     this._restoreSessionUi();
@@ -256,14 +265,17 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return new OpenAIProvider(baseUrl, model, apiKey, this._log);
   }
 
-  private _buildMessages(): ChatMessage[] {
+  private _buildMessages(agentsMdContent?: string): ChatMessage[] {
     const thinkToken = this._thinkingMode ? '/think' : '/no_think';
     const behaviorInstructions = this._thinkingMode
       ? `Think carefully before acting. Reason through the problem fully before emitting any action blocks. After completing an action, give a concise summary of what you did and why.`
       : `Act directly. Do not narrate your plan or describe what you are about to do before doing it. Do not repeat information already stated. After completing an action, give a single brief confirmation or nothing at all — let the code speak for itself.`;
+    const agentsMdSection = agentsMdContent
+      ? `\n\n## Project instructions (AGENTS.md)\n\n${agentsMdContent}`
+      : '';
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: `${thinkToken}\nYou are a coding assistant embedded in VS Code. You can read, edit, run commands in, move, and delete files in the workspace.
+      content: `${thinkToken}\nYou are a coding assistant embedded in VS Code.${agentsMdSection} You can read, edit, run commands in, move, and delete files in the workspace.
 
 ${behaviorInstructions}
 
@@ -409,6 +421,18 @@ PATH: path/to/file.ts
 
     this._history.push({ role: 'user', content: userContent, displayContent: prompt });
 
+    // Read AGENTS.md once for this send if the user has opted in
+    let agentsMdContent: string | undefined;
+    if (this._includeAgentsMd && wsRoots.length > 0) {
+      const agentsMdUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'AGENTS.md');
+      try {
+        const bytes = await vscode.workspace.fs.readFile(agentsMdUri);
+        agentsMdContent = Buffer.from(bytes).toString('utf8');
+      } catch {
+        // AGENTS.md disappeared between check and send — ignore
+      }
+    }
+
     const MAX_CHUNK_ROUNDS = 2;
     let chunkRound = 0;
     let finalResponse = '';
@@ -422,7 +446,7 @@ PATH: path/to/file.ts
 
         this._log.appendLine(`[stream] starting request (chunk round ${chunkRound})`);
         await provider.stream(
-          this._buildMessages(),
+          this._buildMessages(agentsMdContent),
           this._abortController.signal,
           (event) => {
             if (event.type === 'delta') {
@@ -837,6 +861,7 @@ PATH: path/to/file.ts
     switch (message.type) {
       case 'send':
         this._thinkingMode = message.thinkingMode ?? false;
+        this._includeAgentsMd = message.includeAgentsMd ?? false;
         this._handleSend(message.prompt).catch((err) => {
           this._postMessage({ type: 'error', message: String(err) });
           this._abortController = undefined;
@@ -928,8 +953,28 @@ PATH: path/to/file.ts
       ...this._currentSession,
       messages: this._history,
       attachments: this._attachedFiles,
+      thinkingMode: this._thinkingMode,
+      includeAgentsMd: this._includeAgentsMd,
     };
     this._configManager.saveSession(this._currentSession);
+  }
+
+  /**
+   * Check whether AGENTS.md exists in the first workspace root and notify the webview.
+   */
+  private async _notifyAgentsMdAvailability(): Promise<void> {
+    const wsRoots = vscode.workspace.workspaceFolders ?? [];
+    let available = false;
+    if (wsRoots.length > 0) {
+      const agentsMdUri = vscode.Uri.joinPath(wsRoots[0].uri, 'AGENTS.md');
+      try {
+        await vscode.workspace.fs.stat(agentsMdUri);
+        available = true;
+      } catch {
+        available = false;
+      }
+    }
+    this._postMessage({ type: 'agentsMdAvailable', available });
   }
 
   /**
@@ -939,7 +984,9 @@ PATH: path/to/file.ts
   private _restoreSessionUi(): void {
     // Send the current editor state
     this._postMessage({ type: 'editorState', hasActiveEditor: this._hasActiveEditor });
-    
+    // Send checkbox states so the UI reflects the restored session
+    this._postMessage({ type: 'checkboxState', thinkingMode: this._thinkingMode, includeAgentsMd: this._includeAgentsMd });
+
     if (this._attachedFiles.length > 0) {
       this._postMessage({ type: 'attachments', files: this._attachedFiles });
     }
