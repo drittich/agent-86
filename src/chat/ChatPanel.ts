@@ -368,14 +368,20 @@ PATH: path/to/file.ts
         preview: true,
       });
 
-      // Ask the user whether to apply
-      const approved = await this._requestApproval('applyEdit', { path: block.path });
+      // Ask the user whether to apply via a VS Code notification (visible even
+      // when the diff tab steals focus away from the chat panel webview).
+      const answer = await vscode.window.showInformationMessage(
+        `Apply edit to ${block.path}?`,
+        { modal: false },
+        'Apply',
+        'Skip'
+      );
 
       // Clean up diff provider entries
       this._diffProvider.delete(oldKey);
       this._diffProvider.delete(newKey);
 
-      if (!approved) {
+      if (answer !== 'Apply') {
         this._postMessage({ type: 'status', text: `Edit cancelled: ${block.path}` });
         continue;
       }
