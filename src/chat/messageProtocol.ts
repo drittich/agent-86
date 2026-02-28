@@ -16,7 +16,7 @@ export type ExtensionToWebview =
 
 // Messages sent from the webview to the extension host
 export type WebviewToExtension =
-  | { type: 'send'; prompt: string }
+  | { type: 'send'; prompt: string; thinkingMode?: boolean }
   | { type: 'stop' }
   | { type: 'newSession' }
   | { type: 'attachFiles' }

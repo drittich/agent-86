@@ -57,6 +57,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   // Track active editor state
   private _hasActiveEditor = false;
+  private _thinkingMode = false;
 
   constructor(private readonly context: vscode.ExtensionContext, log: vscode.OutputChannel) {
     this._log = log;
@@ -134,6 +135,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._attachedFiles = [];
     this._injectedFileUris = new Set();
     this._chunkMeta = new Map();
+    this._thinkingMode = false;
     this._currentSession = this._configManager.createSession();
     this._saveCurrentSession();
     this._postMessage({ type: 'attachments', files: [] });
@@ -255,11 +257,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _buildMessages(): ChatMessage[] {
+    const thinkToken = this._thinkingMode ? '/think' : '/no_think';
+    const behaviorInstructions = this._thinkingMode
+      ? `Think carefully before acting. Reason through the problem fully before emitting any action blocks. After completing an action, give a concise summary of what you did and why.`
+      : `Act directly. Do not narrate your plan or describe what you are about to do before doing it. Do not repeat information already stated. After completing an action, give a single brief confirmation or nothing at all — let the code speak for itself.`;
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: `You are a coding assistant embedded in VS Code. You can read, edit, run commands in, move, and delete files in the workspace.
+      content: `${thinkToken}\nYou are a coding assistant embedded in VS Code. You can read, edit, run commands in, move, and delete files in the workspace.
 
-Act directly. Do not narrate your plan or describe what you are about to do before doing it. Do not repeat information already stated. After completing an action, give a single brief confirmation or nothing at all — let the code speak for itself.
+${behaviorInstructions}
 
 ## How files are delivered
 
@@ -820,6 +826,7 @@ PATH: path/to/file.ts
   private _handleMessage(message: WebviewToExtension): void {
     switch (message.type) {
       case 'send':
+        this._thinkingMode = message.thinkingMode ?? false;
         this._handleSend(message.prompt).catch((err) => {
           this._postMessage({ type: 'error', message: String(err) });
           this._abortController = undefined;

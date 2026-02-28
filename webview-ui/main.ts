@@ -33,6 +33,9 @@ root.innerHTML = `
 
   <div id="input-row">
     <textarea id="prompt-input" rows="4" placeholder="Ask the agent…"></textarea>
+    <div id="thinking-row">
+      <label><input type="checkbox" id="chk-thinking"> Thinking mode</label>
+    </div>
     <div id="input-buttons">
       <button id="btn-send">Send</button>
       <button id="btn-stop" disabled>Stop</button>
@@ -282,6 +285,13 @@ style.textContent = `
     gap: 4px;
     justify-content: flex-end;
   }
+
+  #thinking-row {
+    padding: 4px 0 2px 0;
+    font-size: 0.85em;
+    color: var(--vscode-foreground);
+  }
+  #thinking-row input { margin-right: 4px; }
 `;
 document.head.appendChild(style);
 
@@ -299,6 +309,7 @@ const btnCopyMd    = document.getElementById('btn-copy-markdown') as HTMLButtonE
 const btnCopyRaw   = document.getElementById('btn-copy-raw') as HTMLButtonElement;
 const filesList    = document.getElementById('attached-files') as HTMLUListElement;
 const statusBar    = document.getElementById('status-bar')!;
+const chkThinking  = document.getElementById('chk-thinking') as HTMLInputElement;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -465,7 +476,7 @@ function sendPrompt(): void {
   setStatus('');
   setGenerating(true);
   appendOutput('**You:** ' + prompt + '\n\n---\n\n');
-  vscode.postMessage({ type: 'send', prompt });
+  vscode.postMessage({ type: 'send', prompt, thinkingMode: chkThinking.checked });
   promptInput.value = '';
 }
 
