@@ -612,6 +612,7 @@ PATH: path/to/file.ts
       this._log.appendLine(`[edit] user answered: ${approved ? 'Apply' : 'Deny'} for ${op.uri}`);
       if (!approved) {
         this._postMessage({ type: 'status', text: `Edit cancelled: ${op.uri}` });
+        this._postMessage({ type: 'editResult', uri: op.uri, outcome: 'cancelled' });
         continue;
       }
 
@@ -631,6 +632,7 @@ PATH: path/to/file.ts
       }
       this._log.appendLine(`[edit] applied: ${op.uri}`);
       this._postMessage({ type: 'status', text: `Applied: ${op.uri}` });
+      this._postMessage({ type: 'editResult', uri: op.uri, outcome: 'applied' });
     }
   }
 

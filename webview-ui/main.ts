@@ -351,6 +351,9 @@ let wasExplicitlyCancelled = false;
 /** Tracks whether there is an active editor in VS Code. */
 let hasActiveEditor = false;
 
+/** Tracks edit outcomes by URI so accordions can show "Edited" vs "Editing". */
+const editOutcomes = new Map<string, 'applied' | 'cancelled'>();
+
 // Markdown rendering — buffer incoming deltas and flush on a timer
 let markdownBuffer = '';
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -447,9 +450,15 @@ function buildEditAccordionHtml(json: string): string {
     }
   } catch { /* ignore */ }
 
-  const title = files.length > 0
-    ? 'Editing ' + files.join(', ')
-    : 'Edit block';
+  let title: string;
+  if (files.length === 0) {
+    title = 'Edit block';
+  } else {
+    // Use outcome of first file to determine verb; fall back to "Editing" while pending
+    const outcome = editOutcomes.get(files[0]);
+    const verb = outcome === 'applied' ? 'Edited' : outcome === 'cancelled' ? 'Edit cancelled:' : 'Editing';
+    title = `${verb} ${files.join(', ')}`;
+  }
 
   const escaped = json
     .replace(/&/g, '&amp;')
@@ -481,6 +490,7 @@ function appendOutput(text: string): void {
 
 function clearOutput(): void {
   markdownBuffer = '';
+  editOutcomes.clear();
   if (renderTimer !== null) {
     clearTimeout(renderTimer);
     renderTimer = null;
@@ -936,6 +946,8 @@ window.addEventListener('message', (event: MessageEvent) => {
     usage?: TokenUsage;
     cancelled?: boolean;
     hasActiveEditor?: boolean;
+    uri?: string;
+    outcome?: 'applied' | 'cancelled';
   };
 
   switch (msg.type) {
@@ -991,6 +1003,14 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     case 'editorState': {
       setEditorState(msg.hasActiveEditor ?? false);
+      break;
+    }
+
+    case 'editResult': {
+      if (msg.uri && msg.outcome) {
+        editOutcomes.set(msg.uri, msg.outcome);
+        flushMarkdown();
+      }
       break;
     }
   }
