@@ -287,7 +287,7 @@ export function applyEditBlock(block: EditBlock, fileContent: string): string {
   if (block.from === '') {
     return block.to;
   }
-  return fileContent.replace(block.from, block.to);
+  return fileContent.replace(block.from, () => block.to);
 }
 
 /**
