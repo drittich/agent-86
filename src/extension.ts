@@ -116,7 +116,9 @@ export function activate(context: vscode.ExtensionContext): void {
       // The tree view is visible in the Explorer view under "File Picker"
       // This command is kept for potential future use
     }),
-    vscode.window.registerWebviewViewProvider('agenticCoder.panel', chatPanel)
+    vscode.window.registerWebviewViewProvider('agenticCoder.panel', chatPanel, {
+      webviewOptions: { retainContextWhenHidden: true },
+    })
   );
 }
 
