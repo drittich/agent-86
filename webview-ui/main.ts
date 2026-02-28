@@ -549,6 +549,24 @@ function setEditorState(hasEditor: boolean): void {
 
 function renderAttachedFiles(): void {
   filesList.innerHTML = '';
+
+  // AGENTS.md pill — shown when the checkbox is checked
+  if (chkAgentsMd.checked) {
+    const li = document.createElement('li');
+    li.id = 'pill-agents-md';
+    const label = document.createTextNode('AGENTS.md');
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove';
+    removeBtn.addEventListener('click', () => {
+      chkAgentsMd.checked = false;
+      renderAttachedFiles();
+    });
+    li.appendChild(label);
+    li.appendChild(removeBtn);
+    filesList.appendChild(li);
+  }
+
   for (const f of attachedFiles) {
     const li = document.createElement('li');
     const label = document.createTextNode(f.relativePath);
@@ -599,6 +617,11 @@ btnNewSess.addEventListener('click', () => {
 
 btnSelectSess.addEventListener('click', () => {
   vscode.postMessage({ type: 'selectSession' });
+});
+
+// Sync checkbox state changes to the extension immediately
+chkAgentsMd.addEventListener('change', () => {
+  vscode.postMessage({ type: 'checkboxChange', includeAgentsMd: chkAgentsMd.checked });
 });
 
 // ── Copy actions ──────────────────────────────────────────────────────────────

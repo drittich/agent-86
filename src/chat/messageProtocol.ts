@@ -25,7 +25,8 @@ export type WebviewToExtension =
   | { type: 'attachFiles' }
   | { type: 'attachActiveEditor' }
   | { type: 'selectSession' }
-  | { type: 'approval/response'; approvalId: string; approved: boolean };
+  | { type: 'approval/response'; approvalId: string; approved: boolean }
+  | { type: 'checkboxChange'; includeAgentsMd?: boolean };
 
 export interface AttachedFile {
   uri: string;

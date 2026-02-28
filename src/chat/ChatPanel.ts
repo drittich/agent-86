@@ -904,6 +904,13 @@ PATH: path/to/file.ts
         }
         break;
       }
+      case 'checkboxChange':
+        // Update internal state when checkbox is toggled (without sending a message)
+        if (message.includeAgentsMd !== undefined) {
+          this._includeAgentsMd = message.includeAgentsMd;
+          this._saveCurrentSession();
+        }
+        break;
     }
   }
 
