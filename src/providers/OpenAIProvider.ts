@@ -72,6 +72,8 @@ export class OpenAIProvider implements IProvider {
     const decoder = new TextDecoder();
     let buffer = '';
     let usage: ProviderUsage | undefined;
+    let deltaCount = 0;
+    let rawLineCount = 0;
 
     try {
       while (true) {
@@ -79,15 +81,21 @@ export class OpenAIProvider implements IProvider {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
+        // Log raw buffer content for debugging (first chunk only)
+        if (rawLineCount === 0) {
+          console.error(`[OpenAIProvider] First chunk bytes: ${value.length}, buffer preview: ${buffer.slice(0, 500)}`);
+        }
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
+          rawLineCount++;
           const trimmed = line.trim();
           if (!trimmed.startsWith('data:')) continue;
 
           const data = trimmed.slice(5).trim();
           if (data === '[DONE]') {
+            console.error(`[OpenAIProvider] SSE done. rawLines=${rawLineCount}, deltas=${deltaCount}`);
             onEvent({ type: 'done', usage });
             return;
           }
@@ -96,7 +104,15 @@ export class OpenAIProvider implements IProvider {
             const json = JSON.parse(data);
             const delta = json?.choices?.[0]?.delta?.content;
             if (typeof delta === 'string' && delta.length > 0) {
+              deltaCount++;
               onEvent({ type: 'delta', content: delta });
+            } else if (json?.choices?.[0]?.delta) {
+              // Log delta objects that have no content (may have other fields like role, refusal)
+              console.error(`[OpenAIProvider] delta without content: ${JSON.stringify(json.choices[0].delta)}`);
+            }
+            // Log the full JSON structure for the first few frames to understand the format
+            if (rawLineCount <= 5) {
+              console.error(`[OpenAIProvider] frame ${rawLineCount}: ${JSON.stringify(json).slice(0, 500)}`);
             }
             // Capture usage data when present (some servers send it on the last frame)
             if (json?.usage) {
@@ -106,8 +122,9 @@ export class OpenAIProvider implements IProvider {
                 totalTokens: json.usage.total_tokens ?? 0,
               };
             }
-          } catch {
-            // Ignore malformed SSE frames
+          } catch (parseErr) {
+            // Log malformed SSE frames for debugging
+            console.error(`[OpenAIProvider] Failed to parse SSE data: ${data.slice(0, 200)}`);
           }
         }
       }
