@@ -1,4 +1,4 @@
-# Agentic Coder
+# Agent 86
 
 A VS Code extension that provides a local LLM-powered agentic coding assistant with file read/write capabilities and terminal command execution with user approval.
 
