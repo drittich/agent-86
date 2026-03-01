@@ -45,6 +45,13 @@ async function build() {
   if (isBumpVersion || isMinorBump) {
     incrementPatchVersion();
   }
+
+  // Absolute path to rg binary in node_modules, baked in at build time.
+  const rgDevPath = path.join(
+    __dirname, 'node_modules', '@vscode', 'ripgrep', 'bin',
+    process.platform === 'win32' ? 'rg.exe' : 'rg'
+  );
+
   // Extension host bundle (Node/CJS, external: vscode)
   const extensionCtx = await esbuild.context({
     ...baseOptions,
@@ -53,6 +60,7 @@ async function build() {
     platform: 'node',
     format: 'cjs',
     external: ['vscode'],
+    define: { '__RG_DEV_PATH__': JSON.stringify(rgDevPath) },
   });
 
   // Webview bundle (browser)

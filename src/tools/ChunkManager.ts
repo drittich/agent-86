@@ -2,22 +2,26 @@ import * as crypto from 'crypto';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as nodePath from 'path';
-import { rgPath as rgPathFromPackage } from '@vscode/ripgrep';
 import { extractJsonCandidates } from './editParser';
 
-/** Runtime rg binary path — set via initRgPath() on activation. */
-let _rgPath: string = rgPathFromPackage;
+// Injected at build time by esbuild define — absolute path to node_modules rg binary.
+declare const __RG_DEV_PATH__: string;
+
+// Active rg binary path. initRgPath() overrides this when a packaged binary exists.
+let _rgPath: string = __RG_DEV_PATH__;
 
 /**
  * Call once on extension activation with context.extensionPath.
- * Prefers the binary bundled in the extension package; falls back to node_modules.
+ * Switches to the binary bundled in the packaged VSIX when available.
+ * Returns a description of the resolved path for logging.
  */
-export function initRgPath(extensionPath: string): void {
+export function initRgPath(extensionPath: string): string {
   const bundled = nodePath.join(extensionPath, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');
   if (fs.existsSync(bundled)) {
     _rgPath = bundled;
+    return `bundled: ${_rgPath}`;
   }
-  // else keep rgPathFromPackage (node_modules, works in dev)
+  return `dev: ${_rgPath}`;
 }
 
 /** Chunk size in lines. */
@@ -210,14 +214,16 @@ export function parseSearchRequests(text: string): SearchRequest[] | null {
 }
 
 /** Format a `<search_result>` block to feed back to the model. */
-export function formatSearchResultBlock(uri: string, pattern: string, matches: string[]): string {
+export function formatSearchResultBlock(uri: string, pattern: string, matches: string[], error?: string): string {
+  if (error) {
+    return `<search_result uri="${uri}" pattern="${pattern}" count="0" error="${error}">\n(search failed: ${error})\n</search_result>`;
+  }
   const body = matches.length > 0 ? matches.join('\n') : '(no matches)';
   return `<search_result uri="${uri}" pattern="${pattern}" count="${matches.length}">\n${body}\n</search_result>`;
 }
 
 /**
  * Search a file for a ripgrep pattern. Returns up to 20 "lineno: content" strings.
- * Returns [] on error or timeout.
  */
 export async function searchFileWithRg(absolutePath: string, pattern: string): Promise<{ lines: string[]; error?: string }> {
   return new Promise(resolve => {
@@ -242,7 +248,6 @@ export async function searchFileWithRg(absolutePath: string, pattern: string): P
     proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code) => {
       const lines = stdout.split('\n').filter(l => l.trim() !== '');
-      // exit code 1 means no matches (not an error); >1 means real error
       const error = (code !== null && code > 1 && stderr.trim()) ? stderr.trim() : undefined;
       resolve({ lines, error });
     });

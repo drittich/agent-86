@@ -78,7 +78,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel('Agent 86');
   context.subscriptions.push(outputChannel);
 
-  initRgPath(context.extensionPath);
+  const rgPathInfo = initRgPath(context.extensionPath);
+  outputChannel.appendLine(`[init] rg path (${rgPathInfo})`);
   const chatPanel = new ChatPanel(context, outputChannel);
 
   // Register file tree view in the sidebar (only if workspace is open)

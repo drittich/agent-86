@@ -515,7 +515,7 @@ function extractMentions(prompt: string): string[] {
 
   // 2. Tokens that look like filenames or relative paths (contain a dot or slash)
   const fileRe = new RegExp(
-    `[\\w./\\-]+\\.(?:${KNOWN_EXTENSIONS})(?=[^\\w]|$)`,
+    '[\\\\w./\\\\-]+\\\\.(?:' + KNOWN_EXTENSIONS + ')(?=[^\\\\w]|$)',
     'gi'
   );
   for (const match of prompt.matchAll(fileRe)) {

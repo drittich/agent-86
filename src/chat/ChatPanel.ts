@@ -330,6 +330,8 @@ ${behaviorInstructions}
 Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first 1–2 chunks initially. When \`<resolved_paths>\` is present, use those exact paths in \`search_file\` and \`request_chunks\` URIs.
 
 ## Requesting data
+Before any file search, resolve workspace-relative paths and confirm existence.
+
 Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not combine with \`edits\` or each other):
 
 **Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","reason":"…"}]}\` → returns \`<search_result uri pattern count>lineno: text…</search_result>\`. Use this to find identifier usages across a whole file without reading every chunk. **Prefer this over requesting more chunks when you need to verify whether something is used.**
@@ -371,6 +373,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 
     // Auto-detect file references in the prompt and attach them before sending
     const autoAttached = await autoDetectAndAttachFiles(prompt, this._attachedFiles);
+    this._log.appendLine(`[autoAttach] before=${this._attachedFiles.length} after=${autoAttached.length}`);
     if (autoAttached.length > this._attachedFiles.length) {
       this._attachedFiles = autoAttached;
       this._postMessage({ type: 'attachments', files: this._attachedFiles });
@@ -578,8 +581,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
             if (searchError) {
               this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
             }
-            this._log.appendLine(`[search] "${req.pattern}" in ${displayUri} (${absolutePath}) → ${matches.length} match(es)`);
-            parts.push(formatSearchResultBlock(displayUri, req.pattern, matches));
+            this._log.appendLine(`[search] "${req.pattern}" in ${displayUri} (${absolutePath}) → ${matches.length} match(es)${searchError ? ' (error)' : ''}`);
+            parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, searchError));
           }
           this._history.push({ role: 'user', content: parts.join('\n\n') });
           continue;
