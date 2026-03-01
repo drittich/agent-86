@@ -270,15 +270,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   private _buildMessages(agentsMdContent?: string): ChatMessage[] {
     const thinkToken = this._thinkingMode ? '/think' : '/no_think';
-    const behaviorInstructions = this._thinkingMode
-      ? `Think carefully before acting. Reason through the problem fully before emitting any action blocks. After completing an action, give a concise summary of what you did and why.`
-      : `Act directly. Do not narrate your plan or describe what you are about to do before doing it. Do not repeat information already stated. After completing an action, give a single brief confirmation or nothing at all — let the code speak for itself.`;
-    const agentsMdSection = agentsMdContent
-      ? `\n\n## Project instructions (AGENTS.md)\n\n${agentsMdContent}`
-      : '';
+   const behaviorInstructions = this._thinkingMode
+    ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
+    : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`;
+  const agentsMdSection = agentsMdContent
+    ? `\n\n## AGENTS.md\n${agentsMdContent}`
+    : '';
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: `${thinkToken}\nYou are a coding assistant embedded in VS Code.${agentsMdSection} You can read, edit, run commands in, move, and delete files in the workspace.
+      content: `${thinkToken}\nYou are a VS Code coding assistant.${agentsMdSection} You can read/edit/move/delete workspace files and run shell commands.
 
 ${behaviorInstructions}
 
