@@ -270,7 +270,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   private _buildMessages(agentsMdContent?: string): ChatMessage[] {
     const thinkToken = this._thinkingMode ? '/think' : '/no_think';
-   const behaviorInstructions = this._thinkingMode
+    const behaviorInstructions = this._thinkingMode
     ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
     : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`;
   const agentsMdSection = agentsMdContent
@@ -278,8 +278,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     : '';
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: `${thinkToken}
-You are a VS Code coding assistant.${agentsMdSection}
+      content: `You are a VS Code coding assistant.${agentsMdSection}
 
 ${behaviorInstructions}
 
@@ -308,7 +307,21 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 <DELETE>\\nPATH: path/to/file\\n</DELETE>        moved to OS trash; only when user explicitly asks
 \`\`\``,
     };
-    return [systemPrompt, ...this._history];
+    // Qwen3 only honours /think and /no_think in user messages, not system.
+    // Prepend the token to the last user message so it takes effect each turn.
+    const history = this._history.map((msg, i) => {
+      if (msg.role === 'user' && i === this._history.length - 1) {
+        return { ...msg, content: `${thinkToken}\n${msg.content}` };
+      }
+      return msg;
+    });
+    const messages = [systemPrompt, ...history];
+    this._log.appendLine(`[buildMessages] ${messages.length} message(s), thinkToken=${thinkToken}`);
+    for (const m of messages) {
+      const preview = m.content.slice(0, 120).replace(/\n/g, '↵');
+      this._log.appendLine(`  [${m.role}] ${preview}${m.content.length > 120 ? `… (${m.content.length} chars)` : ''}`);
+    }
+    return messages;
   }
 
   private async _handleSend(prompt: string): Promise<void> {
@@ -426,6 +439,22 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
             let uris: vscode.Uri[] = [];
             try { uris = await vscode.workspace.findFiles(req.glob, FILE_EXCLUDE_GLOB, 200); }
             catch (err) { this._log.appendLine(`[files] findFiles error: ${err}`); }
+            // Retry with case-insensitive basename matching if nothing matched
+            if (uris.length === 0) {
+              const basenameMatch = req.glob.match(/^(.*\/)([^/*]+)$/);
+              if (basenameMatch) {
+                const [, dir, base] = basenameMatch;
+                const relaxed = `${dir}*`;
+                const baseLower = base.toLowerCase();
+                try {
+                  const all = await vscode.workspace.findFiles(relaxed, FILE_EXCLUDE_GLOB, 500);
+                  uris = all.filter(u => path.basename(u.fsPath).toLowerCase() === baseLower);
+                  if (uris.length > 0) {
+                    this._log.appendLine(`[files] case-insensitive retry matched ${uris.length} file(s) for "${req.glob}"`);
+                  }
+                } catch (err) { this._log.appendLine(`[files] case-insensitive retry error: ${err}`); }
+              }
+            }
             const paths = uris.map(u => {
               for (const root of wsRoots) {
                 if (u.fsPath.startsWith(root + path.sep) || u.fsPath === root) {
