@@ -199,6 +199,47 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Resolve a workspace-relative path to an absolute path, with a
+   * case-insensitive basename glob fallback if the exact path doesn't exist.
+   * Returns { absolutePath, relativePath } or null if unresolvable.
+   */
+  private async _resolvePathWithFallback(
+    relativePath: string,
+    wsRoots: string[]
+  ): Promise<{ absolutePath: string; relativePath: string } | null> {
+    const pathResult = resolveEditPath(relativePath, wsRoots);
+    if (!pathResult.error) {
+      // Check it actually exists on disk
+      try {
+        await vscode.workspace.fs.stat(vscode.Uri.file(pathResult.resolvedPath!));
+        return { absolutePath: pathResult.resolvedPath!, relativePath };
+      } catch { /* fall through to glob */ }
+    }
+
+    // Glob fallback: match by basename (case-insensitive)
+    const basename = path.basename(relativePath);
+    const basenameLower = basename.toLowerCase();
+    let uris: vscode.Uri[] = [];
+    try { uris = await vscode.workspace.findFiles(`**/${basename}`, FILE_EXCLUDE_GLOB, 10); } catch { /* ignore */ }
+    if (uris.length === 0) {
+      try {
+        const all = await vscode.workspace.findFiles('**/*', FILE_EXCLUDE_GLOB, 500);
+        uris = all.filter(u => path.basename(u.fsPath).toLowerCase() === basenameLower);
+      } catch { /* ignore */ }
+    }
+    if (uris.length === 1) {
+      const wsRoot = wsRoots[0] ?? '';
+      const abs = uris[0].fsPath;
+      const rel = abs.startsWith(wsRoot + path.sep)
+        ? abs.slice(wsRoot.length + 1).replace(/\\/g, '/')
+        : abs.replace(/\\/g, '/');
+      this._log.appendLine(`[resolve] "${relativePath}" → "${rel}" via glob fallback`);
+      return { absolutePath: abs, relativePath: rel };
+    }
+    return null;
+  }
+
+  /**
    * Read, chunk, and cache metadata for a single file.
    * Returns the chunks array, or null if the file cannot be read.
    */
@@ -206,12 +247,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     relativePath: string,
     wsRoots: string[]
   ): Promise<FileChunk[] | null> {
-    const pathResult = resolveEditPath(relativePath, wsRoots);
-    if (pathResult.error) {
-      this._log.appendLine(`[chunks] cannot resolve "${relativePath}": ${pathResult.error}`);
+    const resolved = await this._resolvePathWithFallback(relativePath, wsRoots);
+    if (!resolved) {
+      this._log.appendLine(`[chunks] could not read "${relativePath}" — file not found or outside workspace`);
       return null;
     }
-    const fileUri = vscode.Uri.file(pathResult.resolvedPath!);
+
+    const { absolutePath, relativePath: resolvedRelativePath } = resolved;
+    const fileUri = vscode.Uri.file(absolutePath);
     let content: string;
     let docVersion: number;
     try {
@@ -224,12 +267,13 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         content = Buffer.from(bytes).toString('utf8');
         docVersion = 0;
       } catch {
-        this._log.appendLine(`[chunks] cannot read "${relativePath}"`);
+        this._log.appendLine(`[chunks] could not read "${relativePath}"`);
         return null;
       }
     }
-    const chunks = chunkFile(relativePath, content, docVersion);
-    this._chunkMeta.set(relativePath, buildChunkMeta(chunks));
+
+    const chunks = chunkFile(resolvedRelativePath, content, docVersion);
+    this._chunkMeta.set(resolvedRelativePath, buildChunkMeta(chunks));
     return chunks;
   }
 
@@ -283,16 +327,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 ${behaviorInstructions}
 
 ## Files
-Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first 1–2 chunks initially.
+Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first 1–2 chunks initially. When \`<resolved_paths>\` is present, use those exact paths in \`search_file\` and \`request_chunks\` URIs.
 
 ## Requesting data
 Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not combine with \`edits\` or each other):
 
-**More chunks:** \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"near_line":250,"max_chunks":2}}]}\`
+**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","reason":"…"}]}\` → returns \`<search_result uri pattern count>lineno: text…</search_result>\`. Use this to find identifier usages across a whole file without reading every chunk. **Prefer this over requesting more chunks when you need to verify whether something is used.**
+
+**More chunks:** \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"near_line":250,"max_chunks":2}}]}\`. Keep \`max_chunks\` small (1–2); the context window is limited.
 
 **File listing:** \`{"request_files":[{"glob":"src/**/*.ts","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs; \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
-
-**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","reason":"verify usage before removing"}]}\` → returns \`<search_result uri pattern count>lineno: text…</search_result>\`. **Required** before concluding any identifier is unused — do not rely on partial chunks alone.
 
 ## Editing files
 Output anywhere in your response (optionally in a \`\`\`json fence):
@@ -361,7 +405,9 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       }
       if (chunkBlocks.length > 0) {
         this._postMessage({ type: 'status', text: `Sending chunks for ${newFiles.length} file(s)…` });
-        userContent = `${chunkBlocks.join('\n\n')}\n\n${prompt}`;
+        // Append resolved paths so the model uses exact URIs in search_file / request_chunks
+        const pathNote = newFiles.map(f => `  - ${f.relativePath}`).join('\n');
+        userContent = `${chunkBlocks.join('\n\n')}\n\n${prompt}\n\n<resolved_paths>\n${pathNote}\n</resolved_paths>`;
       }
     }
 
@@ -483,15 +529,22 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
               parts.push(`<!-- Could not read chunks for "${req.uri}" — file not found or outside workspace -->`);
               continue;
             }
+            const maxNew = req.preferred?.max_chunks ?? 2;
+            let newSent = 0;
             const selected = this._selectChunksForRequest(chunks, req.preferred);
             for (const chunk of selected) {
               if (sentChunkIds.has(chunk.chunkId)) {
                 this._log.appendLine(`[chunks] skipping already-sent chunk ${chunk.chunkId}`);
                 continue;
               }
+              if (newSent >= maxNew) {
+                this._log.appendLine(`[chunks] max_chunks cap (${maxNew}) reached for "${req.uri}"`);
+                break;
+              }
               sentChunkIds.add(chunk.chunkId);
               parts.push(formatChunkBlock(chunk));
               this._log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
+              newSent++;
             }
           }
           if (parts.length === 0) {
@@ -518,10 +571,15 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           this._postMessage({ type: 'status', text: `Searching ${searchRequests.length} file(s)…` });
           const parts: string[] = [];
           for (const req of searchRequests) {
-            const absolutePath = path.join(wsRoots[0] ?? '', req.uri);
-            const matches = await searchFileWithRg(absolutePath, req.pattern);
-            parts.push(formatSearchResultBlock(req.uri, req.pattern, matches));
-            this._log.appendLine(`[search] "${req.pattern}" in ${req.uri} → ${matches.length} match(es)`);
+            const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
+            const absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
+            const displayUri = resolved?.relativePath ?? req.uri;
+            const { lines: matches, error: searchError } = await searchFileWithRg(absolutePath, req.pattern);
+            if (searchError) {
+              this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
+            }
+            this._log.appendLine(`[search] "${req.pattern}" in ${displayUri} (${absolutePath}) → ${matches.length} match(es)`);
+            parts.push(formatSearchResultBlock(displayUri, req.pattern, matches));
           }
           this._history.push({ role: 'user', content: parts.join('\n\n') });
           continue;

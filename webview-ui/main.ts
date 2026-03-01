@@ -236,7 +236,7 @@ style.textContent = `
     color: var(--vscode-textLink-foreground, #4e9fde);
   }
 
-  /* Edit accordion */
+  /* Tool call accordions (edits, search_file, request_chunks, etc.) */
   #output details.edit-accordion {
     margin: 0 0 0.6em;
     border: 1px solid var(--vscode-panel-border, #444);
@@ -247,6 +247,7 @@ style.textContent = `
     cursor: pointer;
     padding: 4px 8px;
     font-size: 0.9em;
+    font-family: var(--vscode-editor-font-family, monospace);
     color: var(--vscode-descriptionForeground);
     user-select: none;
     list-style: none;
@@ -394,39 +395,58 @@ function setStatus(text: string): void {
   statusBar.textContent = text;
 }
 
+// Known tool keys and their display labels
+const TOOL_KEYS: Record<string, string> = {
+  edits: 'edits',
+  search_file: 'search_file',
+  request_chunks: 'request_chunks',
+  request_files: 'request_files',
+  request_search: 'request_search',
+};
+
 /**
- * Replace JSON edit blocks (bare or ```json fenced) with collapsed <details>
- * accordions showing the files being edited. Called before markdown rendering.
+ * Detect which tool key (if any) a parsed JSON object represents.
+ * Returns the key name or null.
+ */
+function detectToolKey(parsed: unknown): string | null {
+  if (typeof parsed !== 'object' || parsed === null) { return null; }
+  for (const key of Object.keys(TOOL_KEYS)) {
+    if (Array.isArray((parsed as Record<string, unknown>)[key])) {
+      return key;
+    }
+  }
+  return null;
+}
+
+/**
+ * Replace JSON tool blocks (bare or ```json fenced) with collapsed <details>
+ * accordions. Handles edits, search_file, request_chunks, request_files, etc.
  */
 function replaceEditJsonWithAccordions(md: string): string {
-  // Match either a ```json ... ``` fence or a bare { ... } block containing "edits"
-  // We'll process the string, finding JSON candidates that have an "edits" array.
   const result: string[] = [];
   let lastIndex = 0;
 
-  // Regex: matches ```json\n{...}\n``` (fenced) — non-greedy, allows multiline
-  const fencedRe = /```json\s*(\{[\s\S]*?"edits"[\s\S]*?\})\s*```/g;
+  // Regex: matches ```json\n{...}\n``` fenced blocks
+  const fencedRe = /```json\s*(\{[\s\S]*?\})\s*```/g;
   let fencedMatch: RegExpExecArray | null;
-  const fencedMatches: Array<{ index: number; end: number; json: string }> = [];
+  const fencedMatches: Array<{ index: number; end: number; json: string; key: string }> = [];
   while ((fencedMatch = fencedRe.exec(md)) !== null) {
     try {
       const parsed = JSON.parse(fencedMatch[1]);
-      if (parsed && Array.isArray(parsed.edits)) {
-        fencedMatches.push({ index: fencedMatch.index, end: fencedMatch.index + fencedMatch[0].length, json: fencedMatch[1] });
+      const key = detectToolKey(parsed);
+      if (key) {
+        fencedMatches.push({ index: fencedMatch.index, end: fencedMatch.index + fencedMatch[0].length, json: fencedMatch[1], key });
       }
     } catch { /* not valid JSON */ }
   }
 
-  // Also find bare JSON objects with "edits" not inside a fence
-  // Build a list of fenced ranges to exclude
   const fencedRanges = fencedMatches.map(m => [m.index, m.end]);
-
   function isInFencedRange(idx: number): boolean {
     return fencedRanges.some(([s, e]) => idx >= s && idx < e);
   }
 
   // Extract bare JSON candidates (top-level { }) not inside fences
-  const bareMatches: Array<{ index: number; end: number; json: string }> = [];
+  const bareMatches: Array<{ index: number; end: number; json: string; key: string }> = [];
   let depth = 0, start = -1, inStr = false, esc = false;
   for (let i = 0; i < md.length; i++) {
     const ch = md[i];
@@ -438,7 +458,7 @@ function replaceEditJsonWithAccordions(md: string): string {
     }
     if (ch === '"') { inStr = true; continue; }
     if (ch === '{') {
-      if (depth === 0) start = i;
+      if (depth === 0) { start = i; }
       depth++;
     } else if (ch === '}') {
       depth--;
@@ -447,8 +467,9 @@ function replaceEditJsonWithAccordions(md: string): string {
           const candidate = md.slice(start, i + 1);
           try {
             const parsed = JSON.parse(candidate);
-            if (parsed && Array.isArray(parsed.edits)) {
-              bareMatches.push({ index: start, end: i + 1, json: candidate });
+            const key = detectToolKey(parsed);
+            if (key) {
+              bareMatches.push({ index: start, end: i + 1, json: candidate, key });
             }
           } catch { /* not valid JSON */ }
         }
@@ -462,31 +483,35 @@ function replaceEditJsonWithAccordions(md: string): string {
 
   for (const match of allMatches) {
     result.push(md.slice(lastIndex, match.index));
-    result.push(buildEditAccordionHtml(match.json));
+    result.push(buildToolAccordionHtml(match.key, match.json));
     lastIndex = match.end;
   }
   result.push(md.slice(lastIndex));
   return result.join('');
 }
 
-function buildEditAccordionHtml(json: string): string {
-  let files: string[] = [];
-  try {
-    const parsed = JSON.parse(json);
-    if (parsed && Array.isArray(parsed.edits)) {
-      const uris: string[] = parsed.edits.map((e: { uri?: string }) => e.uri).filter(Boolean);
-      files = [...new Set(uris)];
-    }
-  } catch { /* ignore */ }
-
+function buildToolAccordionHtml(key: string, json: string): string {
   let title: string;
-  if (files.length === 0) {
-    title = 'Edit block';
+
+  if (key === 'edits') {
+    let files: string[] = [];
+    try {
+      const parsed = JSON.parse(json);
+      if (parsed && Array.isArray(parsed.edits)) {
+        const uris: string[] = parsed.edits.map((e: { uri?: string }) => e.uri).filter(Boolean);
+        files = [...new Set(uris)];
+      }
+    } catch { /* ignore */ }
+
+    if (files.length === 0) {
+      title = 'edits';
+    } else {
+      const outcome = editOutcomes.get(files[0]);
+      const verb = outcome === 'applied' ? 'Edited' : outcome === 'cancelled' ? 'Edit cancelled:' : 'Editing';
+      title = `${verb} ${files.join(', ')}`;
+    }
   } else {
-    // Use outcome of first file to determine verb; fall back to "Editing" while pending
-    const outcome = editOutcomes.get(files[0]);
-    const verb = outcome === 'applied' ? 'Edited' : outcome === 'cancelled' ? 'Edit cancelled:' : 'Editing';
-    title = `${verb} ${files.join(', ')}`;
+    title = key;
   }
 
   const escaped = json

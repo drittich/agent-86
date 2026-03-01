@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ChatPanel } from './chat/ChatPanel';
 import { Session } from './config/ConfigManager';
 import { FileTreeDataProvider, pickAndReadFilesFromTree, readActiveEditor } from './tools/FileTools';
+import { initRgPath } from './tools/ChunkManager';
 
 // Quick-pick for sessions
 async function showSessionQuickPick(chatPanel: ChatPanel): Promise<void> {
@@ -77,6 +78,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel('Agent 86');
   context.subscriptions.push(outputChannel);
 
+  initRgPath(context.extensionPath);
   const chatPanel = new ChatPanel(context, outputChannel);
 
   // Register file tree view in the sidebar (only if workspace is open)

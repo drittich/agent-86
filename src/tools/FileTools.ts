@@ -553,7 +553,14 @@ async function findFilesForMention(mention: string): Promise<vscode.Uri[]> {
   if (!basename) {
     return [];
   }
-  return vscode.workspace.findFiles(`**/${basename}`, exclude, 10);
+  const exact = await vscode.workspace.findFiles(`**/${basename}`, exclude, 10);
+  if (exact.length > 0) {
+    return exact;
+  }
+  // Case-insensitive fallback: list all files and match basename case-insensitively.
+  const basenameLower = basename.toLowerCase();
+  const all = await vscode.workspace.findFiles('**/*', exclude, 500);
+  return all.filter(u => path.posix.basename(u.fsPath).toLowerCase() === basenameLower);
 }
 
 /**

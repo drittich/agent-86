@@ -1,7 +1,24 @@
 import * as crypto from 'crypto';
 import * as cp from 'child_process';
-import { rgPath } from '@vscode/ripgrep';
+import * as fs from 'fs';
+import * as nodePath from 'path';
+import { rgPath as rgPathFromPackage } from '@vscode/ripgrep';
 import { extractJsonCandidates } from './editParser';
+
+/** Runtime rg binary path — set via initRgPath() on activation. */
+let _rgPath: string = rgPathFromPackage;
+
+/**
+ * Call once on extension activation with context.extensionPath.
+ * Prefers the binary bundled in the extension package; falls back to node_modules.
+ */
+export function initRgPath(extensionPath: string): void {
+  const bundled = nodePath.join(extensionPath, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');
+  if (fs.existsSync(bundled)) {
+    _rgPath = bundled;
+  }
+  // else keep rgPathFromPackage (node_modules, works in dev)
+}
 
 /** Chunk size in lines. */
 export const CHUNK_LINES = 120;
@@ -202,7 +219,7 @@ export function formatSearchResultBlock(uri: string, pattern: string, matches: s
  * Search a file for a ripgrep pattern. Returns up to 20 "lineno: content" strings.
  * Returns [] on error or timeout.
  */
-export async function searchFileWithRg(absolutePath: string, pattern: string): Promise<string[]> {
+export async function searchFileWithRg(absolutePath: string, pattern: string): Promise<{ lines: string[]; error?: string }> {
   return new Promise(resolve => {
     const args = [
       '--line-number',
@@ -213,20 +230,24 @@ export async function searchFileWithRg(absolutePath: string, pattern: string): P
       absolutePath,
     ];
     let stdout = '';
+    let stderr = '';
     let proc: cp.ChildProcess;
     try {
-      proc = cp.spawn(rgPath, args);
-    } catch {
-      resolve([]);
+      proc = cp.spawn(_rgPath, args);
+    } catch (e) {
+      resolve({ lines: [], error: `spawn failed: ${e}` });
       return;
     }
     proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.on('close', () => {
+    proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    proc.on('close', (code) => {
       const lines = stdout.split('\n').filter(l => l.trim() !== '');
-      resolve(lines);
+      // exit code 1 means no matches (not an error); >1 means real error
+      const error = (code !== null && code > 1 && stderr.trim()) ? stderr.trim() : undefined;
+      resolve({ lines, error });
     });
-    proc.on('error', () => resolve([]));
-    setTimeout(() => { proc.kill(); resolve([]); }, 2000);
+    proc.on('error', (e) => resolve({ lines: [], error: `process error: ${e}` }));
+    setTimeout(() => { proc.kill(); resolve({ lines: [], error: 'timeout' }); }, 2000);
   });
 }
 
@@ -321,7 +342,7 @@ export async function findBestLineWithRg(
     let stdout = '';
     let proc: cp.ChildProcess;
     try {
-      proc = cp.spawn(rgPath, args);
+      proc = cp.spawn(_rgPath, args);
     } catch {
       resolve(null);
       return;
