@@ -9,7 +9,7 @@ import {
   chunkFile, formatChunkBlock, buildChunkMeta, parseChunkRequests,
   parseFileRequests, formatFileListBlock,
   parseSearchRequests, formatSearchResultBlock, searchFileWithRg,
-  extractPromptTokens, selectBestChunk,
+  extractPromptTokens, selectBestChunk, selectExactLineRangeChunks,
   FileChunkMeta, FileChunk, ChunkRequest,
 } from '../tools/ChunkManager';
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
@@ -279,13 +279,20 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   /**
    * Select chunks to fulfil a `request_chunks` request.
-   * Centres on `preferred.near_line` if given; defaults to first N chunks.
+   * Supports either:
+   * - `preferred.line_range` (exact inclusive lines, no overlap padding), or
+   * - `preferred.near_line` (chunk window around a line).
+   * Defaults to first N chunks.
    */
   private _selectChunksForRequest(
     chunks: FileChunk[],
     preferred?: ChunkRequest['preferred']
   ): FileChunk[] {
     const maxChunks = preferred?.max_chunks ?? 2;
+    const lineRange = preferred?.line_range;
+    if (lineRange) {
+      return selectExactLineRangeChunks(chunks, lineRange, maxChunks);
+    }
     const nearLine = preferred?.near_line;
     if (!nearLine) {
       return chunks.slice(0, maxChunks);
@@ -327,16 +334,18 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 ${behaviorInstructions}
 
 ## Files
-Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first 1–2 chunks initially. When \`<resolved_paths>\` is present, use those exact paths in \`search_file\` and \`request_chunks\` URIs.
+Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in \`search_file\` and \`request_chunks\` URIs.
 
 ## Requesting data
 Before any file search, resolve workspace-relative paths and confirm existence.
 
 Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not combine with \`edits\` or each other):
 
-**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","reason":"…"}]}\` → returns \`<search_result uri pattern count>lineno: text…</search_result>\`. Use this to find identifier usages across a whole file without reading every chunk. **Prefer this over requesting more chunks when you need to verify whether something is used.**
+**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","case_sensitive":false,"reason":"…"}]}\` → returns \`<search_result uri pattern case_sensitive count>\` with each hit plus nearby context lines. Omit \`case_sensitive\` or set \`true\` for exact-case matching; set \`false\` when case may vary. Use this to find identifier usages across a whole file without reading every chunk. **Prefer this over requesting more chunks when you need to verify whether something is used.**
 
-**More chunks:** \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"near_line":250,"max_chunks":2}}]}\`. Keep \`max_chunks\` small (1–2); the context window is limited.
+**More chunks:** \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"near_line":250,"max_chunks":2}}]}\` or \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"line_range":{"start":45,"end":90},"max_chunks":2}}]}\`. Use \`line_range\` when you need exact lines. Keep \`max_chunks\` small (1–2); the context window is limited.
+
+For questions about symbol usage (for example: "is this import unused?", references, call-sites), use \`search_file\` first and search the whole file with ripgrep. Do not use \`request_chunks\` to discover usages; only request chunks after search when exact surrounding code is still required.
 
 **File listing:** \`{"request_files":[{"glob":"src/**/*.ts","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs; \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
 
@@ -372,7 +381,13 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     this._userCancelled = false;
 
     // Auto-detect file references in the prompt and attach them before sending
+    const previouslyAttachedUris = new Set(this._attachedFiles.map(f => f.uri));
     const autoAttached = await autoDetectAndAttachFiles(prompt, this._attachedFiles);
+    const autoDetectedThisTurnUris = new Set(
+      autoAttached
+        .filter(f => !previouslyAttachedUris.has(f.uri))
+        .map(f => f.uri)
+    );
     this._log.appendLine(`[autoAttach] before=${this._attachedFiles.length} after=${autoAttached.length}`);
     if (autoAttached.length > this._attachedFiles.length) {
       this._attachedFiles = autoAttached;
@@ -392,12 +407,19 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       for (const f of newFiles) {
         const chunks = await this._getChunksForUri(f.relativePath, wsRoots);
         if (chunks && chunks.length > 0) {
-          const absolutePath = path.join(wsRoot, f.relativePath);
-          this._postMessage({ type: 'status', text: `Searching ${f.relativePath}…` });
-          const best = await selectBestChunk(chunks, absolutePath, promptTokens);
-          chunkBlocks.push(formatChunkBlock(best));
-          initialChunkIds.push(best.chunkId);
-          this._log.appendLine(`[chunks] sending ${best.uri} lines ${best.lineStart}-${best.lineEnd} (rg-scored, total=${best.totalChunks})`);
+          if (autoDetectedThisTurnUris.has(f.uri)) {
+            const absolutePath = path.join(wsRoot, f.relativePath);
+            this._postMessage({ type: 'status', text: `Searching ${f.relativePath}…` });
+            const best = await selectBestChunk(chunks, absolutePath, promptTokens);
+            chunkBlocks.push(formatChunkBlock(best));
+            initialChunkIds.push(best.chunkId);
+            this._log.appendLine(`[chunks] sending ${best.uri} lines ${best.lineStart}-${best.lineEnd} (rg-scored, total=${best.totalChunks})`);
+          } else {
+            const first = chunks[0];
+            chunkBlocks.push(formatChunkBlock(first));
+            initialChunkIds.push(first.chunkId);
+            this._log.appendLine(`[chunks] sending ${first.uri} lines ${first.lineStart}-${first.lineEnd} (manual attach, initial=1, total=${first.totalChunks})`);
+          }
         } else {
           // Fallback for unreadable/unsaved files
           chunkBlocks.push(
@@ -434,6 +456,9 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     let chunkRound = 0;
     const MAX_SEARCH_ROUNDS = 2;
     let searchRound = 0;
+    const MAX_SEARCH_FIRST_REDIRECTS = 2;
+    let searchFirstRedirects = 0;
+    const enforceSearchFirst = /\b(unused|usage|used|reference|references|import|call[- ]?site|where\s+used)\b/i.test(prompt);
     /** Chunk IDs that have already been sent to the model in this turn. */
     const sentChunkIds = new Set<string>(initialChunkIds);
     let finalResponse = '';
@@ -516,8 +541,64 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           continue;
         }
 
+        // Check if the model is requesting file searches
+        const searchRequests = parseSearchRequests(fullResponse);
+        if (searchRequests && searchRound < MAX_SEARCH_ROUNDS) {
+          searchRound++;
+          this._log.appendLine(`[search] round ${searchRound}/${MAX_SEARCH_ROUNDS}, ${searchRequests.length} request(s)`);
+          this._postMessage({ type: 'status', text: `Searching ${searchRequests.length} file(s)…` });
+          const parts: string[] = [];
+          for (const req of searchRequests) {
+            const caseSensitive = req.caseSensitive ?? true;
+            const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
+            const absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
+            const displayUri = resolved?.relativePath ?? req.uri;
+            const { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
+              absolutePath,
+              req.pattern,
+              caseSensitive
+            );
+            if (searchError) {
+              this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
+            }
+            this._log.appendLine(
+              `[search] "${req.pattern}" in ${displayUri} (${absolutePath})` +
+              ` [case_sensitive=${caseSensitive}] → ${matchCount} match(es)` +
+              `${searchError ? ' (error)' : ''}`
+            );
+            parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, matchCount, searchError, caseSensitive));
+          }
+          this._history.push({ role: 'user', content: parts.join('\n\n') });
+          continue;
+        }
+
+        if (searchRequests) {
+          this._log.appendLine(`[search] retry limit reached`);
+          this._postMessage({ type: 'status', text: 'Search request limit reached.' });
+        }
+
         // Check if the model is requesting more file chunks
         const chunkRequests = parseChunkRequests(fullResponse);
+        if (
+          chunkRequests &&
+          enforceSearchFirst &&
+          !searchRequests &&
+          searchRound < MAX_SEARCH_ROUNDS &&
+          searchFirstRedirects < MAX_SEARCH_FIRST_REDIRECTS
+        ) {
+          searchFirstRedirects++;
+          this._log.appendLine(
+            `[chunks] redirect ${searchFirstRedirects}/${MAX_SEARCH_FIRST_REDIRECTS}:` +
+            ' usage/import query should use search_file before request_chunks'
+          );
+          this._history.push({
+            role: 'user',
+            content:
+              '<tool_guidance>For usage/import/reference checks, use local ripgrep via search_file first.' +
+              ' Request chunks only after search hits if exact surrounding code is still needed.</tool_guidance>',
+          });
+          continue;
+        }
 
         if (chunkRequests && chunkRound < MAX_CHUNK_ROUNDS) {
           chunkRound++;
@@ -535,6 +616,10 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
             const maxNew = req.preferred?.max_chunks ?? 2;
             let newSent = 0;
             const selected = this._selectChunksForRequest(chunks, req.preferred);
+            if (req.preferred?.line_range) {
+              const { start, end } = req.preferred.line_range;
+              this._log.appendLine(`[chunks] using line_range ${start}-${end} for "${req.uri}"`);
+            }
             for (const chunk of selected) {
               if (sentChunkIds.has(chunk.chunkId)) {
                 this._log.appendLine(`[chunks] skipping already-sent chunk ${chunk.chunkId}`);
@@ -552,7 +637,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           }
           if (parts.length === 0) {
             this._log.appendLine(`[chunks] all requested chunks already sent — stopping chunk loop`);
-            this._postMessage({ type: 'status', text: 'No new chunks to send. Try specifying a line number or attaching more of the file.' });
+            this._postMessage({ type: 'status', text: 'No new chunks to send. Try specifying near_line/line_range or attaching more of the file.' });
             finalResponse = fullResponse;
             break;
           }
@@ -564,33 +649,6 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           // Limit reached while model still wants more
           this._log.appendLine(`[chunks] retry limit reached`);
           this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
-        }
-
-        // Check if the model is requesting file searches
-        const searchRequests = parseSearchRequests(fullResponse);
-        if (searchRequests && searchRound < MAX_SEARCH_ROUNDS) {
-          searchRound++;
-          this._log.appendLine(`[search] round ${searchRound}/${MAX_SEARCH_ROUNDS}, ${searchRequests.length} request(s)`);
-          this._postMessage({ type: 'status', text: `Searching ${searchRequests.length} file(s)…` });
-          const parts: string[] = [];
-          for (const req of searchRequests) {
-            const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
-            const absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
-            const displayUri = resolved?.relativePath ?? req.uri;
-            const { lines: matches, error: searchError } = await searchFileWithRg(absolutePath, req.pattern);
-            if (searchError) {
-              this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
-            }
-            this._log.appendLine(`[search] "${req.pattern}" in ${displayUri} (${absolutePath}) → ${matches.length} match(es)${searchError ? ' (error)' : ''}`);
-            parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, searchError));
-          }
-          this._history.push({ role: 'user', content: parts.join('\n\n') });
-          continue;
-        }
-
-        if (searchRequests) {
-          this._log.appendLine(`[search] retry limit reached`);
-          this._postMessage({ type: 'status', text: 'Search request limit reached.' });
         }
 
         if (fullResponse.trimStart().startsWith('{')) {

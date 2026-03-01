@@ -69,6 +69,10 @@ export interface ChunkRequest {
   reason?: string;
   preferred?: {
     near_line?: number;
+    line_range?: {
+      start: number;
+      end: number;
+    };
     max_chunks?: number;
   };
 }
@@ -183,6 +187,8 @@ export function formatFileListBlock(glob: string, paths: string[]): string {
 export interface SearchRequest {
   uri: string;
   pattern: string;
+  /** Defaults to true; set false to run case-insensitive search. */
+  caseSensitive?: boolean;
   reason?: string;
 }
 
@@ -205,6 +211,11 @@ export function parseSearchRequests(text: string): SearchRequest[] | null {
       if (typeof obj['uri'] !== 'string' || !obj['uri']) { continue; }
       if (typeof obj['pattern'] !== 'string' || !obj['pattern']) { continue; }
       const req: SearchRequest = { uri: obj['uri'] as string, pattern: obj['pattern'] as string };
+      if (typeof obj['case_sensitive'] === 'boolean') {
+        req.caseSensitive = obj['case_sensitive'] as boolean;
+      } else if (typeof obj['caseSensitive'] === 'boolean') {
+        req.caseSensitive = obj['caseSensitive'] as boolean;
+      }
       if (typeof obj['reason'] === 'string') { req.reason = obj['reason']; }
       requests.push(req);
     }
@@ -214,24 +225,83 @@ export function parseSearchRequests(text: string): SearchRequest[] | null {
 }
 
 /** Format a `<search_result>` block to feed back to the model. */
-export function formatSearchResultBlock(uri: string, pattern: string, matches: string[], error?: string): string {
+export function formatSearchResultBlock(
+  uri: string,
+  pattern: string,
+  matches: string[],
+  matchCount: number,
+  error?: string,
+  caseSensitive = true
+): string {
+  const mode = caseSensitive ? 'true' : 'false';
   if (error) {
-    return `<search_result uri="${uri}" pattern="${pattern}" count="0" error="${error}">\n(search failed: ${error})\n</search_result>`;
+    return `<search_result uri="${uri}" pattern="${pattern}" case_sensitive="${mode}" count="0" error="${error}">\n(search failed: ${error})\n</search_result>`;
   }
   const body = matches.length > 0 ? matches.join('\n') : '(no matches)';
-  return `<search_result uri="${uri}" pattern="${pattern}" count="${matches.length}">\n${body}\n</search_result>`;
+  return `<search_result uri="${uri}" pattern="${pattern}" case_sensitive="${mode}" count="${matchCount}">\n${body}\n</search_result>`;
 }
 
 /**
- * Search a file for a ripgrep pattern. Returns up to 20 "lineno: content" strings.
+ * Search a file for a ripgrep pattern. Returns up to 50 matches with 2 lines of context.
  */
-export async function searchFileWithRg(absolutePath: string, pattern: string): Promise<{ lines: string[]; error?: string }> {
+export async function searchFileWithRg(
+  absolutePath: string,
+  pattern: string,
+  caseSensitive = true
+): Promise<{ lines: string[]; matchCount: number; error?: string }> {
+  const MAX_MATCHES = 50;
+  const CONTEXT_LINES = 2;
+  const MAX_RESULT_LINE_CHARS = 400;
+  const TRUNCATED_SUFFIX = ' [truncated]';
+
+  const truncateSearchLine = (line: string): string => {
+    if (line.length <= MAX_RESULT_LINE_CHARS) {
+      return line;
+    }
+    const keep = Math.max(0, MAX_RESULT_LINE_CHARS - TRUNCATED_SUFFIX.length);
+    return line.slice(0, keep) + TRUNCATED_SUFFIX;
+  };
+
+  const renderMatchesWithContext = (rawLines: string[]): string[] => {
+    const matchLineNumbers = rawLines
+      .map(l => /^(\d+):/.exec(l)?.[1])
+      .filter((v): v is string => typeof v === 'string')
+      .map(v => Number(v))
+      .filter(n => Number.isInteger(n) && n > 0);
+
+    if (matchLineNumbers.length === 0) {
+      return [];
+    }
+
+    try {
+      const fileLines = fs.readFileSync(absolutePath, 'utf8').split(/\r?\n/);
+      const result: string[] = [];
+      for (let idx = 0; idx < matchLineNumbers.length; idx++) {
+        const lineNo = matchLineNumbers[idx];
+        const start = Math.max(1, lineNo - CONTEXT_LINES);
+        const end = Math.min(fileLines.length, lineNo + CONTEXT_LINES);
+        result.push(`@${lineNo}`);
+        for (let i = start; i <= end; i++) {
+          const marker = i === lineNo ? '>' : ' ';
+          result.push(truncateSearchLine(`${marker} ${i}: ${fileLines[i - 1] ?? ''}`));
+        }
+        if (idx < matchLineNumbers.length - 1) {
+          result.push('');
+        }
+      }
+      return result;
+    } catch {
+      // Fall back to raw rg lines if the file cannot be read.
+      return rawLines.map(truncateSearchLine);
+    }
+  };
+
   return new Promise(resolve => {
     const args = [
       '--line-number',
       '--no-heading',
-      '--case-sensitive',
-      '--max-count', '20',
+      caseSensitive ? '--case-sensitive' : '--ignore-case',
+      '--max-count', String(MAX_MATCHES),
       '-e', pattern,
       absolutePath,
     ];
@@ -241,18 +311,19 @@ export async function searchFileWithRg(absolutePath: string, pattern: string): P
     try {
       proc = cp.spawn(_rgPath, args);
     } catch (e) {
-      resolve({ lines: [], error: `spawn failed: ${e}` });
+      resolve({ lines: [], matchCount: 0, error: `spawn failed: ${e}` });
       return;
     }
     proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code) => {
-      const lines = stdout.split('\n').filter(l => l.trim() !== '');
+      const rawLines = stdout.split('\n').filter(l => l.trim() !== '');
+      const lines = renderMatchesWithContext(rawLines);
       const error = (code !== null && code > 1 && stderr.trim()) ? stderr.trim() : undefined;
-      resolve({ lines, error });
+      resolve({ lines, matchCount: rawLines.length, error });
     });
-    proc.on('error', (e) => resolve({ lines: [], error: `process error: ${e}` }));
-    setTimeout(() => { proc.kill(); resolve({ lines: [], error: 'timeout' }); }, 2000);
+    proc.on('error', (e) => resolve({ lines: [], matchCount: 0, error: `process error: ${e}` }));
+    setTimeout(() => { proc.kill(); resolve({ lines: [], matchCount: 0, error: 'timeout' }); }, 2000);
   });
 }
 
@@ -297,6 +368,15 @@ export function parseChunkRequests(text: string): ChunkRequest[] | null {
         if (typeof pref['near_line'] === 'number') {
           req.preferred.near_line = pref['near_line'] as number;
         }
+        if (typeof pref['line_range'] === 'object' && pref['line_range'] !== null) {
+          const range = pref['line_range'] as Record<string, unknown>;
+          if (typeof range['start'] === 'number' && typeof range['end'] === 'number') {
+            req.preferred.line_range = {
+              start: range['start'],
+              end: range['end'],
+            };
+          }
+        }
         if (typeof pref['max_chunks'] === 'number') {
           req.preferred.max_chunks = pref['max_chunks'] as number;
         }
@@ -308,6 +388,81 @@ export function parseChunkRequests(text: string): ChunkRequest[] | null {
     }
   }
   return null;
+}
+
+/**
+ * Build non-overlapping exact-range chunks from an already chunked file.
+ *
+ * - Input range is 1-based and inclusive.
+ * - Range is clamped to the file line count.
+ * - Output chunks are split into CHUNK_LINES pages (no overlap), capped by maxChunks.
+ */
+export function selectExactLineRangeChunks(
+  chunks: FileChunk[],
+  lineRange: { start: number; end: number },
+  maxChunks = 2
+): FileChunk[] {
+  if (chunks.length === 0) {
+    return [];
+  }
+
+  const fileLineCount = chunks[chunks.length - 1].lineEnd;
+  if (fileLineCount <= 0) {
+    return [];
+  }
+
+  const normalizeLine = (line: number): number => {
+    if (!Number.isFinite(line)) { return 1; }
+    return Math.min(fileLineCount, Math.max(1, Math.floor(line)));
+  };
+
+  let start = normalizeLine(lineRange.start);
+  let end = normalizeLine(lineRange.end);
+  if (start > end) {
+    [start, end] = [end, start];
+  }
+
+  const chunkCap = Math.max(1, Math.floor(maxChunks || 1));
+  const maxLines = chunkCap * CHUNK_LINES;
+  const effectiveEnd = Math.min(end, start + maxLines - 1);
+
+  const linesByNumber = new Map<number, string>();
+  for (const chunk of chunks) {
+    const chunkLines = chunk.content.split('\n');
+    for (let i = 0; i < chunkLines.length; i++) {
+      const lineNo = chunk.lineStart + i;
+      if (!linesByNumber.has(lineNo)) {
+        linesByNumber.set(lineNo, chunkLines[i] ?? '');
+      }
+    }
+  }
+
+  const allLines: string[] = [];
+  for (let lineNo = 1; lineNo <= fileLineCount; lineNo++) {
+    allLines.push(linesByNumber.get(lineNo) ?? '');
+  }
+
+  const uri = chunks[0].uri;
+  const docVersion = chunks[0].docVersion;
+  const result: FileChunk[] = [];
+  let partIndex = 0;
+  for (let pos = start; pos <= effectiveEnd; pos += CHUNK_LINES) {
+    const sliceEnd = Math.min(effectiveEnd, pos + CHUNK_LINES - 1);
+    const content = allLines.slice(pos - 1, sliceEnd).join('\n');
+    result.push({
+      chunkId: `${uri}:range:${start}-${effectiveEnd}:part:${partIndex}`,
+      uri,
+      lineStart: pos,
+      lineEnd: sliceEnd,
+      totalChunks: Math.ceil((effectiveEnd - start + 1) / CHUNK_LINES),
+      docVersion,
+      hash: md5(content),
+      content,
+    });
+    partIndex++;
+  }
+
+  return result;
 }
 
 /**
