@@ -158,6 +158,78 @@ export function formatFileListBlock(glob: string, paths: string[]): string {
   return `<file_list glob="${glob}" count="${paths.length}">\n${body}\n</file_list>`;
 }
 
+/** A request from the model to search a file for a pattern. */
+export interface SearchRequest {
+  uri: string;
+  pattern: string;
+  reason?: string;
+}
+
+/**
+ * Parse a `search_file` JSON object from an assistant response.
+ * Returns null if no valid `search_file` key is found.
+ */
+export function parseSearchRequests(text: string): SearchRequest[] | null {
+  const candidates = extractJsonCandidates(text);
+  for (const candidate of candidates) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(candidate); } catch { continue; }
+    if (typeof parsed !== 'object' || parsed === null) { continue; }
+    const arr = (parsed as Record<string, unknown>)['search_file'];
+    if (!Array.isArray(arr)) { continue; }
+    const requests: SearchRequest[] = [];
+    for (const item of arr) {
+      if (typeof item !== 'object' || item === null) { continue; }
+      const obj = item as Record<string, unknown>;
+      if (typeof obj['uri'] !== 'string' || !obj['uri']) { continue; }
+      if (typeof obj['pattern'] !== 'string' || !obj['pattern']) { continue; }
+      const req: SearchRequest = { uri: obj['uri'] as string, pattern: obj['pattern'] as string };
+      if (typeof obj['reason'] === 'string') { req.reason = obj['reason']; }
+      requests.push(req);
+    }
+    if (requests.length > 0) { return requests; }
+  }
+  return null;
+}
+
+/** Format a `<search_result>` block to feed back to the model. */
+export function formatSearchResultBlock(uri: string, pattern: string, matches: string[]): string {
+  const body = matches.length > 0 ? matches.join('\n') : '(no matches)';
+  return `<search_result uri="${uri}" pattern="${pattern}" count="${matches.length}">\n${body}\n</search_result>`;
+}
+
+/**
+ * Search a file for a ripgrep pattern. Returns up to 20 "lineno: content" strings.
+ * Returns [] on error or timeout.
+ */
+export async function searchFileWithRg(absolutePath: string, pattern: string): Promise<string[]> {
+  return new Promise(resolve => {
+    const args = [
+      '--line-number',
+      '--no-heading',
+      '--case-sensitive',
+      '--max-count', '20',
+      '-e', pattern,
+      absolutePath,
+    ];
+    let stdout = '';
+    let proc: cp.ChildProcess;
+    try {
+      proc = cp.spawn(rgPath, args);
+    } catch {
+      resolve([]);
+      return;
+    }
+    proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.on('close', () => {
+      const lines = stdout.split('\n').filter(l => l.trim() !== '');
+      resolve(lines);
+    });
+    proc.on('error', () => resolve([]));
+    setTimeout(() => { proc.kill(); resolve([]); }, 2000);
+  });
+}
+
 /**
  * Parse a `request_chunks` JSON object from an assistant response.
  * Returns null if no valid `request_chunks` key is found.

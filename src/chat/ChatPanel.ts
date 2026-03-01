@@ -8,6 +8,7 @@ import { parseEditOps, resolveEditPath, applyAnchorOp } from '../tools/editParse
 import {
   chunkFile, formatChunkBlock, buildChunkMeta, parseChunkRequests,
   parseFileRequests, formatFileListBlock,
+  parseSearchRequests, formatSearchResultBlock, searchFileWithRg,
   extractPromptTokens, selectBestChunk,
   FileChunkMeta, FileChunk, ChunkRequest,
 } from '../tools/ChunkManager';
@@ -291,6 +292,8 @@ Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not c
 
 **File listing:** \`{"request_files":[{"glob":"src/**/*.ts","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs; \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
 
+**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","reason":"verify usage before removing"}]}\` → returns \`<search_result uri pattern count>lineno: text…</search_result>\`. Use this to verify identifier usage across the whole file before acting.
+
 ## Editing files
 Output anywhere in your response (optionally in a \`\`\`json fence):
 \`\`\`json
@@ -380,6 +383,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     let fileRound = 0;
     const MAX_CHUNK_ROUNDS = 2;
     let chunkRound = 0;
+    const MAX_SEARCH_ROUNDS = 2;
+    let searchRound = 0;
     /** Chunk IDs that have already been sent to the model in this turn. */
     const sentChunkIds = new Set<string>(initialChunkIds);
     let finalResponse = '';
@@ -503,6 +508,28 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           // Limit reached while model still wants more
           this._log.appendLine(`[chunks] retry limit reached`);
           this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
+        }
+
+        // Check if the model is requesting file searches
+        const searchRequests = parseSearchRequests(fullResponse);
+        if (searchRequests && searchRound < MAX_SEARCH_ROUNDS) {
+          searchRound++;
+          this._log.appendLine(`[search] round ${searchRound}/${MAX_SEARCH_ROUNDS}, ${searchRequests.length} request(s)`);
+          this._postMessage({ type: 'status', text: `Searching ${searchRequests.length} file(s)…` });
+          const parts: string[] = [];
+          for (const req of searchRequests) {
+            const absolutePath = path.join(wsRoots[0] ?? '', req.uri);
+            const matches = await searchFileWithRg(absolutePath, req.pattern);
+            parts.push(formatSearchResultBlock(req.uri, req.pattern, matches));
+            this._log.appendLine(`[search] "${req.pattern}" in ${req.uri} → ${matches.length} match(es)`);
+          }
+          this._history.push({ role: 'user', content: parts.join('\n\n') });
+          continue;
+        }
+
+        if (searchRequests) {
+          this._log.appendLine(`[search] retry limit reached`);
+          this._postMessage({ type: 'status', text: 'Search request limit reached.' });
         }
 
         finalResponse = fullResponse;
