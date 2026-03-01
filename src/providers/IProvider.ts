@@ -26,6 +26,7 @@ export interface IProvider {
   stream(
     messages: ChatMessage[],
     signal: AbortSignal,
-    onEvent: (event: ProviderEvent) => void
+    onEvent: (event: ProviderEvent) => void,
+    extraBody?: Record<string, unknown>
   ): Promise<void>;
 }

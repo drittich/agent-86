@@ -269,7 +269,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _buildMessages(agentsMdContent?: string): ChatMessage[] {
-    const thinkToken = this._thinkingMode ? '/think' : '/no_think';
     const behaviorInstructions = this._thinkingMode
     ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
     : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`;
@@ -307,16 +306,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 <DELETE>\\nPATH: path/to/file\\n</DELETE>        moved to OS trash; only when user explicitly asks
 \`\`\``,
     };
-    // Qwen3 only honours /think and /no_think in user messages, not system.
-    // Prepend the token to the last user message so it takes effect each turn.
-    const history = this._history.map((msg, i) => {
-      if (msg.role === 'user' && i === this._history.length - 1) {
-        return { ...msg, content: `${thinkToken}\n${msg.content}` };
-      }
-      return msg;
-    });
-    const messages = [systemPrompt, ...history];
-    this._log.appendLine(`[buildMessages] ${messages.length} message(s), thinkToken=${thinkToken}`);
+    const messages = [systemPrompt, ...this._history];
+    this._log.appendLine(`[buildMessages] ${messages.length} message(s), thinkingMode=${this._thinkingMode}`);
     for (const m of messages) {
       const preview = m.content.slice(0, 120).replace(/\n/g, '↵');
       this._log.appendLine(`  [${m.role}] ${preview}${m.content.length > 120 ? `… (${m.content.length} chars)` : ''}`);
@@ -415,7 +406,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
               this._log.appendLine(`[stream] error event: ${event.message}`);
               this._postMessage({ type: 'error', message: event.message });
             }
-          }
+          },
+          { chat_template_kwargs: { enable_thinking: this._thinkingMode } }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
         this._abortController = undefined;

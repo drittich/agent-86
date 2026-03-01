@@ -11,7 +11,8 @@ export class OpenAIProvider implements IProvider {
   async stream(
     messages: ChatMessage[],
     signal: AbortSignal,
-    onEvent: (event: ProviderEvent) => void
+    onEvent: (event: ProviderEvent) => void,
+    extraBody?: Record<string, unknown>
   ): Promise<void> {
     let response: Response;
     try {
@@ -28,6 +29,7 @@ export class OpenAIProvider implements IProvider {
           temperature: 0.3,
           top_p: 0.9,
           max_tokens: 2048,
+          ...extraBody,
         }),
         signal,
       });
