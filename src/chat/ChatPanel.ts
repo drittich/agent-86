@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
-import { pickAndReadFiles, readActiveEditor, autoDetectAndAttachFiles } from '../tools/FileTools';
+import { readActiveEditor, autoDetectAndAttachFiles } from '../tools/FileTools';
 import { parseEditOps, resolveEditPath, applyAnchorOp } from '../tools/editParser';
 import {
   chunkFile, formatChunkBlock, buildChunkMeta, parseChunkRequests,
@@ -923,10 +923,7 @@ PATH: path/to/file.ts
   }
 
   private async _handleAttachFiles(): Promise<void> {
-    const updated = await pickAndReadFiles(this._attachedFiles);
-    this._attachedFiles = updated;
-    this._postMessage({ type: 'attachments', files: updated });
-    this._saveCurrentSession();
+    await vscode.commands.executeCommand('agentic.attachFiles');
   }
 
   private async _handleAttachActiveEditor(): Promise<void> {
