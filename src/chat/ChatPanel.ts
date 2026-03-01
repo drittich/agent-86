@@ -483,13 +483,21 @@ PATH: path/to/file.ts
           for (const req of chunkRequests) {
             const chunks = await this._getChunksForUri(req.uri, wsRoots);
             if (!chunks) {
-              parts.push(`<!-- Could not read chunks for "${req.uri}" -->`);
+              this._log.appendLine(`[chunks] could not read "${req.uri}" — skipping`);
+              parts.push(`<!-- Could not read chunks for "${req.uri}" — file not found or outside workspace -->`);
               continue;
             }
-            for (const chunk of this._selectChunksForRequest(chunks, req.preferred)) {
+            const selected = this._selectChunksForRequest(chunks, req.preferred);
+            for (const chunk of selected) {
               parts.push(formatChunkBlock(chunk));
               this._log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
             }
+          }
+          if (parts.length === 0) {
+            this._log.appendLine(`[chunks] no chunks could be fetched — aborting chunk round`);
+            this._postMessage({ type: 'status', text: 'Could not read any of the requested files.' });
+            finalResponse = fullResponse;
+            break;
           }
           this._history.push({ role: 'user', content: parts.join('\n\n') });
           continue; // stream again with expanded context
