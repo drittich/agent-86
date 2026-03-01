@@ -292,7 +292,7 @@ Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not c
 
 **File listing:** \`{"request_files":[{"glob":"src/**/*.ts","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs; \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
 
-**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","reason":"verify usage before removing"}]}\` → returns \`<search_result uri pattern count>lineno: text…</search_result>\`. Use this to verify identifier usage across the whole file before acting.
+**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","reason":"verify usage before removing"}]}\` → returns \`<search_result uri pattern count>lineno: text…</search_result>\`. **Required** before concluding any identifier is unused — do not rely on partial chunks alone.
 
 ## Editing files
 Output anywhere in your response (optionally in a \`\`\`json fence):
@@ -532,6 +532,9 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           this._postMessage({ type: 'status', text: 'Search request limit reached.' });
         }
 
+        if (fullResponse.trimStart().startsWith('{')) {
+          this._log.appendLine(`[stream] unrecognized JSON response: ${fullResponse.slice(0, 300)}`);
+        }
         finalResponse = fullResponse;
         break;
       }
