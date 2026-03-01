@@ -3,6 +3,9 @@ import * as path from 'path';
 import * as os from 'os';
 import { AttachedFile } from '../chat/messageProtocol';
 
+export const FILE_EXCLUDE_GLOB =
+  '{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.vscode/**,**/*.log,**/.DS_Store}';
+
 const FILE_CAP_BYTES = 300 * 1024;   // 300 KB per file
 const TOTAL_CAP_BYTES = 1.5 * 1024 * 1024; // 1.5 MB total
 

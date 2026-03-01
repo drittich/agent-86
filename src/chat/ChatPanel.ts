@@ -1,11 +1,14 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
-import { readActiveEditor, autoDetectAndAttachFiles } from '../tools/FileTools';
+import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB } from '../tools/FileTools';
 import { parseEditOps, resolveEditPath, applyAnchorOp } from '../tools/editParser';
 import {
   chunkFile, formatChunkBlock, buildChunkMeta, parseChunkRequests,
+  parseFileRequests, formatFileListBlock,
+  extractPromptTokens, selectBestChunk,
   FileChunkMeta, FileChunk, ChunkRequest,
 } from '../tools/ChunkManager';
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
@@ -317,6 +320,33 @@ If you need more of a file before you can make a correct edit, output a JSON obj
 
 The client will fetch those chunks and send them back as another user message. You may request chunks at most 2 times per turn. After receiving the chunks, output your \`edits\` JSON.
 
+## Discovering files — request_files
+
+To find out which files exist before deciding what to read, output a JSON object with a \`request_files\` array **instead of** \`edits\` or \`request_chunks\`:
+
+\`\`\`json
+{
+  "request_files": [
+    { "glob": "src/**/*.ts", "reason": "Find all TypeScript source files" }
+  ]
+}
+\`\`\`
+
+- \`glob\`: pattern relative to workspace root (e.g. \`src/**/*.ts\`, \`README.md\`). Be specific — avoid \`**/*\` or other broad patterns that match hundreds of files. Common folders like \`node_modules\`, \`.git\`, \`dist\`, and \`build\` are always excluded automatically.
+- \`reason\`: brief explanation (ignored by client, useful for debugging)
+
+The client returns a \`<file_list>\` block with workspace-relative paths:
+
+\`\`\`
+<file_list glob="src/**/*.ts" count="3">
+src/chat/ChatPanel.ts
+src/tools/ChunkManager.ts
+src/tools/FileTools.ts
+</file_list>
+\`\`\`
+
+After receiving the list, use \`request_chunks\` to read the files you need. \`request_files\` has its own 2-turn limit; \`request_chunks\` has a separate 2-turn limit. Do not combine \`request_files\` with \`edits\` or \`request_chunks\` in the same response.
+
 ## Editing files
 
 Output a JSON object (anywhere in your response) with an "edits" array to edit files.
@@ -398,14 +428,16 @@ PATH: path/to/file.ts
     const newFiles = this._attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
     if (newFiles.length > 0) {
       const chunkBlocks: string[] = [];
+      const promptTokens = extractPromptTokens(prompt);
+      const wsRoot = wsRoots[0] ?? '';
       for (const f of newFiles) {
         const chunks = await this._getChunksForUri(f.relativePath, wsRoots);
         if (chunks && chunks.length > 0) {
-          // Send first 2 chunks initially; model can request more via request_chunks
-          for (const chunk of chunks.slice(0, 2)) {
-            chunkBlocks.push(formatChunkBlock(chunk));
-            this._log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
-          }
+          const absolutePath = path.join(wsRoot, f.relativePath);
+          this._postMessage({ type: 'status', text: `Searching ${f.relativePath}…` });
+          const best = await selectBestChunk(chunks, absolutePath, promptTokens);
+          chunkBlocks.push(formatChunkBlock(best));
+          this._log.appendLine(`[chunks] sending ${best.uri} lines ${best.lineStart}-${best.lineEnd} (rg-scored, total=${best.totalChunks})`);
         } else {
           // Fallback for unreadable/unsaved files
           chunkBlocks.push(
@@ -415,6 +447,7 @@ PATH: path/to/file.ts
         this._injectedFileUris.add(f.uri);
       }
       if (chunkBlocks.length > 0) {
+        this._postMessage({ type: 'status', text: `Sending chunks for ${newFiles.length} file(s)…` });
         userContent = `${chunkBlocks.join('\n\n')}\n\n${prompt}`;
       }
     }
@@ -433,6 +466,8 @@ PATH: path/to/file.ts
       }
     }
 
+    const MAX_FILE_ROUNDS = 2;
+    let fileRound = 0;
     const MAX_CHUNK_ROUNDS = 2;
     let chunkRound = 0;
     let finalResponse = '';
@@ -470,6 +505,33 @@ PATH: path/to/file.ts
 
         // Tentatively record assistant turn
         this._history.push({ role: 'assistant', content: fullResponse });
+
+        // Check if the model is requesting a file listing
+        const fileRequests = parseFileRequests(fullResponse);
+        if (fileRequests && fileRound < MAX_FILE_ROUNDS) {
+          fileRound++;
+          this._log.appendLine(`[files] ${fileRequests.length} glob request(s), round ${fileRound}/${MAX_FILE_ROUNDS}`);
+          this._postMessage({ type: 'status', text: `Searching ${fileRequests.length} glob pattern(s)…` });
+          const parts: string[] = [];
+          for (const req of fileRequests) {
+            this._log.appendLine(`[files] glob="${req.glob}" reason="${req.reason ?? ''}"`);
+            let uris: vscode.Uri[] = [];
+            try { uris = await vscode.workspace.findFiles(req.glob, FILE_EXCLUDE_GLOB, 200); }
+            catch (err) { this._log.appendLine(`[files] findFiles error: ${err}`); }
+            const paths = uris.map(u => {
+              for (const root of wsRoots) {
+                if (u.fsPath.startsWith(root + path.sep) || u.fsPath === root) {
+                  return u.fsPath.slice(root.length + 1).replace(/\\/g, '/');
+                }
+              }
+              return u.fsPath.replace(/\\/g, '/');
+            }).sort();
+            parts.push(formatFileListBlock(req.glob, paths));
+            this._log.appendLine(`[files] matched ${paths.length} file(s)`);
+          }
+          this._history.push({ role: 'user', content: parts.join('\n\n') });
+          continue;
+        }
 
         // Check if the model is requesting more file chunks
         const chunkRequests = parseChunkRequests(fullResponse);

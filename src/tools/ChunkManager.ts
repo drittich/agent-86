@@ -1,4 +1,6 @@
 import * as crypto from 'crypto';
+import * as cp from 'child_process';
+import { rgPath } from '@vscode/ripgrep';
 import { extractJsonCandidates } from './editParser';
 
 /** Chunk size in lines. */
@@ -124,6 +126,38 @@ export function buildChunkMeta(chunks: FileChunk[]): FileChunkMeta {
   };
 }
 
+export interface FileRequest {
+  glob: string;
+  reason?: string;
+}
+
+export function parseFileRequests(text: string): FileRequest[] | null {
+  const candidates = extractJsonCandidates(text);
+  for (const candidate of candidates) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(candidate); } catch { continue; }
+    if (typeof parsed !== 'object' || parsed === null) { continue; }
+    const arr = (parsed as Record<string, unknown>)['request_files'];
+    if (!Array.isArray(arr)) { continue; }
+    const requests: FileRequest[] = [];
+    for (const item of arr) {
+      if (typeof item !== 'object' || item === null) { continue; }
+      const obj = item as Record<string, unknown>;
+      if (typeof obj['glob'] !== 'string' || !obj['glob']) { continue; }
+      const req: FileRequest = { glob: obj['glob'] as string };
+      if (typeof obj['reason'] === 'string') { req.reason = obj['reason']; }
+      requests.push(req);
+    }
+    if (requests.length > 0) { return requests; }
+  }
+  return null;
+}
+
+export function formatFileListBlock(glob: string, paths: string[]): string {
+  const body = paths.length > 0 ? paths.join('\n') : '(no files matched)';
+  return `<file_list glob="${glob}" count="${paths.length}">\n${body}\n</file_list>`;
+}
+
 /**
  * Parse a `request_chunks` JSON object from an assistant response.
  * Returns null if no valid `request_chunks` key is found.
@@ -176,4 +210,94 @@ export function parseChunkRequests(text: string): ChunkRequest[] | null {
     }
   }
   return null;
+}
+
+/**
+ * Extract meaningful search terms from a prompt: identifiers, camelCase/PascalCase words,
+ * words longer than 4 chars. Used as rg search patterns.
+ */
+export function extractPromptTokens(prompt: string): string[] {
+  const seen = new Set<string>();
+  const tokens: string[] = [];
+  const add = (w: string) => { if (w.length > 3 && !seen.has(w)) { seen.add(w); tokens.push(w); } };
+  // camelCase/PascalCase sub-words
+  for (const w of prompt.match(/[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)/g) ?? []) { add(w.toLowerCase()); }
+  // whole words > 4 chars
+  for (const w of prompt.split(/\W+/)) { if (w.length > 4) { add(w.toLowerCase()); } }
+  return tokens;
+}
+
+/**
+ * Use ripgrep to find the best matching line number in a file for the given tokens.
+ * Returns the 1-based line number of the first/best match, or null if rg fails or no match.
+ */
+export async function findBestLineWithRg(
+  absolutePath: string,
+  tokens: string[]
+): Promise<number | null> {
+  if (tokens.length === 0) { return null; }
+  const pattern = tokens.slice(0, 10).join('|');
+  return new Promise(resolve => {
+    const args = [
+      '--line-number',
+      '--no-heading',
+      '--case-sensitive',
+      '--max-count', '1',
+      '-e', pattern,
+      absolutePath
+    ];
+    let stdout = '';
+    let proc: cp.ChildProcess;
+    try {
+      proc = cp.spawn(rgPath, args);
+    } catch {
+      resolve(null);
+      return;
+    }
+    proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.on('close', () => {
+      const m = stdout.match(/^(\d+):/m);
+      resolve(m ? parseInt(m[1], 10) : null);
+    });
+    proc.on('error', () => resolve(null));
+    setTimeout(() => { proc.kill(); resolve(null); }, 2000);
+  });
+}
+
+/**
+ * Fallback: score already-loaded chunks by token frequency.
+ * Returns the best chunk index (0-based), defaulting to 0.
+ */
+function scoreChunks(chunks: FileChunk[], tokens: string[]): number {
+  let bestIdx = 0, bestScore = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const lower = chunks[i].content.toLowerCase();
+    const score = tokens.reduce((n, t) => n + (lower.includes(t) ? 1 : 0), 0);
+    if (score > bestScore) { bestScore = score; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+/**
+ * Select the single best chunk for initial delivery using rg if available,
+ * falling back to token scoring over loaded chunks.
+ */
+export async function selectBestChunk(
+  chunks: FileChunk[],
+  absolutePath: string,
+  tokens: string[]
+): Promise<FileChunk> {
+  if (chunks.length === 1) { return chunks[0]; }
+  const nearLine = await findBestLineWithRg(absolutePath, tokens);
+  if (nearLine !== null) {
+    let best = chunks[0];
+    let bestDist = Math.abs(nearLine - chunks[0].lineStart);
+    for (const c of chunks) {
+      if (nearLine >= c.lineStart && nearLine <= c.lineEnd) { return c; }
+      const dist = Math.min(Math.abs(nearLine - c.lineStart), Math.abs(nearLine - c.lineEnd));
+      if (dist < bestDist) { bestDist = dist; best = c; }
+    }
+    return best;
+  }
+  return chunks[scoreChunks(chunks, tokens)];
 }
