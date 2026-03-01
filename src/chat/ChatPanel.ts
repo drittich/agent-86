@@ -278,132 +278,35 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     : '';
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: `${thinkToken}\nYou are a VS Code coding assistant.${agentsMdSection} You can read/edit/move/delete workspace files and run shell commands.
+      content: `${thinkToken}
+You are a VS Code coding assistant.${agentsMdSection}
 
 ${behaviorInstructions}
 
-## How files are delivered
+## Files
+Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first 1–2 chunks initially.
 
-Files are sent as chunks, not in full. Each chunk looks like:
+## Requesting data
+Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not combine with \`edits\` or each other):
 
-<file_chunk path="src/foo.ts" chunk_id="src/foo.ts:chunk:0" lines="1-120" total_chunks="5" doc_version="3" hash="abc123">
-...content of lines 1-120...
-</file_chunk>
+**More chunks:** \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"near_line":250,"max_chunks":2}}]}\`
 
-- \`lines\` is the 1-based inclusive range included in this chunk.
-- \`total_chunks\` tells you how many chunks the file has in total.
-- \`doc_version\` is the VS Code document version when the chunk was read.
-- \`hash\` is an MD5 of the chunk content for staleness detection.
-
-You may receive only the first one or two chunks initially. If you need to see other parts of the file before editing, request them (see below).
-
-## Requesting additional chunks
-
-If you need more of a file before you can make a correct edit, output a JSON object with a \`request_chunks\` array **instead of** outputting \`edits\`. Do not output both in the same response.
-
-\`\`\`json
-{
-  "request_chunks": [
-    {
-      "uri": "src/foo.ts",
-      "reason": "Need to see the class definition in the second half",
-      "preferred": { "near_line": 250, "max_chunks": 2 }
-    }
-  ]
-}
-\`\`\`
-
-- \`uri\` — workspace-relative path, forward slashes, no leading slash.
-- \`reason\` — brief explanation (helps with debugging).
-- \`preferred.near_line\` — the line number you are most interested in.
-- \`preferred.max_chunks\` — maximum chunks to return (default: 2).
-
-The client will fetch those chunks and send them back as another user message. You may request chunks at most 2 times per turn. After receiving the chunks, output your \`edits\` JSON.
-
-## Discovering files — request_files
-
-To find out which files exist before deciding what to read, output a JSON object with a \`request_files\` array **instead of** \`edits\` or \`request_chunks\`:
-
-\`\`\`json
-{
-  "request_files": [
-    { "glob": "src/**/*.ts", "reason": "Find all TypeScript source files" }
-  ]
-}
-\`\`\`
-
-- \`glob\`: pattern relative to workspace root (e.g. \`src/**/*.ts\`, \`README.md\`). Be specific — avoid \`**/*\` or other broad patterns that match hundreds of files. Common folders like \`node_modules\`, \`.git\`, \`dist\`, and \`build\` are always excluded automatically.
-- \`reason\`: brief explanation (ignored by client, useful for debugging)
-
-The client returns a \`<file_list>\` block with workspace-relative paths:
-
-\`\`\`
-<file_list glob="src/**/*.ts" count="3">
-src/chat/ChatPanel.ts
-src/tools/ChunkManager.ts
-src/tools/FileTools.ts
-</file_list>
-\`\`\`
-
-After receiving the list, use \`request_chunks\` to read the files you need. \`request_files\` has its own 2-turn limit; \`request_chunks\` has a separate 2-turn limit. Do not combine \`request_files\` with \`edits\` or \`request_chunks\` in the same response.
+**File listing:** \`{"request_files":[{"glob":"src/**/*.ts","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs; \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
 
 ## Editing files
-
-Output a JSON object (anywhere in your response) with an "edits" array to edit files.
-
+Output anywhere in your response (optionally in a \`\`\`json fence):
 \`\`\`json
-{
-  "edits": [
-    {
-      "uri": "src/file.ts",
-      "op": "replace_first",
-      "anchor": "exact text currently in the file",
-      "text": "replacement text"
-    }
-  ]
-}
+{"edits":[{"uri":"src/file.ts","op":"replace_first","anchor":"exact text","text":"replacement"}]}
 \`\`\`
+Ops: \`replace_first\` · \`delete_first\` (omit text) · \`insert_after\` · \`insert_before\` · \`replace_all\` (omit anchor, replaces whole file).
+URIs: workspace-relative, forward slashes, no leading slash. Anchor must match exactly — copy verbatim from the chunk. If you haven't read the file, use \`replace_all\`.
 
-Operations:
-- "replace_first" — replaces the first occurrence of "anchor" with "text"
-- "delete_first"  — deletes the first occurrence of "anchor" (omit "text")
-- "insert_after"  — inserts "text" immediately after the first occurrence of "anchor"
-- "insert_before" — inserts "text" immediately before the first occurrence of "anchor"
-- "replace_all"   — replaces the entire file content with "text" (omit "anchor")
-
-Rules:
-- "uri" is workspace-relative, forward slashes, no leading slash.
-- "anchor" must match the file exactly (whitespace included). Copy it verbatim from the chunk you were shown. If you have not read the file, use "replace_all" instead of guessing an anchor.
-- Multiple edits may appear in a single "edits" array and are applied in order.
-- Wrap the JSON in a \`\`\`json fence if you prefer.
-
-## Running shell commands — <RUN>
-
-<RUN>
-shell command
-</RUN>
-
-- The command runs in the first workspace folder.
-- stdout + stderr are fed back to you as <RUN_RESULT> so you can act on the output.
-- Only emit <RUN> when a command is genuinely needed (e.g. install deps, run tests).
-
-## Moving / renaming files — <MOVE>
-
-<MOVE>
-FROM: path/to/source.ts
-TO: path/to/destination.ts
-</MOVE>
-
-- Both paths must be inside the workspace.
-
-## Deleting files — <DELETE>
-
-<DELETE>
-PATH: path/to/file.ts
-</DELETE>
-
-- The file is moved to the OS trash so it can be recovered.
-- Only use <DELETE> when the user explicitly asks to remove a file.`,
+## Shell / file ops
+\`\`\`
+<RUN>command</RUN>                         result fed back as <RUN_RESULT>; use only when needed
+<MOVE>\\nFROM: old/path\\nTO: new/path\\n</MOVE>   both paths must be inside workspace
+<DELETE>\\nPATH: path/to/file\\n</DELETE>        moved to OS trash; only when user explicitly asks
+\`\`\``,
     };
     return [systemPrompt, ...this._history];
   }
