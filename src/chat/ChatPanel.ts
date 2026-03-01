@@ -329,6 +329,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     let userContent = prompt;
     const wsRoots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
     const newFiles = this._attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
+    /** Chunk IDs delivered in the initial user message — seeded into sentChunkIds below. */
+    const initialChunkIds: string[] = [];
     if (newFiles.length > 0) {
       const chunkBlocks: string[] = [];
       const promptTokens = extractPromptTokens(prompt);
@@ -340,6 +342,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           this._postMessage({ type: 'status', text: `Searching ${f.relativePath}…` });
           const best = await selectBestChunk(chunks, absolutePath, promptTokens);
           chunkBlocks.push(formatChunkBlock(best));
+          initialChunkIds.push(best.chunkId);
           this._log.appendLine(`[chunks] sending ${best.uri} lines ${best.lineStart}-${best.lineEnd} (rg-scored, total=${best.totalChunks})`);
         } else {
           // Fallback for unreadable/unsaved files
@@ -373,6 +376,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     let fileRound = 0;
     const MAX_CHUNK_ROUNDS = 2;
     let chunkRound = 0;
+    /** Chunk IDs that have already been sent to the model in this turn. */
+    const sentChunkIds = new Set<string>(initialChunkIds);
     let finalResponse = '';
     let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
 
@@ -454,13 +459,18 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
             }
             const selected = this._selectChunksForRequest(chunks, req.preferred);
             for (const chunk of selected) {
+              if (sentChunkIds.has(chunk.chunkId)) {
+                this._log.appendLine(`[chunks] skipping already-sent chunk ${chunk.chunkId}`);
+                continue;
+              }
+              sentChunkIds.add(chunk.chunkId);
               parts.push(formatChunkBlock(chunk));
               this._log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
             }
           }
           if (parts.length === 0) {
-            this._log.appendLine(`[chunks] no chunks could be fetched — aborting chunk round`);
-            this._postMessage({ type: 'status', text: 'Could not read any of the requested files.' });
+            this._log.appendLine(`[chunks] all requested chunks already sent — stopping chunk loop`);
+            this._postMessage({ type: 'status', text: 'No new chunks to send. Try specifying a line number or attaching more of the file.' });
             finalResponse = fullResponse;
             break;
           }

@@ -610,6 +610,8 @@ btnAttachEditor.addEventListener('click', () => {
 btnNewSess.addEventListener('click', () => {
   clearOutput();
   attachedFiles = [];
+  chkAgentsMd.checked = false;
+  chkThinking.checked = false;
   renderAttachedFiles();
   setStatus('');
   vscode.postMessage({ type: 'newSession' });
