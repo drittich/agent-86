@@ -53,7 +53,7 @@ function initializeFileTreeView(context: vscode.ExtensionContext): void {
   if (!treeProvider) {
     return; // No workspace open, skip tree view creation
   }
-  fileTreeView = vscode.window.createTreeView('agenticFilePicker', {
+  fileTreeView = vscode.window.createTreeView('agent86FilePicker', {
     treeDataProvider: treeProvider,
     canSelectMany: true,
   });
@@ -124,7 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
         chatPanel.updateAttachedFiles(updated);
       }
     }),
-    vscode.commands.registerCommand('agenticFilePicker.focus', () => {
+    vscode.commands.registerCommand('agent86FilePicker.focus', () => {
       // The tree view is visible in the Explorer view under "File Picker"
       // This command is kept for potential future use
     }),

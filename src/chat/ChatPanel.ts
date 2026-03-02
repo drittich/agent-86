@@ -165,6 +165,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   public newSession(): void {
     this._abortController?.abort();
     this._abortController = undefined;
+    // Reject any pending approval dialogs so their promises settle cleanly
+    for (const [id, resolve] of this._approvalResolvers) {
+      this._approvalResolvers.delete(id);
+      resolve(false);
+    }
     this._history = [];
     this._attachedFiles = [];
     this._injectedFileUris = new Set();

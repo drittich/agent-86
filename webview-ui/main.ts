@@ -1241,6 +1241,7 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     case 'newSession': {
       clearOutput();
+      approvalsContainer.innerHTML = '';
       attachedFiles = [];
       chkAgentsMd.checked = false;
       chkThinking.checked = false;
