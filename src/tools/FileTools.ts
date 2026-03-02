@@ -6,8 +6,8 @@ import { AttachedFile } from '../chat/messageProtocol';
 export const FILE_EXCLUDE_GLOB =
   '{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.vscode/**,**/*.log,**/.DS_Store}';
 
-const FILE_CAP_BYTES = 300 * 1024;   // 300 KB per file
-const TOTAL_CAP_BYTES = 1.5 * 1024 * 1024; // 1.5 MB total
+export const FILE_CAP_BYTES = 300 * 1024;   // 300 KB per file
+export const TOTAL_CAP_BYTES = 1.5 * 1024 * 1024; // 1.5 MB total
 
 // File tree picker using TreeView with checkboxes
 export class FileTreeItem extends vscode.TreeItem {
@@ -571,13 +571,22 @@ async function findFilesForMention(mention: string): Promise<vscode.Uri[]> {
  * - Skips files already attached.
  * - When multiple workspace files match a mention, shows a quick-pick.
  */
+export interface AutoAttachReport {
+  /** Files that were newly attached (and included in returned list). */
+  attached: AttachedFile[];
+  /** Files that were discovered but skipped because of TOTAL_CAP_BYTES. */
+  skipped: { relativePath: string; sizeBytes: number; reason: 'total_cap' }[];
+}
+
 export async function autoDetectAndAttachFiles(
   prompt: string,
   existing: AttachedFile[]
-): Promise<AttachedFile[]> {
+): Promise<{ files: AttachedFile[]; report: AutoAttachReport }> {
+  const report: AutoAttachReport = { attached: [], skipped: [] };
+
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
-    return existing;
+    return { files: existing, report };
   }
 
   const wsRoots = workspaceFolders.map(f => f.uri.fsPath);
@@ -585,7 +594,7 @@ export async function autoDetectAndAttachFiles(
 
   const mentions = extractMentions(prompt);
   if (mentions.length === 0) {
-    return existing;
+    return { files: existing, report };
   }
 
   // Collect new files to attach, keyed by URI string to avoid duplicates
@@ -622,7 +631,7 @@ export async function autoDetectAndAttachFiles(
   }
 
   if (toAttach.size === 0) {
-    return existing;
+    return { files: existing, report };
   }
 
   const result: AttachedFile[] = [...existing];
@@ -639,15 +648,21 @@ export async function autoDetectAndAttachFiles(
       vscode.window.showWarningMessage(
         `Auto-attach skipped "${attached.relativePath}" — total context would exceed ${formatBytes(TOTAL_CAP_BYTES)}.`
       );
+      report.skipped.push({
+        relativePath: attached.relativePath,
+        sizeBytes: attached.sizeBytes,
+        reason: 'total_cap',
+      });
       continue;
     }
 
     result.push(attached);
+    report.attached.push(attached);
     existingUris.add(attached.uri);
     totalBytes += fileCapped;
   }
 
-  return result;
+  return { files: result, report };
 }
 
 /**

@@ -1149,6 +1149,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     reason?: string;
     usage?: TokenUsage;
     cancelled?: boolean;
+    finishReason?: string;
     hasActiveEditor?: boolean;
     uri?: string;
     outcome?: 'applied' | 'cancelled';
@@ -1180,9 +1181,12 @@ window.addEventListener('message', (event: MessageEvent) => {
         setStatus('Cancelled.');
       } else if (msg.usage) {
         const u = msg.usage;
-        setStatus(`Done. \u2022 ${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion)`);
+        const fr = msg.finishReason;
+        const frSuffix = fr ? ` • finish_reason=${fr}` : '';
+        setStatus(`Done. \u2022 ${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion)${frSuffix}`);
       } else {
-        setStatus('Done.');
+        const fr = msg.finishReason;
+        setStatus(fr ? `Done. • finish_reason=${fr}` : 'Done.');
       }
       break;
 

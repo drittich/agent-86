@@ -3,7 +3,7 @@ import * as path from 'path';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
-import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB } from '../tools/FileTools';
+import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB, FILE_CAP_BYTES, TOTAL_CAP_BYTES } from '../tools/FileTools';
 import { parseEditOps, resolveEditPath, applyAnchorOp } from '../tools/editParser';
 import {
   chunkFile, formatChunkBlock, buildChunkMeta, parseChunkRequests,
@@ -543,16 +543,38 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 
     // Auto-detect file references in the prompt and attach them before sending
     const previouslyAttachedUris = new Set(this._attachedFiles.map(f => f.uri));
-    const autoAttached = await autoDetectAndAttachFiles(prompt, this._attachedFiles);
+    const autoAttachResult = await autoDetectAndAttachFiles(prompt, this._attachedFiles);
+    const autoAttached = autoAttachResult.files;
+    const autoAttachReport = autoAttachResult.report;
+
     const autoDetectedThisTurnUris = new Set(
       autoAttached
         .filter(f => !previouslyAttachedUris.has(f.uri))
         .map(f => f.uri)
     );
+
     this._log.appendLine(`[autoAttach] before=${this._attachedFiles.length} after=${autoAttached.length}`);
     if (autoAttached.length > this._attachedFiles.length) {
       this._attachedFiles = autoAttached;
       this._postMessage({ type: 'attachments', files: this._attachedFiles });
+    }
+
+    // Surface auto-attach skips in-chat (not just as VS Code toasts)
+    if (autoAttachReport.skipped.length > 0) {
+      const skippedList = autoAttachReport.skipped
+        .slice(0, 8)
+        .map(s => `- ${s.relativePath}`)
+        .join('\n');
+      const more = autoAttachReport.skipped.length > 8
+        ? `\n- ...and ${autoAttachReport.skipped.length - 8} more`
+        : '';
+      this._postMessage({
+        type: 'warning',
+        text:
+          `Auto-attach skipped ${autoAttachReport.skipped.length} file(s) due to the total attachment quota.\n\n` +
+          `Skipped:\n${skippedList}${more}\n\n` +
+          `Tip: attach fewer files, or use “Attach Editor” with a selection to include only the relevant section.`,
+      });
     }
 
     // Build user message, prepending any attached files that haven't been injected yet
@@ -561,6 +583,15 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     const newFiles = this._attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
     /** Chunk IDs delivered in the initial user message — seeded into sentChunkIds below. */
     const initialChunkIds: string[] = [];
+
+    // Context meter: attachment bytes (capped per-file to align with FileTools total cap accounting)
+    const attachmentBytes = this._attachedFiles.reduce(
+      (sum, f) => sum + Math.min(f.sizeBytes, FILE_CAP_BYTES),
+      0
+    );
+    const attachmentPct = TOTAL_CAP_BYTES > 0
+      ? Math.min(100, Math.round((attachmentBytes / TOTAL_CAP_BYTES) * 100))
+      : 0;
     if (newFiles.length > 0) {
       const chunkBlocks: string[] = [];
       const promptTokens = extractPromptTokens(prompt);
@@ -571,13 +602,14 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       let injectedChars = 0;
       const resolvedPaths: string[] = [];
 
-      for (const f of newFiles) {
-        if (injectedChars >= MAX_INJECTED_CHARS) {
-          this._log.appendLine(`[chunks] injection cap reached (${MAX_INJECTED_CHARS} chars) — skipping remaining attached files`);
-          break;
-        }
-
-        const chunks = await this._getChunksForUri(f.relativePath, wsRoots);
+       const skippedDueToInjectionCap: string[] = [];
+       for (const f of newFiles) {
+         if (injectedChars >= MAX_INJECTED_CHARS) {
+           this._log.appendLine(`[chunks] injection cap reached (${MAX_INJECTED_CHARS} chars) — skipping remaining attached files`);
+           skippedDueToInjectionCap.push(f.relativePath);
+           continue;
+         }
+const chunks = await this._getChunksForUri(f.relativePath, wsRoots);
         let block: string | null = null;
 
         if (chunks && chunks.length > 0) {
@@ -603,12 +635,12 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           continue;
         }
 
-        if (injectedChars + block.length > MAX_INJECTED_CHARS) {
-          this._log.appendLine(`[chunks] skipping ${f.relativePath} — would exceed injection cap (${MAX_INJECTED_CHARS} chars)`);
-          break;
-        }
-
-        chunkBlocks.push(block);
+         if (injectedChars + block.length > MAX_INJECTED_CHARS) {
+           this._log.appendLine(`[chunks] skipping ${f.relativePath} — would exceed injection cap (${MAX_INJECTED_CHARS} chars)`);
+           skippedDueToInjectionCap.push(f.relativePath);
+           continue;
+         }
+chunkBlocks.push(block);
         injectedChars += block.length;
         resolvedPaths.push(`  - ${f.relativePath}`);
         this._injectedFileUris.add(f.uri);
@@ -621,6 +653,23 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         userContent = `${chunkBlocks.join('\n\n')}\n\n${prompt}` +
           `\n\n<resolved_paths>\n${pathNote}\n</resolved_paths>` +
           (newFiles.length > chunkBlocks.length ? `\n\n<context_note>Attachment context capped to stay within budget.</context_note>` : '');
+      }
+
+      // If we skipped some attachments due to injection cap, surface it in-chat.
+      if (skippedDueToInjectionCap.length > 0) {
+        const shown = skippedDueToInjectionCap.slice(0, 8);
+        const list = shown.map(p => `- ${p}`).join('\n');
+        const more = skippedDueToInjectionCap.length > 8
+          ? `\n- ...and ${skippedDueToInjectionCap.length - 8} more`
+          : '';
+        this._postMessage({
+          type: 'warning',
+          text:
+            `Attachment context cap reached while preparing the prompt (max ${MAX_INJECTED_CHARS.toLocaleString()} chars). ` +
+            `Some attached files were not included in the message sent to the model.\n\n` +
+            `Not sent:\n${list}${more}\n\n` +
+            `Tip: attach fewer files or attach a smaller selection from the editor.`,
+        });
       }
     }
 
@@ -657,10 +706,10 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     const enforceSearchFirst = /\b(unused|usage|used|reference|references|import|call[- ]?site|where\s+used)\b/i.test(prompt);
     /** Chunk IDs that have already been sent to the model in this turn. */
     const sentChunkIds = new Set<string>(initialChunkIds);
-    let finalResponse = '';
-    let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
-
-    try {
+     let finalResponse = '';
+     let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
+     let lastFinishReason: string | undefined;
+try {
       while (true) {
         let fullResponse = '';
         this._abortController = new AbortController();
@@ -670,7 +719,12 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         const messages = this._buildMessages(agentsMdContent);
         const contextTokens = await this._tokenCounter.countMessages(messages);
         const exact = this._tokenCounter.isReady;
-        this._postMessage({ type: 'status', text: `Sending ${exact ? '' : '~'}${contextTokens.toLocaleString()} tokens…` });
+        this._postMessage({
+          type: 'status',
+          text:
+            `Sending ${exact ? '' : '~'}${contextTokens.toLocaleString()} tokens… ` +
+            `(${attachmentPct}% attachment quota)`
+        });
         await provider.stream(
           messages,
           this._abortController.signal,
@@ -681,6 +735,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
             } else if (event.type === 'done') {
               this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}`);
               lastUsage = event.usage;
+              lastFinishReason = event.finishReason;
             } else if (event.type === 'error') {
               this._log.appendLine(`[stream] error event: ${event.message}`);
               this._postMessage({ type: 'error', message: event.message });
@@ -978,7 +1033,17 @@ if (searchRequests) {
 
       // Post 'done' exactly once after all rounds complete
       if (!this._userCancelled) {
-        this._postMessage({ type: 'done', usage: lastUsage });
+        this._postMessage({ type: 'done', usage: lastUsage, finishReason: lastFinishReason });
+      }
+
+      // If the model response was truncated, surface an explicit warning.
+      if (!this._userCancelled && lastFinishReason === 'length') {
+        this._postMessage({
+          type: 'warning',
+          text:
+            'The model stopped because it hit the output token limit (finish_reason="length"). ' +
+            'Try asking a narrower question or request “continue”.',
+        });
       }
 
       // Process action blocks on the final response only

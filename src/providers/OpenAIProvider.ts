@@ -35,7 +35,7 @@ export class OpenAIProvider implements IProvider {
       });
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
-        onEvent({ type: 'done' });
+        onEvent({ type: 'done', finishReason: 'aborted' });
         return;
       }
       // Provide a user-friendly error message for common connection issues
@@ -75,6 +75,7 @@ export class OpenAIProvider implements IProvider {
     const decoder = new TextDecoder();
     let buffer = '';
     let usage: ProviderUsage | undefined;
+    let finishReason: string | undefined;
     let deltaCount = 0;
     let rawLineCount = 0;
 
@@ -97,15 +98,20 @@ export class OpenAIProvider implements IProvider {
           if (!trimmed.startsWith('data:')) continue;
 
           const data = trimmed.slice(5).trim();
-          if (data === '[DONE]') {
-            this.log?.appendLine(`[OpenAIProvider] SSE done. rawLines=${rawLineCount}, deltas=${deltaCount}`);
-            onEvent({ type: 'done', usage });
-            return;
-          }
-
-          try {
+            if (data === '[DONE]') {
+              this.log?.appendLine(`[OpenAIProvider] SSE done. rawLines=${rawLineCount}, deltas=${deltaCount}`);
+              onEvent({ type: 'done', usage, finishReason });
+              return;
+            }
+try {
             const json = JSON.parse(data);
-            const deltaObj = json?.choices?.[0]?.delta;
+            const choice0 = json?.choices?.[0];
+            const deltaObj = choice0?.delta;
+
+            // Capture finish_reason when present (some servers send it on the last frame)
+            if (typeof choice0?.finish_reason === 'string' && choice0.finish_reason) {
+              finishReason = choice0.finish_reason;
+            }
 
             // Some OpenAI-compatible servers (and local models) stream tokens under
             // `reasoning_content` instead of `content`. Treat it as user-visible text
@@ -146,7 +152,7 @@ export class OpenAIProvider implements IProvider {
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
-        onEvent({ type: 'done', usage });
+        onEvent({ type: 'done', usage, finishReason: 'aborted' });
         return;
       }
       onEvent({ type: 'error', message: String(err) });
@@ -154,6 +160,6 @@ export class OpenAIProvider implements IProvider {
       reader.releaseLock();
     }
 
-    onEvent({ type: 'done', usage });
+    onEvent({ type: 'done', usage, finishReason });
   }
 }

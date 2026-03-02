@@ -14,7 +14,7 @@ export interface ProviderUsage {
 
 export type ProviderEvent =
   | { type: 'delta'; content: string }
-  | { type: 'done'; usage?: ProviderUsage }
+  | { type: 'done'; usage?: ProviderUsage; finishReason?: string }
   | { type: 'error'; message: string };
 
 /** Simple logger interface that matches vscode.OutputChannel */
