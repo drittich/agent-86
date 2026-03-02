@@ -347,7 +347,7 @@ Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not c
 
 For questions about symbol usage (for example: "is this import unused?", references, call-sites), use \`search_file\` first and search the whole file with ripgrep. Do not use \`request_chunks\` to discover usages; only request chunks after search when exact surrounding code is still required.
 
-**File listing:** \`{"request_files":[{"glob":"src/**/*.ts","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs; \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
+**File listing:** \`{"request_files":[{"glob":"src/**/*","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs (e.g. \`**/*.cs\`, \`src/**/*.py\`); \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
 
 ## Editing files
 Output anywhere in your response (optionally in a \`\`\`json fence):
