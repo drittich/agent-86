@@ -272,7 +272,9 @@ export async function searchFileWithRg(
       .filter(n => Number.isInteger(n) && n > 0);
 
     if (matchLineNumbers.length === 0) {
-      return [];
+      // Fall back to raw ripgrep output when line number parsing fails
+      // (e.g., when searching directories where rg outputs file paths before matches)
+      return rawLines.map(truncateSearchLine);
     }
 
     try {
