@@ -122,6 +122,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   ): void {
     this._view = webviewView;
 
+    const version = this.context.extension.packageJSON.version as string;
+    webviewView.title = `Agent 86 v${version}`;
+
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [
