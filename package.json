@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.0.50",
+  "version": "0.0.54",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -20,7 +20,13 @@
       },
       {
         "command": "agent86.newSession",
-        "title": "Agent 86: New Session"
+        "title": "Agent 86: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "agent86.openSettings",
+        "title": "Agent 86: Settings",
+        "icon": "$(gear)"
       },
       {
         "command": "agent86.attachFiles",
@@ -35,6 +41,20 @@
         "title": "Agent 86: Attach Active Editor"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "agent86.newSession",
+          "when": "view == agent86.panel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agent86.openSettings",
+          "when": "view == agent86.panel",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -70,12 +90,12 @@
         },
         "agent86.model": {
           "type": "string",
-          "default": "OpenAI-20B-NEO-CODEPlus-Uncensored-IQ4_NL.gguf",
+          "default": "qwen35-9b-q4km",
           "description": "Model name to use"
         },
         "agent86.maxContextTokens": {
           "type": "number",
-          "default": 16384,
+          "default": 32768,
           "description": "Maximum context tokens for the model"
         },
         "agent86.tokenizerModel": {

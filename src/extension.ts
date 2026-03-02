@@ -89,8 +89,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('agentic.openPanel', () => {
       chatPanel.reveal();
     }),
+    vscode.commands.registerCommand('agent86.openPanel', () => {
+      chatPanel.reveal();
+    }),
     vscode.commands.registerCommand('agentic.newSession', () => {
       chatPanel.newSession();
+    }),
+    vscode.commands.registerCommand('agent86.newSession', () => {
+      chatPanel.newSession();
+    }),
+    vscode.commands.registerCommand('agent86.openSettings', () => {
+      chatPanel.openSettings();
     }),
     vscode.commands.registerCommand('agentic.attachFiles', async () => {
       chatPanel.reveal();

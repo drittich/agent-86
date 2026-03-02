@@ -11,9 +11,29 @@ const vscode = acquireVsCodeApi();
 
 const root = document.getElementById('root')!;
 root.innerHTML = `
+<div id="settings-overlay" hidden>
+  <div id="settings-panel">
+    <div id="settings-header">
+      <span id="settings-title">Settings</span>
+      <button id="btn-settings-close" title="Close">×</button>
+    </div>
+    <div id="settings-body">
+      <label for="settings-base-url">Provider URL</label>
+      <input id="settings-base-url" type="text" placeholder="http://127.0.0.1:8083/v1" />
+      <label for="settings-api-key">API Key</label>
+      <input id="settings-api-key" type="password" placeholder="(none required for local)" />
+      <label for="settings-model">Model</label>
+      <input id="settings-model" type="text" placeholder="model name" />
+    </div>
+    <div id="settings-footer">
+      <button id="btn-settings-save">Save</button>
+      <button id="btn-settings-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="app">
   <div id="toolbar">
-    <button id="btn-new-session" title="New session">New Session</button>
     <button id="btn-select-session" title="Select session">Select Session</button>
     <button id="btn-attach" title="Attach files">Attach Files</button>
     <button id="btn-attach-editor" title="Attach active editor or selection">Attach Editor</button>
@@ -348,6 +368,91 @@ style.textContent = `
     color: var(--vscode-foreground);
   }
   #thinking-row input { margin-right: 4px; }
+
+  /* Settings overlay */
+  #settings-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #settings-overlay[hidden] { display: none; }
+
+  #settings-panel {
+    background: var(--vscode-sideBar-background, #252526);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    border-radius: 4px;
+    width: 320px;
+    max-width: calc(100vw - 24px);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  #settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border, #454545);
+  }
+  #settings-title {
+    font-weight: 600;
+    font-size: 13px;
+  }
+  #btn-settings-close {
+    background: none;
+    border: none;
+    color: var(--vscode-foreground);
+    opacity: 0.7;
+    font-size: 16px;
+    padding: 0 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  #btn-settings-close:hover { opacity: 1; background: none; }
+
+  #settings-body {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #settings-body label {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  #settings-body input {
+    width: 100%;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, #555);
+    padding: 5px 7px;
+    font-family: inherit;
+    font-size: inherit;
+    border-radius: 2px;
+  }
+  #settings-body input:focus { outline: 1px solid var(--vscode-focusBorder); }
+
+  #settings-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--vscode-widget-border, #454545);
+  }
+  #btn-settings-cancel {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+  }
+  #btn-settings-cancel:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground, #45494e);
+  }
 `;
 document.head.appendChild(style);
 
@@ -360,8 +465,14 @@ const btnSend      = document.getElementById('btn-send') as HTMLButtonElement;
 const btnStop      = document.getElementById('btn-stop') as HTMLButtonElement;
 const btnAttach    = document.getElementById('btn-attach') as HTMLButtonElement;
   const btnAttachEditor = document.getElementById('btn-attach-editor') as HTMLButtonElement;
-  const btnNewSess   = document.getElementById('btn-new-session') as HTMLButtonElement;
 const btnSelectSess = document.getElementById('btn-select-session') as HTMLButtonElement;
+const settingsOverlay   = document.getElementById('settings-overlay')!;
+const settingsBaseUrl   = document.getElementById('settings-base-url') as HTMLInputElement;
+const settingsApiKey    = document.getElementById('settings-api-key') as HTMLInputElement;
+const settingsModel     = document.getElementById('settings-model') as HTMLInputElement;
+const btnSettingsClose  = document.getElementById('btn-settings-close') as HTMLButtonElement;
+const btnSettingsSave   = document.getElementById('btn-settings-save') as HTMLButtonElement;
+const btnSettingsCancel = document.getElementById('btn-settings-cancel') as HTMLButtonElement;
 const btnCopyMd    = document.getElementById('btn-copy-markdown') as HTMLButtonElement;
 const btnCopyRaw   = document.getElementById('btn-copy-raw') as HTMLButtonElement;
 const filesList    = document.getElementById('attached-files') as HTMLUListElement;
@@ -632,18 +743,29 @@ btnAttachEditor.addEventListener('click', () => {
   vscode.postMessage({ type: 'attachActiveEditor' });
 });
 
-btnNewSess.addEventListener('click', () => {
-  clearOutput();
-  attachedFiles = [];
-  chkAgentsMd.checked = false;
-  chkThinking.checked = false;
-  renderAttachedFiles();
-  setStatus('');
-  vscode.postMessage({ type: 'newSession' });
-});
-
 btnSelectSess.addEventListener('click', () => {
   vscode.postMessage({ type: 'selectSession' });
+});
+
+function closeSettings(): void {
+  settingsOverlay.hidden = true;
+}
+
+btnSettingsClose.addEventListener('click', closeSettings);
+btnSettingsCancel.addEventListener('click', closeSettings);
+
+settingsOverlay.addEventListener('click', (e) => {
+  if (e.target === settingsOverlay) { closeSettings(); }
+});
+
+btnSettingsSave.addEventListener('click', () => {
+  vscode.postMessage({
+    type: 'saveSettings',
+    baseUrl: settingsBaseUrl.value.trim(),
+    model: settingsModel.value.trim(),
+    apiKey: settingsApiKey.value,
+  });
+  closeSettings();
 });
 
 // Sync checkbox state changes to the extension immediately
@@ -1033,6 +1155,9 @@ window.addEventListener('message', (event: MessageEvent) => {
     available?: boolean;
     thinkingMode?: boolean;
     includeAgentsMd?: boolean;
+    baseUrl?: string;
+    model?: string;
+    apiKey?: string;
   };
 
   switch (msg.type) {
@@ -1111,6 +1236,24 @@ window.addEventListener('message', (event: MessageEvent) => {
     case 'checkboxState': {
       chkThinking.checked = msg.thinkingMode ?? false;
       chkAgentsMd.checked = msg.includeAgentsMd ?? false;
+      break;
+    }
+
+    case 'newSession': {
+      clearOutput();
+      attachedFiles = [];
+      chkAgentsMd.checked = false;
+      chkThinking.checked = false;
+      renderAttachedFiles();
+      break;
+    }
+
+    case 'openSettings': {
+      settingsBaseUrl.value = msg.baseUrl ?? '';
+      settingsApiKey.value = msg.apiKey ?? '';
+      settingsModel.value = msg.model ?? '';
+      settingsOverlay.hidden = false;
+      settingsBaseUrl.focus();
       break;
     }
   }

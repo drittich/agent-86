@@ -15,7 +15,9 @@ export type ExtensionToWebview =
   | { type: 'editorState'; hasActiveEditor: boolean }
   | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' }
   | { type: 'agentsMdAvailable'; available: boolean }
-  | { type: 'checkboxState'; thinkingMode: boolean; includeAgentsMd: boolean };
+  | { type: 'checkboxState'; thinkingMode: boolean; includeAgentsMd: boolean }
+  | { type: 'openSettings'; baseUrl: string; model: string; apiKey: string }
+  | { type: 'newSession' };
 
 // Messages sent from the webview to the extension host
 export type WebviewToExtension =
@@ -26,7 +28,8 @@ export type WebviewToExtension =
   | { type: 'attachActiveEditor' }
   | { type: 'selectSession' }
   | { type: 'approval/response'; approvalId: string; approved: boolean }
-  | { type: 'checkboxChange'; includeAgentsMd?: boolean };
+  | { type: 'checkboxChange'; includeAgentsMd?: boolean }
+  | { type: 'saveSettings'; baseUrl: string; model: string; apiKey: string };
 
 export interface AttachedFile {
   uri: string;

@@ -171,10 +171,26 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._chunkMeta = new Map();
     this._thinkingMode = false;
     this._includeAgentsMd = false;
+    // Discard any buffered deltas — the webview is about to clear its output
+    this._deltaBuffer = [];
     this._currentSession = this._configManager.createSession();
     this._saveCurrentSession();
-    this._postMessage({ type: 'attachments', files: [] });
-    this._postMessage({ type: 'status', text: 'New session started.' });
+    if (this._view) {
+      this._postMessage({ type: 'newSession' });
+      this._postMessage({ type: 'attachments', files: [] });
+      this._postMessage({ type: 'status', text: 'New session started.' });
+    } else {
+      // Panel not yet open — reveal it; resolveWebviewView will render the empty session
+      this.reveal();
+    }
+  }
+
+  public openSettings(): void {
+    const cfg = vscode.workspace.getConfiguration('agent86');
+    const baseUrl = cfg.get<string>('baseUrl') ?? '';
+    const model = cfg.get<string>('model') ?? '';
+    const apiKey = cfg.get<string>('apiKey') ?? '';
+    this._postMessage({ type: 'openSettings', baseUrl, model, apiKey });
   }
 
   public attachFiles(): void {
@@ -780,21 +796,43 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
                 }
               }
 
-              const { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
+              let { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
                 absolutePath,
                 req.pattern,
                 caseSensitive,
                 globFilter
               );
-if (searchError) {
-               this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
-             }
-             this._log.appendLine(
-               `[search] "${req.pattern}" in ${displayUri} (${absolutePath})` +
-               ` [case_sensitive=${caseSensitive}] → ${matchCount} match(es)` +
-               `${searchError ? ' (error)' : ''}`
-             );
-             parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, matchCount, searchError, caseSensitive));
+
+              // For directory searches, `searchFileWithRg()` returns a file list (paths relative to the searched dir).
+              // Prefix them back to workspace-relative paths so the model can drill into specific files.
+              if (isGlob && matches.length > 0) {
+                const base = displayUri.slice(0, displayUri.search(/[*?{]/)).replace(/[\\/]+$/, '').replace(/\\/g, '/');
+                if (base) {
+                  matches = matches.map((l) => {
+                    const t = l.trim();
+                    if (!t || t.startsWith('(') || t.startsWith('<') || t.startsWith('@') || t.startsWith('>')) {
+                      return l;
+                    }
+                    if (t.includes(':')) {
+                      return l;
+                    }
+                    if (t.startsWith(base + '/')) {
+                      return t;
+                    }
+                    return `${base}/${t}`;
+                  });
+                }
+              }
+
+              if (searchError) {
+                this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
+              }
+              this._log.appendLine(
+                `[search] "${req.pattern}" in ${displayUri} (${absolutePath})` +
+                ` [case_sensitive=${caseSensitive}] → ${matchCount} match(es)` +
+                `${searchError ? ' (error)' : ''}`
+              );
+              parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, matchCount, searchError, caseSensitive));
            }
 
            if (capped) {
@@ -1332,6 +1370,13 @@ if (searchRequests) {
         }
         break;
       }
+      case 'saveSettings': {
+        const cfg = vscode.workspace.getConfiguration('agent86');
+        cfg.update('baseUrl', message.baseUrl, vscode.ConfigurationTarget.Global);
+        cfg.update('model', message.model, vscode.ConfigurationTarget.Global);
+        cfg.update('apiKey', message.apiKey, vscode.ConfigurationTarget.Global);
+        break;
+      }
       case 'checkboxChange':
         // Update internal state when checkbox is toggled (without sending a message)
         if (message.includeAgentsMd !== undefined) {
@@ -1458,7 +1503,7 @@ if (searchRequests) {
   }
 
   /**
-   * Flush all buffered delta messages to the webview.
+   * Flush all buffered delta messages to the webview as a single combined message.
    * Called when the webview becomes visible again.
    */
   private _flushDeltaBuffer(): void {
@@ -1466,13 +1511,10 @@ if (searchRequests) {
       return;
     }
 
-    // Send all buffered deltas as individual messages
-    for (const content of this._deltaBuffer) {
-      this._view?.webview.postMessage({ type: 'delta', content });
-    }
-
-    // Clear the buffer
+    // Combine all buffered deltas into a single IPC call to avoid thousands of round-trips
+    const combined = this._deltaBuffer.join('');
     this._deltaBuffer = [];
+    this._view?.webview.postMessage({ type: 'delta', content: combined });
   }
 
   private _getHtml(webview: vscode.Webview): string {

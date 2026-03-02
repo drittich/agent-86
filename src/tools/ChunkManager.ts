@@ -248,14 +248,17 @@ export function formatSearchResultBlock(
   caseSensitive = true
 ): string {
   const mode = caseSensitive ? 'true' : 'false';
-  if (error) {
-    return `<search_result uri="${uri}" pattern="${pattern}" case_sensitive="${mode}" count="0" error="${error}">\n(search failed: ${error})\n</search_result>`;
-  }
 
   // Keep search results small to avoid blowing request size limits on the next round.
   const MAX_LINES = 220;
   const MAX_CHARS = 16_000;
-  const rendered = matches.length > 0 ? matches : ['(no matches)'];
+
+  // When an error is present, keep any partial output (if available) so the model
+  // can still make progress (e.g., output cap exceeded on directory searches).
+  const rendered: string[] =
+    matches.length > 0
+      ? matches
+      : (error ? [`(search error: ${error})`] : ['(no matches)']);
 
   const clippedLines = rendered.slice(0, MAX_LINES);
   let body = clippedLines.join('\n');
@@ -270,15 +273,20 @@ export function formatSearchResultBlock(
     body += `\n\n(... truncated; showing ${Math.min(rendered.length, MAX_LINES)} line(s))`;
   }
 
-  return `<search_result uri="${uri}" pattern="${pattern}" case_sensitive="${mode}" count="${matchCount}">\n${body}\n</search_result>`;
+  return (
+    `<search_result uri="${uri}" pattern="${pattern}" case_sensitive="${mode}" count="${matchCount}"` +
+    (error ? ` error="${error}"` : '') +
+    `>\n${body}\n</search_result>`
+  );
 }
 
 /**
  * Search a file or directory for a ripgrep pattern.
  *
  * Notes:
- * - `rg --max-count` is per-file. When searching directories this can still produce huge output.
- *   This function applies an additional global cap + output byte cap to keep the conversation small.
+ * - For directory searches, use `rg --files-with-matches` (file list only) to keep stdout small;
+ *   the model can then drill into specific files with targeted `search_file` calls.
+ * - For file searches, include line numbers and provide a few context lines by re-reading the file.
  * - When `globFilter` is provided, passes it via `--glob` so rg filters files within the directory.
  */
 export async function searchFileWithRg(
@@ -303,6 +311,14 @@ export async function searchFileWithRg(
     return line.slice(0, keep) + TRUNCATED_SUFFIX;
   };
 
+  const isDirectorySearch = (() => {
+    try {
+      return fs.statSync(absolutePath).isDirectory();
+    } catch {
+      return false;
+    }
+  })();
+
   const renderMatchesWithContext = (rawLines: string[]): string[] => {
     const matchLineNumbers = rawLines
       .map(l => /^(\d+):/.exec(l)?.[1])
@@ -311,8 +327,7 @@ export async function searchFileWithRg(
       .filter(n => Number.isInteger(n) && n > 0);
 
     if (matchLineNumbers.length === 0) {
-      // Fall back to raw ripgrep output when line number parsing fails
-      // (e.g., when searching directories where rg outputs file paths before matches)
+      // Fall back to raw ripgrep output when line number parsing fails.
       return rawLines.map(truncateSearchLine);
     }
 
@@ -344,27 +359,42 @@ export async function searchFileWithRg(
       resolve({ lines: [], matchCount: 0, error: 'rg binary not initialized' });
       return;
     }
+
     const rgPath = _rgPath; // Capture for closure
-    const args = [
-      '--line-number',
-      '--no-heading',
-      caseSensitive ? '--case-sensitive' : '--ignore-case',
-      '--max-count', String(MAX_MATCHES_PER_FILE),
-      ...(globFilter ? ['--glob', globFilter] : []),
-      '-e', pattern,
-      absolutePath,
-    ];
+
+    const args = isDirectorySearch
+      ? [
+          '--files-with-matches',
+          caseSensitive ? '--case-sensitive' : '--ignore-case',
+          ...(globFilter ? ['--glob', globFilter] : []),
+          '-e', pattern,
+          '.',
+        ]
+      : [
+          '--line-number',
+          '--no-heading',
+          caseSensitive ? '--case-sensitive' : '--ignore-case',
+          '--max-count', String(MAX_MATCHES_PER_FILE),
+          ...(globFilter ? ['--glob', globFilter] : []),
+          '-e', pattern,
+          absolutePath,
+        ];
+
     let stdout = '';
     let stderr = '';
     let stdoutBytes = 0;
     let killedForCap = false;
     let proc: cp.ChildProcess;
+
     try {
-      proc = cp.spawn(rgPath, args);
+      proc = isDirectorySearch
+        ? cp.spawn(rgPath, args, { cwd: absolutePath })
+        : cp.spawn(rgPath, args);
     } catch (e) {
       resolve({ lines: [], matchCount: 0, error: `spawn failed: ${e}` });
       return;
     }
+
     proc.stdout?.on('data', (d: Buffer) => {
       stdoutBytes += d.length;
       if (!killedForCap && stdoutBytes > MAX_STDOUT_BYTES) {
@@ -374,19 +404,33 @@ export async function searchFileWithRg(
       }
       stdout += d.toString();
     });
-    proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-    proc.on('close', (code) => {
-      const allRawLines = stdout.split('\n').filter(l => l.trim() !== '');
-      const limitedRawLines = allRawLines.slice(0, MAX_TOTAL_MATCH_LINES);
-      const lines = renderMatchesWithContext(limitedRawLines);
 
+    proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    proc.on('close', (code) => {
       const capError = killedForCap ? `output cap exceeded (${Math.round(MAX_STDOUT_BYTES / 1024)}KB)` : undefined;
       const rgError = (code !== null && code > 1 && stderr.trim()) ? stderr.trim() : undefined;
       const error = rgError ?? capError;
 
+      if (isDirectorySearch) {
+        const raw = stdout.split('\n').map(l => l.trim()).filter(Boolean);
+        const limited = raw.slice(0, MAX_TOTAL_MATCH_LINES);
+        const lines = limited
+          .map(p => p.replace(/\\/g, '/'))
+          .map(p => p.replace(/^\.\/?/, ''))
+          .map(truncateSearchLine);
+        resolve({ lines, matchCount: raw.length, error });
+        return;
+      }
+
+      const allRawLines = stdout.split('\n').filter(l => l.trim() !== '');
+      const limitedRawLines = allRawLines.slice(0, MAX_TOTAL_MATCH_LINES);
+      const lines = renderMatchesWithContext(limitedRawLines);
       resolve({ lines, matchCount: allRawLines.length, error });
     });
+
     proc.on('error', (e) => resolve({ lines: [], matchCount: 0, error: `process error: ${e}` }));
+
     setTimeout(() => {
       try { proc.kill(); } catch { /* ignore */ }
       resolve({ lines: [], matchCount: 0, error: 'timeout' });
