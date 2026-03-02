@@ -19,6 +19,14 @@ import { ConfigManager, Session } from '../config/ConfigManager';
 
 const DIFF_SCHEME = 'agentic-diff';
 
+/** Normalize common incorrect file extensions in glob patterns. */
+function normalizeGlob(glob: string): string {
+  return glob
+    .replace(/\bc#\b/g, 'cs')     // C# → cs
+    .replace(/\bc\+\+\b/g, 'cpp') // C++ → cpp
+    .replace(/\bf#\b/g, 'fs');    // F# → fs
+}
+
 /** In-memory content provider for diff previews. */
 class DiffContentProvider implements vscode.TextDocumentContentProvider {
   private _contents = new Map<string, string>();
@@ -347,7 +355,7 @@ Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not c
 
 For questions about symbol usage (for example: "is this import unused?", references, call-sites), use \`search_file\` first and search the whole file with ripgrep. Do not use \`request_chunks\` to discover usages; only request chunks after search when exact surrounding code is still required.
 
-**File listing:** \`{"request_files":[{"glob":"src/**/*","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs (e.g. \`**/*.cs\`, \`src/**/*.py\`); \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded.
+**File listing:** \`{"request_files":[{"glob":"src/**/*","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs (e.g. \`**/*.cs\`, \`src/**/*.py\`); \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded. Use correct extensions: \`cs\` for C#, \`cpp\` for C++, \`fs\` for F# (not \`c#\`, \`c++\`, \`f#\`).
 
 ## Editing files
 Output anywhere in your response (optionally in a \`\`\`json fence):
@@ -450,11 +458,11 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       }
     }
 
-    const MAX_FILE_ROUNDS = 2;
+    const MAX_FILE_ROUNDS = 4;
     let fileRound = 0;
-    const MAX_CHUNK_ROUNDS = 2;
+    const MAX_CHUNK_ROUNDS = 4;
     let chunkRound = 0;
-    const MAX_SEARCH_ROUNDS = 2;
+    const MAX_SEARCH_ROUNDS = 4;
     let searchRound = 0;
     const MAX_SEARCH_FIRST_REDIRECTS = 2;
     let searchFirstRedirects = 0;
@@ -506,9 +514,13 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           this._postMessage({ type: 'status', text: `Searching ${fileRequests.length} glob pattern(s)…` });
           const parts: string[] = [];
           for (const req of fileRequests) {
-            this._log.appendLine(`[files] glob="${req.glob}" reason="${req.reason ?? ''}"`);
+            const normalizedGlob = normalizeGlob(req.glob);
+            if (normalizedGlob !== req.glob) {
+              this._log.appendLine(`[files] normalized glob "${req.glob}" → "${normalizedGlob}"`);
+            }
+            this._log.appendLine(`[files] glob="${normalizedGlob}" reason="${req.reason ?? ''}"`);
             let uris: vscode.Uri[] = [];
-            try { uris = await vscode.workspace.findFiles(req.glob, FILE_EXCLUDE_GLOB, 200); }
+            try { uris = await vscode.workspace.findFiles(normalizedGlob, FILE_EXCLUDE_GLOB, 200); }
             catch (err) { this._log.appendLine(`[files] findFiles error: ${err}`); }
             // Retry with case-insensitive basename matching if nothing matched
             if (uris.length === 0) {
@@ -575,6 +587,9 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         if (searchRequests) {
           this._log.appendLine(`[search] retry limit reached`);
           this._postMessage({ type: 'status', text: 'Search request limit reached.' });
+          // Don't break yet - let the model provide its final response with what it has
+          finalResponse = fullResponse;
+          break;
         }
 
         // Check if the model is requesting more file chunks
@@ -649,6 +664,9 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           // Limit reached while model still wants more
           this._log.appendLine(`[chunks] retry limit reached`);
           this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
+          // Don't break yet - let the model provide its final response with what it has
+          finalResponse = fullResponse;
+          break;
         }
 
         if (fullResponse.trimStart().startsWith('{')) {
