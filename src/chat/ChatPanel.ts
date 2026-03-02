@@ -1091,11 +1091,14 @@ if (searchRequests) {
       this._postMessage({ type: 'status', text: `Edit parse warning: ${w}` });
     }
 
+    const resultLines: string[] = [];
+
     for (const op of ops) {
       const pathResult = resolveEditPath(op.uri, wsRoots);
       if (pathResult.error) {
         const errMsg = `\n\n> **Edit error**: ${pathResult.error}`;
         this._postMessage({ type: 'delta', content: errMsg });
+        resultLines.push(`<EDIT_RESULT path="${op.uri}" status="failed" error="${pathResult.error}"/>`);
         continue;
       }
 
@@ -1117,6 +1120,7 @@ if (searchRequests) {
       if (typeof result === 'object') {
         const errMsg = `\n\n> **Edit error** (${op.uri}): ${result.error}. Try attaching the file first so the model can read the current content.`;
         this._postMessage({ type: 'delta', content: errMsg });
+        resultLines.push(`<EDIT_RESULT path="${op.uri}" status="failed" error="${result.error}"/>`);
         continue;
       }
       const newContent = result;
@@ -1173,6 +1177,7 @@ if (searchRequests) {
       if (!approved) {
         this._postMessage({ type: 'status', text: `Edit cancelled: ${op.uri}` });
         this._postMessage({ type: 'editResult', uri: op.uri, outcome: 'cancelled' });
+        resultLines.push(`<EDIT_RESULT path="${op.uri}" status="denied by user"/>`);
         continue;
       }
 
@@ -1193,6 +1198,14 @@ if (searchRequests) {
       this._log.appendLine(`[edit] applied: ${op.uri}`);
       this._postMessage({ type: 'status', text: `Applied: ${op.uri}` });
       this._postMessage({ type: 'editResult', uri: op.uri, outcome: 'applied' });
+      resultLines.push(`<EDIT_RESULT path="${op.uri}" status="applied"/>`);
+    }
+
+    if (resultLines.length > 0) {
+      // Feed edit outcomes back to the model as a user message so it knows
+      // which edits were applied, denied, or failed.
+      this._history.push({ role: 'user', content: resultLines.join('\n') });
+      this._saveCurrentSession();
     }
   }
 
