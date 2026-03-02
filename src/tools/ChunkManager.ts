@@ -251,13 +251,35 @@ export function formatSearchResultBlock(
   if (error) {
     return `<search_result uri="${uri}" pattern="${pattern}" case_sensitive="${mode}" count="0" error="${error}">\n(search failed: ${error})\n</search_result>`;
   }
-  const body = matches.length > 0 ? matches.join('\n') : '(no matches)';
+
+  // Keep search results small to avoid blowing request size limits on the next round.
+  const MAX_LINES = 220;
+  const MAX_CHARS = 16_000;
+  const rendered = matches.length > 0 ? matches : ['(no matches)'];
+
+  const clippedLines = rendered.slice(0, MAX_LINES);
+  let body = clippedLines.join('\n');
+  let clipped = rendered.length > MAX_LINES;
+
+  if (body.length > MAX_CHARS) {
+    body = body.slice(0, MAX_CHARS);
+    clipped = true;
+  }
+
+  if (clipped) {
+    body += `\n\n(... truncated; showing ${Math.min(rendered.length, MAX_LINES)} line(s))`;
+  }
+
   return `<search_result uri="${uri}" pattern="${pattern}" case_sensitive="${mode}" count="${matchCount}">\n${body}\n</search_result>`;
 }
 
 /**
- * Search a file or directory for a ripgrep pattern. Returns up to 50 matches with 2 lines of context.
- * When `globFilter` is provided, passes it via `--glob` so rg filters files within the directory.
+ * Search a file or directory for a ripgrep pattern.
+ *
+ * Notes:
+ * - `rg --max-count` is per-file. When searching directories this can still produce huge output.
+ *   This function applies an additional global cap + output byte cap to keep the conversation small.
+ * - When `globFilter` is provided, passes it via `--glob` so rg filters files within the directory.
  */
 export async function searchFileWithRg(
   absolutePath: string,
@@ -265,10 +287,13 @@ export async function searchFileWithRg(
   caseSensitive = true,
   globFilter?: string
 ): Promise<{ lines: string[]; matchCount: number; error?: string }> {
-  const MAX_MATCHES = 50;
+  const MAX_MATCHES_PER_FILE = 50;
+  const MAX_TOTAL_MATCH_LINES = 140; // across all files when searching a directory
   const CONTEXT_LINES = 2;
   const MAX_RESULT_LINE_CHARS = 400;
   const TRUNCATED_SUFFIX = ' [truncated]';
+  const MAX_STDOUT_BYTES = 96 * 1024;
+  const TIMEOUT_MS = 8000;
 
   const truncateSearchLine = (line: string): string => {
     if (line.length <= MAX_RESULT_LINE_CHARS) {
@@ -324,13 +349,15 @@ export async function searchFileWithRg(
       '--line-number',
       '--no-heading',
       caseSensitive ? '--case-sensitive' : '--ignore-case',
-      '--max-count', String(MAX_MATCHES),
+      '--max-count', String(MAX_MATCHES_PER_FILE),
       ...(globFilter ? ['--glob', globFilter] : []),
       '-e', pattern,
       absolutePath,
     ];
     let stdout = '';
     let stderr = '';
+    let stdoutBytes = 0;
+    let killedForCap = false;
     let proc: cp.ChildProcess;
     try {
       proc = cp.spawn(rgPath, args);
@@ -338,16 +365,32 @@ export async function searchFileWithRg(
       resolve({ lines: [], matchCount: 0, error: `spawn failed: ${e}` });
       return;
     }
-    proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stdout?.on('data', (d: Buffer) => {
+      stdoutBytes += d.length;
+      if (!killedForCap && stdoutBytes > MAX_STDOUT_BYTES) {
+        killedForCap = true;
+        try { proc.kill(); } catch { /* ignore */ }
+        return;
+      }
+      stdout += d.toString();
+    });
     proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code) => {
-      const rawLines = stdout.split('\n').filter(l => l.trim() !== '');
-      const lines = renderMatchesWithContext(rawLines);
-      const error = (code !== null && code > 1 && stderr.trim()) ? stderr.trim() : undefined;
-      resolve({ lines, matchCount: rawLines.length, error });
+      const allRawLines = stdout.split('\n').filter(l => l.trim() !== '');
+      const limitedRawLines = allRawLines.slice(0, MAX_TOTAL_MATCH_LINES);
+      const lines = renderMatchesWithContext(limitedRawLines);
+
+      const capError = killedForCap ? `output cap exceeded (${Math.round(MAX_STDOUT_BYTES / 1024)}KB)` : undefined;
+      const rgError = (code !== null && code > 1 && stderr.trim()) ? stderr.trim() : undefined;
+      const error = rgError ?? capError;
+
+      resolve({ lines, matchCount: allRawLines.length, error });
     });
     proc.on('error', (e) => resolve({ lines: [], matchCount: 0, error: `process error: ${e}` }));
-    setTimeout(() => { proc.kill(); resolve({ lines: [], matchCount: 0, error: 'timeout' }); }, 2000);
+    setTimeout(() => {
+      try { proc.kill(); } catch { /* ignore */ }
+      resolve({ lines: [], matchCount: 0, error: 'timeout' });
+    }, TIMEOUT_MS);
   });
 }
 

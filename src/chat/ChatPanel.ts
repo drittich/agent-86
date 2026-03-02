@@ -328,13 +328,100 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return new OpenAIProvider(baseUrl, model, apiKey, this._log);
   }
 
+  private _estimateMessageChars(messages: ChatMessage[]): number {
+    // Rough char-based budget; keeps this logic fast and dependency-free.
+    return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+  }
+
+  /**
+   * Compress large tool blocks in older history so sessions stay small.
+   * Keeps head+tail so tags remain visible.
+   */
+  private _summarizeToolHeavyMessage(content: string): string {
+    const HEAD = 3000;
+    const TAIL = 500;
+    if (content.length <= HEAD + TAIL + 200) {
+      return content;
+    }
+    const head = content.slice(0, HEAD);
+    const tail = content.slice(-TAIL);
+    return `${head}\n\n... [history truncated] ...\n\n${tail}`;
+  }
+
+  private _looksLikeToolPayload(content: string): boolean {
+    return (
+      content.includes('<search_result') ||
+      content.includes('<file_list') ||
+      content.includes('<file_chunk') ||
+      content.includes('<RUN_RESULT') ||
+      content.includes('<MOVE_RESULT') ||
+      content.includes('<DELETE_RESULT')
+    );
+  }
+
+  /**
+   * Mutate stored history: summarize older tool payloads so the persisted session
+   * doesn't keep growing indefinitely.
+   */
+  private _compactHistoryInPlace(): void {
+    const KEEP_LAST = 4;
+    const MAX_RAW_LEN = 4500;
+    for (let i = 0; i < Math.max(0, this._history.length - KEEP_LAST); i++) {
+      const m = this._history[i];
+      if (m.role !== 'user') {
+        continue;
+      }
+      if (!m.content || m.content.length < MAX_RAW_LEN) {
+        continue;
+      }
+      if (!this._looksLikeToolPayload(m.content)) {
+        continue;
+      }
+      this._history[i] = { ...m, content: this._summarizeToolHeavyMessage(m.content) };
+    }
+  }
+
+  /** Trim the message list by dropping oldest turns (after system) until under budget. */
+  private _trimMessagesToBudget(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
+    if (messages.length <= 2) {
+      return messages;
+    }
+
+    const KEEP_AT_LEAST = 3; // system + last user + last assistant (when present)
+    let total = this._estimateMessageChars(messages);
+
+    const trimmed = [...messages];
+    while (total > budgetChars && trimmed.length > KEEP_AT_LEAST) {
+      // Drop the oldest non-system message.
+      const removed = trimmed.splice(1, 1)[0];
+      total -= removed?.content?.length ?? 0;
+    }
+
+    if (total > budgetChars && trimmed.length === KEEP_AT_LEAST) {
+      // Still too big: hard-truncate the oldest remaining non-system message.
+      const idx = 1;
+      const sysLen = trimmed[0]?.content?.length ?? 0;
+      const tailLen = (trimmed[2]?.content?.length ?? 0) + (trimmed[1]?.content?.length ?? 0);
+      const remaining = Math.max(0, budgetChars - sysLen - (trimmed[2]?.content?.length ?? 0));
+      if (trimmed[idx]?.content && remaining > 0) {
+        trimmed[idx] = {
+          ...trimmed[idx],
+          content: trimmed[idx].content.slice(0, remaining) + '\n\n... [truncated to fit context budget] ...',
+        };
+      }
+    }
+
+    return trimmed;
+  }
+
   private _buildMessages(agentsMdContent?: string): ChatMessage[] {
     const behaviorInstructions = this._thinkingMode
-    ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
-    : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`;
-  const agentsMdSection = agentsMdContent
-    ? `\n\n## AGENTS.md\n${agentsMdContent}`
-    : '';
+      ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
+      : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`;
+    const agentsMdSection = agentsMdContent
+      ? `\n\n## AGENTS.md\n${agentsMdContent}`
+      : '';
+
     const systemPrompt: ChatMessage = {
       role: 'system',
       content: `You are a VS Code coding assistant.${agentsMdSection}
@@ -372,12 +459,33 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 <DELETE>\\nPATH: path/to/file\\n</DELETE>        moved to OS trash; only when user explicitly asks
 \`\`\``,
     };
-    const messages = [systemPrompt, ...this._history];
+
+    // Keep the sendable context small (models/servers often have hard 32KB-ish limits).
+    const CONTEXT_BUDGET_CHARS = 30_000;
+
+    // For send-only: summarize older tool payloads; keep the most recent few messages verbatim.
+    const KEEP_LAST_VERBOSE = 6;
+    const historyForSend = this._history.map((m, idx) => {
+      const fromEnd = this._history.length - idx;
+      if (fromEnd <= KEEP_LAST_VERBOSE) {
+        return m;
+      }
+      if (m.role === 'user' && m.content && m.content.length > 4500 && this._looksLikeToolPayload(m.content)) {
+        return { ...m, content: this._summarizeToolHeavyMessage(m.content) };
+      }
+      return m;
+    });
+
+    const rawMessages = [systemPrompt, ...historyForSend];
+    const messages = this._trimMessagesToBudget(rawMessages, CONTEXT_BUDGET_CHARS);
+
     this._log.appendLine(`[buildMessages] ${messages.length} message(s), thinkingMode=${this._thinkingMode}`);
+    this._log.appendLine(`[buildMessages] approxChars=${this._estimateMessageChars(messages)}/${CONTEXT_BUDGET_CHARS}`);
     for (const m of messages) {
       const preview = m.content.slice(0, 120).replace(/\n/g, '↵');
       this._log.appendLine(`  [${m.role}] ${preview}${m.content.length > 120 ? `… (${m.content.length} chars)` : ''}`);
     }
+
     return messages;
   }
 
@@ -412,35 +520,62 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       const chunkBlocks: string[] = [];
       const promptTokens = extractPromptTokens(prompt);
       const wsRoot = wsRoots[0] ?? '';
+
+      // Cap how much attachment context we inject into the initial user message.
+      const MAX_INJECTED_CHARS = 18_000;
+      let injectedChars = 0;
+      const resolvedPaths: string[] = [];
+
       for (const f of newFiles) {
+        if (injectedChars >= MAX_INJECTED_CHARS) {
+          this._log.appendLine(`[chunks] injection cap reached (${MAX_INJECTED_CHARS} chars) — skipping remaining attached files`);
+          break;
+        }
+
         const chunks = await this._getChunksForUri(f.relativePath, wsRoots);
+        let block: string | null = null;
+
         if (chunks && chunks.length > 0) {
           if (autoDetectedThisTurnUris.has(f.uri)) {
             const absolutePath = path.join(wsRoot, f.relativePath);
             this._postMessage({ type: 'status', text: `Searching ${f.relativePath}…` });
             const best = await selectBestChunk(chunks, absolutePath, promptTokens);
-            chunkBlocks.push(formatChunkBlock(best));
+            block = formatChunkBlock(best);
             initialChunkIds.push(best.chunkId);
             this._log.appendLine(`[chunks] sending ${best.uri} lines ${best.lineStart}-${best.lineEnd} (rg-scored, total=${best.totalChunks})`);
           } else {
             const first = chunks[0];
-            chunkBlocks.push(formatChunkBlock(first));
+            block = formatChunkBlock(first);
             initialChunkIds.push(first.chunkId);
             this._log.appendLine(`[chunks] sending ${first.uri} lines ${first.lineStart}-${first.lineEnd} (manual attach, initial=1, total=${first.totalChunks})`);
           }
         } else {
           // Fallback for unreadable/unsaved files
-          chunkBlocks.push(
-            `<file path="${f.relativePath}" language="${f.languageId}">\n${f.content}\n</file>`
-          );
+          block = `<file path="${f.relativePath}" language="${f.languageId}">\n${f.content}\n</file>`;
         }
+
+        if (!block) {
+          continue;
+        }
+
+        if (injectedChars + block.length > MAX_INJECTED_CHARS) {
+          this._log.appendLine(`[chunks] skipping ${f.relativePath} — would exceed injection cap (${MAX_INJECTED_CHARS} chars)`);
+          break;
+        }
+
+        chunkBlocks.push(block);
+        injectedChars += block.length;
+        resolvedPaths.push(`  - ${f.relativePath}`);
         this._injectedFileUris.add(f.uri);
       }
+
       if (chunkBlocks.length > 0) {
-        this._postMessage({ type: 'status', text: `Sending chunks for ${newFiles.length} file(s)…` });
+        this._postMessage({ type: 'status', text: `Sending chunks for ${chunkBlocks.length} file(s)…` });
         // Append resolved paths so the model uses exact URIs in search_file / request_chunks
-        const pathNote = newFiles.map(f => `  - ${f.relativePath}`).join('\n');
-        userContent = `${chunkBlocks.join('\n\n')}\n\n${prompt}\n\n<resolved_paths>\n${pathNote}\n</resolved_paths>`;
+        const pathNote = resolvedPaths.join('\n');
+        userContent = `${chunkBlocks.join('\n\n')}\n\n${prompt}` +
+          `\n\n<resolved_paths>\n${pathNote}\n</resolved_paths>` +
+          (newFiles.length > chunkBlocks.length ? `\n\n<context_note>Attachment context capped to stay within budget.</context_note>` : '');
       }
     }
 
@@ -554,57 +689,75 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         }
 
         // Check if the model is requesting file searches
-        const searchRequests = parseSearchRequests(fullResponse);
-        if (searchRequests && searchRound < MAX_SEARCH_ROUNDS) {
-          searchRound++;
-          this._log.appendLine(`[search] round ${searchRound}/${MAX_SEARCH_ROUNDS}, ${searchRequests.length} request(s)`);
-          this._postMessage({ type: 'status', text: `Searching ${searchRequests.length} file(s)…` });
-          const parts: string[] = [];
-          for (const req of searchRequests) {
-            const caseSensitive = req.caseSensitive ?? true;
-            const isGlob = /[*?{]/.test(req.uri);
-            let absolutePath: string;
-            let displayUri: string;
-            let globFilter: string | undefined;
-            if (isGlob) {
-              // Extract the non-glob prefix directory (e.g. "src/**/*" → "src", "backend/**/*" → "backend")
-              const slashIdx = req.uri.search(/[*?{]/);
-              const prefix = req.uri.slice(0, slashIdx).replace(/[\\/]+$/, '');
-              const wsRoot = wsRoots[0] ?? '';
-              absolutePath = prefix ? path.join(wsRoot, prefix) : wsRoot;
-              // Verify the directory exists; fall back to workspace root
-              try { await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath)); }
-              catch { absolutePath = wsRoot; }
-              // Only pass --glob if the pattern specifies a file extension filter (e.g. src/**/*.ts).
-              // For generic patterns like src/**/* the directory root alone is sufficient.
-              globFilter = /\.\w+$/.test(req.uri) ? req.uri : undefined;
-              displayUri = req.uri;
-            } else {
-              const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
-              absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
-              displayUri = resolved?.relativePath ?? req.uri;
-            }
-            const { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
-              absolutePath,
-              req.pattern,
-              caseSensitive,
-              globFilter
-            );
-            if (searchError) {
-              this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
-            }
-            this._log.appendLine(
-              `[search] "${req.pattern}" in ${displayUri} (${absolutePath})` +
-              ` [case_sensitive=${caseSensitive}] → ${matchCount} match(es)` +
-              `${searchError ? ' (error)' : ''}`
-            );
-            parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, matchCount, searchError, caseSensitive));
-          }
-          this._history.push({ role: 'user', content: parts.join('\n\n') });
-          continue;
-        }
+         const searchRequests = parseSearchRequests(fullResponse);
+         if (searchRequests && searchRound < MAX_SEARCH_ROUNDS) {
+           searchRound++;
 
-        if (searchRequests) {
+           // Hard cap: avoid a model asking for many searches and inflating the next request.
+           const MAX_SEARCH_REQUESTS_PER_ROUND = 2;
+           const effectiveSearchRequests = searchRequests.slice(0, MAX_SEARCH_REQUESTS_PER_ROUND);
+           const capped = effectiveSearchRequests.length !== searchRequests.length;
+
+           this._log.appendLine(
+             `[search] round ${searchRound}/${MAX_SEARCH_ROUNDS}, ${effectiveSearchRequests.length}/${searchRequests.length} request(s)` +
+             (capped ? ' (capped)' : '')
+           );
+           this._postMessage({ type: 'status', text: `Searching ${effectiveSearchRequests.length} file(s)…` });
+
+           const parts: string[] = [];
+           for (const req of effectiveSearchRequests) {
+             const caseSensitive = req.caseSensitive ?? true;
+             const isGlob = /[*?{]/.test(req.uri);
+             let absolutePath: string;
+             let displayUri: string;
+             let globFilter: string | undefined;
+             if (isGlob) {
+               // Extract the non-glob prefix directory (e.g. "src/**/*" → "src", "backend/**/*" → "backend")
+               const slashIdx = req.uri.search(/[*?{]/);
+               const prefix = req.uri.slice(0, slashIdx).replace(/[\\/]+$/, '');
+               const wsRoot = wsRoots[0] ?? '';
+               absolutePath = prefix ? path.join(wsRoot, prefix) : wsRoot;
+               // Verify the directory exists; fall back to workspace root
+               try { await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath)); }
+               catch { absolutePath = wsRoot; }
+               // Only pass --glob if the pattern specifies a file extension filter (e.g. src/**/*.ts).
+               // For generic patterns like src/**/* the directory root alone is sufficient.
+               globFilter = /\.\w+$/.test(req.uri) ? req.uri : undefined;
+               displayUri = req.uri;
+             } else {
+               const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
+               absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
+               displayUri = resolved?.relativePath ?? req.uri;
+             }
+
+             const { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
+               absolutePath,
+               req.pattern,
+               caseSensitive,
+               globFilter
+             );
+
+             if (searchError) {
+               this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
+             }
+             this._log.appendLine(
+               `[search] "${req.pattern}" in ${displayUri} (${absolutePath})` +
+               ` [case_sensitive=${caseSensitive}] → ${matchCount} match(es)` +
+               `${searchError ? ' (error)' : ''}`
+             );
+             parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, matchCount, searchError, caseSensitive));
+           }
+
+           if (capped) {
+             parts.push(
+               `<tool_note>Search requests capped to ${MAX_SEARCH_REQUESTS_PER_ROUND} per round to stay within context budget.</tool_note>`
+             );
+           }
+
+           this._history.push({ role: 'user', content: parts.join('\n\n') });
+           continue;
+         }
+if (searchRequests) {
           this._log.appendLine(`[search] retry limit reached`);
           this._postMessage({ type: 'status', text: 'Search request limit reached.' });
           // Don't break yet - let the model provide its final response with what it has
@@ -1155,6 +1308,10 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
   }
 
   private _saveCurrentSession(): void {
+    // Keep persisted history lean: tool outputs (search results, file lists, etc.)
+    // can be large and quickly exceed local model/server limits.
+    this._compactHistoryInPlace();
+
     this._currentSession = {
       ...this._currentSession,
       messages: this._history,
