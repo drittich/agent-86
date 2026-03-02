@@ -4,24 +4,38 @@ import * as fs from 'fs';
 import * as nodePath from 'path';
 import { extractJsonCandidates } from './editParser';
 
-// Injected at build time by esbuild define — absolute path to node_modules rg binary.
-declare const __RG_DEV_PATH__: string;
-
-// Active rg binary path. initRgPath() overrides this when a packaged binary exists.
-let _rgPath: string = __RG_DEV_PATH__;
+// Active rg binary path. initRgPath() sets this at runtime.
+let _rgPath: string | null = null;
 
 /**
  * Call once on extension activation with context.extensionPath.
- * Switches to the binary bundled in the packaged VSIX when available.
+ * Resolves rg binary in order:
+ * 1. Bundled in <extensionPath>/bin/rg[.exe] (for packaged VSIX)
+ * 2. Extension's node_modules/@vscode/ripgrep/bin/rg[.exe]
  * Returns a description of the resolved path for logging.
  */
 export function initRgPath(extensionPath: string): string {
-  const bundled = nodePath.join(extensionPath, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg');
+  const exeName = process.platform === 'win32' ? 'rg.exe' : 'rg';
+  
+  // 1. Check for bundled binary (packaged VSIX)
+  const bundled = nodePath.join(extensionPath, 'bin', exeName);
   if (fs.existsSync(bundled)) {
     _rgPath = bundled;
     return `bundled: ${_rgPath}`;
   }
-  return `dev: ${_rgPath}`;
+  
+  // 2. Check extension's own node_modules
+  const nodeModulesRg = nodePath.join(
+    extensionPath, 'node_modules', '@vscode', 'ripgrep', 'bin', exeName
+  );
+  if (fs.existsSync(nodeModulesRg)) {
+    _rgPath = nodeModulesRg;
+    return `node_modules: ${_rgPath}`;
+  }
+  
+  // 3. Fallback: hope rg is on PATH
+  _rgPath = 'rg';
+  return 'fallback: rg (on PATH)';
 }
 
 /** Chunk size in lines. */
@@ -301,6 +315,11 @@ export async function searchFileWithRg(
   };
 
   return new Promise(resolve => {
+    if (!_rgPath) {
+      resolve({ lines: [], matchCount: 0, error: 'rg binary not initialized' });
+      return;
+    }
+    const rgPath = _rgPath; // Capture for closure
     const args = [
       '--line-number',
       '--no-heading',
@@ -314,7 +333,7 @@ export async function searchFileWithRg(
     let stderr = '';
     let proc: cp.ChildProcess;
     try {
-      proc = cp.spawn(_rgPath, args);
+      proc = cp.spawn(rgPath, args);
     } catch (e) {
       resolve({ lines: [], matchCount: 0, error: `spawn failed: ${e}` });
       return;
@@ -494,6 +513,8 @@ export async function findBestLineWithRg(
   tokens: string[]
 ): Promise<number | null> {
   if (tokens.length === 0) { return null; }
+  if (!_rgPath) { return null; }
+  const rgPath = _rgPath; // Capture for closure
   const pattern = tokens.slice(0, 10).join('|');
   return new Promise(resolve => {
     const args = [
@@ -507,7 +528,7 @@ export async function findBestLineWithRg(
     let stdout = '';
     let proc: cp.ChildProcess;
     try {
-      proc = cp.spawn(_rgPath, args);
+      proc = cp.spawn(rgPath, args);
     } catch {
       resolve(null);
       return;

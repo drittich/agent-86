@@ -691,6 +691,17 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 
         if (fullResponse.trimStart().startsWith('{')) {
           this._log.appendLine(`[stream] unrecognized JSON response: ${fullResponse.slice(0, 300)}`);
+          // Provide a small, explicit correction so models that default to tool-JSON
+          // don't get stuck emitting unparseable/unsupported objects.
+          this._history.push({
+            role: 'user',
+            content:
+              '<tool_guidance>Return either plain text OR exactly one of these JSON objects: ' +
+              '{"search_file":[{"uri":"path/or/glob","pattern":"...","case_sensitive":false}]}, ' +
+              '{"request_files":[{"glob":"**/*.ts","reason":"..."}]}, ' +
+              '{"request_chunks":[{"uri":"path","preferred":{"near_line":1,"max_chunks":1}}]}. ' +
+              'Do not output other JSON keys.</tool_guidance>',
+          });
         }
         finalResponse = fullResponse;
         break;

@@ -46,12 +46,6 @@ async function build() {
     incrementPatchVersion();
   }
 
-  // Absolute path to rg binary in node_modules, baked in at build time.
-  const rgDevPath = path.join(
-    __dirname, 'node_modules', '@vscode', 'ripgrep', 'bin',
-    process.platform === 'win32' ? 'rg.exe' : 'rg'
-  );
-
   // Extension host bundle (Node/CJS, external: vscode)
   const extensionCtx = await esbuild.context({
     ...baseOptions,
@@ -60,7 +54,6 @@ async function build() {
     platform: 'node',
     format: 'cjs',
     external: ['vscode'],
-    define: { '__RG_DEV_PATH__': JSON.stringify(rgDevPath) },
   });
 
   // Webview bundle (browser)
@@ -71,6 +64,30 @@ async function build() {
     platform: 'browser',
     format: 'iife',
   });
+
+  // Ensure ripgrep is available in packaged extensions.
+  // `.vscodeignore` excludes node_modules, so we copy `@vscode/ripgrep`'s binary
+  // into `<extensionRoot>/bin/rg[.exe]`, which `initRgPath()` checks first.
+  function bundleRipgrepBinary() {
+    const exeName = process.platform === 'win32' ? 'rg.exe' : 'rg';
+    const src = path.join(__dirname, 'node_modules', '@vscode', 'ripgrep', 'bin', exeName);
+    const destDir = path.join(__dirname, 'bin');
+    const dest = path.join(destDir, exeName);
+
+    try {
+      if (!fs.existsSync(src)) {
+        console.warn(`[build] ripgrep binary not found at ${src} (search_file will fall back to PATH)`);
+        return;
+      }
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(src, dest);
+      console.log(`[build] bundled ripgrep: ${path.relative(__dirname, dest)}`);
+    } catch (err) {
+      console.warn(`[build] failed to bundle ripgrep: ${String(err)}`);
+    }
+  }
+
+  bundleRipgrepBinary();
 
   if (isWatch) {
     await Promise.all([extensionCtx.watch(), webviewCtx.watch()]);

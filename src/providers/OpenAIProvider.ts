@@ -106,15 +106,24 @@ export class OpenAIProvider implements IProvider {
           try {
             const json = JSON.parse(data);
             const deltaObj = json?.choices?.[0]?.delta;
-            
-            const content = deltaObj?.content;
+
+            // Some OpenAI-compatible servers (and local models) stream tokens under
+            // `reasoning_content` instead of `content`. Treat it as user-visible text
+            // when `content` is absent so the UI isn't blank.
+            const content =
+              (typeof deltaObj?.content === 'string' && deltaObj.content.length > 0)
+                ? (deltaObj.content as string)
+                : (typeof deltaObj?.reasoning_content === 'string' && deltaObj.reasoning_content.length > 0)
+                  ? (deltaObj.reasoning_content as string)
+                  : undefined;
 
             if (typeof content === 'string' && content.length > 0) {
               deltaCount++;
               onEvent({ type: 'delta', content });
             }
-            if (deltaObj && !content && !deltaObj?.reasoning_content) {
-              // Log delta objects that have no content (may have other fields like role, refusal)
+
+            if (deltaObj && !content) {
+              // Log delta objects that have no textual content (may have other fields like role, refusal)
               this.log?.appendLine(`[OpenAIProvider] delta without content: ${JSON.stringify(deltaObj)}`);
             }
             // Log the full JSON structure for the first few frames to understand the format
