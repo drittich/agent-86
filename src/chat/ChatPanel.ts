@@ -619,8 +619,16 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 
     const MAX_FILE_ROUNDS = 4;
     let fileRound = 0;
-    const MAX_CHUNK_ROUNDS = 4;
+
+    // Chunk requests are often iterative (line_range tweaks, follow-up context).
+    // Allow a bit more headroom than searches, but still keep a hard cap.
+    const MAX_CHUNK_ROUNDS = 6;
     let chunkRound = 0;
+    // If the model keeps requesting chunks we can't provide (bad path / outside workspace / already sent),
+    // don't burn a real chunk round, but also don't allow infinite loops.
+    const MAX_CHUNK_NOOP_ROUNDS = 3;
+    let chunkNoOpRounds = 0;
+
     const MAX_SEARCH_ROUNDS = 4;
     let searchRound = 0;
     const MAX_SEARCH_FIRST_REDIRECTS = 2;
@@ -734,38 +742,51 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 
            const parts: string[] = [];
            for (const req of effectiveSearchRequests) {
-             const caseSensitive = req.caseSensitive ?? true;
-             const isGlob = /[*?{]/.test(req.uri);
-             let absolutePath: string;
-             let displayUri: string;
-             let globFilter: string | undefined;
-             if (isGlob) {
-               // Extract the non-glob prefix directory (e.g. "src/**/*" → "src", "backend/**/*" → "backend")
-               const slashIdx = req.uri.search(/[*?{]/);
-               const prefix = req.uri.slice(0, slashIdx).replace(/[\\/]+$/, '');
-               const wsRoot = wsRoots[0] ?? '';
-               absolutePath = prefix ? path.join(wsRoot, prefix) : wsRoot;
-               // Verify the directory exists; fall back to workspace root
-               try { await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath)); }
-               catch { absolutePath = wsRoot; }
-               // Only pass --glob if the pattern specifies a file extension filter (e.g. src/**/*.ts).
-               // For generic patterns like src/**/* the directory root alone is sufficient.
-               globFilter = /\.\w+$/.test(req.uri) ? req.uri : undefined;
-               displayUri = req.uri;
-             } else {
-               const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
-               absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
-               displayUri = resolved?.relativePath ?? req.uri;
-             }
+              const caseSensitive = req.caseSensitive ?? true;
+              const isGlob = /[*?{]/.test(req.uri);
+              let absolutePath: string;
+              let displayUri: string;
+              let globFilter: string | undefined;
+              if (isGlob) {
+                // Extract the non-glob prefix directory (e.g. "src/**/*" → "src", "backend/**/*" → "backend")
+                const slashIdx = req.uri.search(/[*?{]/);
+                const prefix = req.uri.slice(0, slashIdx).replace(/[\\/]+$/, '');
+                const wsRoot = wsRoots[0] ?? '';
+                absolutePath = prefix ? path.join(wsRoot, prefix) : wsRoot;
+                // Verify the directory exists; fall back to workspace root
+                try { await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath)); }
+                catch { absolutePath = wsRoot; }
+                // Only pass --glob if the pattern specifies a file extension filter (e.g. src/**/*.ts).
+                // For generic patterns like src/**/* the directory root alone is sufficient.
+                globFilter = /\.\w+$/.test(req.uri) ? req.uri : undefined;
+                displayUri = req.uri;
+              } else {
+                const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
+                absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
+                displayUri = resolved?.relativePath ?? req.uri;
+              }
 
-             const { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
-               absolutePath,
-               req.pattern,
-               caseSensitive,
-               globFilter
-             );
+              // Directory-wide searches can produce huge ripgrep output and hit the 96KB stdout cap.
+              // Apply a conservative default file glob unless the model already supplied one.
+              if (!globFilter) {
+                try {
+                  const stat = await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath));
+                  if (stat.type === vscode.FileType.Directory) {
+                    globFilter = '**/*.{ts,tsx,js,jsx,mjs,cjs,cs,py,java,kt,go,rs,cpp,c,h,hpp,fs,fsx}';
+                    this._log.appendLine(`[search] default globFilter applied for directory search: ${globFilter}`);
+                  }
+                } catch {
+                  // ignore
+                }
+              }
 
-             if (searchError) {
+              const { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
+                absolutePath,
+                req.pattern,
+                caseSensitive,
+                globFilter
+              );
+if (searchError) {
                this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
              }
              this._log.appendLine(
@@ -816,9 +837,18 @@ if (searchRequests) {
           continue;
         }
 
-        if (chunkRequests && chunkRound < MAX_CHUNK_ROUNDS) {
-          chunkRound++;
-          this._log.appendLine(`[chunks] model requested ${chunkRequests.length} chunk(s), round ${chunkRound}/${MAX_CHUNK_ROUNDS}`);
+        if (chunkRequests) {
+          if (chunkRound >= MAX_CHUNK_ROUNDS) {
+            // Hard limit reached while model still wants more.
+            this._log.appendLine(`[chunks] retry limit reached`);
+            this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
+            finalResponse = fullResponse;
+            break;
+          }
+
+          this._log.appendLine(
+            `[chunks] model requested ${chunkRequests.length} chunk(s), round ${chunkRound + 1}/${MAX_CHUNK_ROUNDS}`
+          );
           this._postMessage({ type: 'status', text: `Fetching ${chunkRequests.length} requested chunk(s)…` });
 
           const parts: string[] = [];
@@ -826,9 +856,10 @@ if (searchRequests) {
             const chunks = await this._getChunksForUri(req.uri, wsRoots);
             if (!chunks) {
               this._log.appendLine(`[chunks] could not read "${req.uri}" — skipping`);
-              parts.push(`<!-- Could not read chunks for "${req.uri}" — file not found or outside workspace -->`);
+              // Do not count this as a successful chunk delivery.
               continue;
             }
+
             const maxNew = req.preferred?.max_chunks ?? 2;
             let newSent = 0;
             const selected = this._selectChunksForRequest(chunks, req.preferred);
@@ -836,6 +867,7 @@ if (searchRequests) {
               const { start, end } = req.preferred.line_range;
               this._log.appendLine(`[chunks] using line_range ${start}-${end} for "${req.uri}"`);
             }
+
             for (const chunk of selected) {
               if (sentChunkIds.has(chunk.chunkId)) {
                 this._log.appendLine(`[chunks] skipping already-sent chunk ${chunk.chunkId}`);
@@ -851,23 +883,36 @@ if (searchRequests) {
               newSent++;
             }
           }
+
           if (parts.length === 0) {
-            this._log.appendLine(`[chunks] all requested chunks already sent — stopping chunk loop`);
-            this._postMessage({ type: 'status', text: 'No new chunks to send. Try specifying near_line/line_range or attaching more of the file.' });
-            finalResponse = fullResponse;
-            break;
+            chunkNoOpRounds++;
+            this._log.appendLine(`[chunks] no new chunks to send (noop ${chunkNoOpRounds}/${MAX_CHUNK_NOOP_ROUNDS})`);
+            this._postMessage({
+              type: 'status',
+              text: 'No new chunks to send. Try specifying near_line/line_range or attaching more of the file.',
+            });
+
+            if (chunkNoOpRounds >= MAX_CHUNK_NOOP_ROUNDS) {
+              // Avoid looping forever; let the model respond with what it has.
+              finalResponse = fullResponse;
+              break;
+            }
+
+            // Give the model another chance to adjust its request (without consuming a chunk round).
+            this._history.push({
+              role: 'user',
+              content:
+                '<tool_guidance>No new chunks were available for your request. ' +
+                'If you need a different section, request a different near_line/line_range, or provide a workspace-relative URI.</tool_guidance>',
+            });
+            continue;
           }
+
+          // Successful chunk delivery.
+          chunkNoOpRounds = 0;
+          chunkRound++;
           this._history.push({ role: 'user', content: parts.join('\n\n') });
           continue; // stream again with expanded context
-        }
-
-        if (chunkRequests) {
-          // Limit reached while model still wants more
-          this._log.appendLine(`[chunks] retry limit reached`);
-          this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
-          // Don't break yet - let the model provide its final response with what it has
-          finalResponse = fullResponse;
-          break;
         }
 
         if (fullResponse.trimStart().startsWith('{')) {
