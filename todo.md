@@ -113,11 +113,11 @@
   - [x] Webview: `webview-ui/main.ts` → `dist/webview.js` (browser)
 - [x] Scripts: `build`, `watch`, `typecheck`, `vscode:prepublish`
 - [x] `.vscodeignore` and `.gitignore`
-- [x] VS Code settings schema under `agentCoder.*`:
-  - [x] `agentCoder.baseUrl`
-  - [x] `agentCoder.model`
-  - [x] `agentCoder.maxContextTokens`
-  - [x] `agentCoder.provider`
+- [x] VS Code settings schema under `agent86.*`:
+  - [x] `agent86.baseUrl`
+  - [x] `agent86.model`
+  - [x] `agent86.maxContextTokens`
+  - [x] `agent86.provider`
   - [x] API key storage via `context.secrets`
 
 ## Testing

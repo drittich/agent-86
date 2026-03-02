@@ -94,12 +94,12 @@ Keep a thin provider layer so you can swap local OpenAI-compatible servers or ad
 ---
 
 ## Config Defaults
-Define VS Code settings under something like `agentCoder.*`:
+Define VS Code settings under something like `agent86.*`:
 
-- `agentCoder.baseUrl` (default `http://127.0.0.1:8083/v1`)
-- `agentCoder.model` (default `OpenAI-20B-NEO-CODEPlus-Uncensored-IQ4_NL.gguf`)
-- `agentCoder.maxContextTokens` (default `16384`)
-- `agentCoder.provider` (`openai-compatible` | `anthropic`)
+- `agent86.baseUrl` (default `http://127.0.0.1:8083/v1`)
+- `agent86.model` (default `OpenAI-20B-NEO-CODEPlus-Uncensored-IQ4_NL.gguf`)
+- `agent86.maxContextTokens` (default `16384`)
+- `agent86.provider` (`openai-compatible` | `anthropic`)
 - API keys stored in `context.secrets` (even if local doesn’t need it, keeps the interface consistent)
 
 ---

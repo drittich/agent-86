@@ -85,7 +85,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._reloadTokenizer();
     context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration(e => {
-        if (e.affectsConfiguration('agentCoder.tokenizerModel')) {
+        if (e.affectsConfiguration('agent86.tokenizerModel')) {
           this._reloadTokenizer();
         }
       })
@@ -123,7 +123,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._view = webviewView;
 
     const version = this.context.extension.packageJSON.version as string;
-    webviewView.title = `Agent 86 v${version}`;
+    webviewView.title = `v${version}`;
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -158,7 +158,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     if (this._view) {
       this._view.show(true);
     } else {
-      vscode.commands.executeCommand('agenticCoder.panel.focus');
+      vscode.commands.executeCommand('agent86.panel.focus');
     }
   }
 
@@ -337,7 +337,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _reloadTokenizer(): void {
-    const cfg = vscode.workspace.getConfiguration('agentCoder');
+    const cfg = vscode.workspace.getConfiguration('agent86');
     const modelId = cfg.get<string>('tokenizerModel')?.trim() ?? '';
     if (modelId) {
       this._tokenCounter.load(modelId);
@@ -345,7 +345,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _getProvider(): OpenAIProvider {
-    const cfg = vscode.workspace.getConfiguration('agentCoder');
+    const cfg = vscode.workspace.getConfiguration('agent86');
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
     const apiKey = cfg.get<string>('apiKey') ?? 'local';

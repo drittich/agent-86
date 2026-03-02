@@ -172,24 +172,24 @@ Then rebuild and repackage.
 Configure the extension in VS Code settings:
 
 1. Open Settings (`Ctrl+,` or `Cmd+,`)
-2. Search for "Agentic Coder"
+2. Search for "Agent 86"
 3. Configure the following options:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `agentCoder.baseUrl` | Base URL for the OpenAI-compatible LLM endpoint | `http://127.0.0.1:8083/v1` |
-| `agentCoder.model` | Model name to use | `OpenAI-20B-NEO-CODEPlus-Uncensored-IQ4_NL.gguf` |
-| `agentCoder.maxContextTokens` | Maximum context tokens for the model | `16384` |
-| `agentCoder.provider` | LLM provider type (`openai-compatible` or `anthropic`) | `openai-compatible` |
+| `agent86.baseUrl` | Base URL for the OpenAI-compatible LLM endpoint | `http://127.0.0.1:8083/v1` |
+| `agent86.model` | Model name to use | `OpenAI-20B-NEO-CODEPlus-Uncensored-IQ4_NL.gguf` |
+| `agent86.maxContextTokens` | Maximum context tokens for the model | `16384` |
+| `agent86.provider` | LLM provider type (`openai-compatible` or `anthropic`) | `openai-compatible` |
 
 Alternatively, add to your `settings.json`:
 
 ```json
 {
-  "agentCoder.baseUrl": "http://127.0.0.1:8083/v1",
-  "agentCoder.model": "your-model-name",
-  "agentCoder.maxContextTokens": 16384,
-  "agentCoder.provider": "openai-compatible"
+  "agent86.baseUrl": "http://127.0.0.1:8083/v1",
+  "agent86.model": "your-model-name",
+  "agent86.maxContextTokens": 16384,
+  "agent86.provider": "openai-compatible"
 }
 ```
 
@@ -198,7 +198,7 @@ Alternatively, add to your `settings.json`:
 ### Opening the Panel
 
 - Click the robot icon in the Activity Bar (left sidebar)
-- Or run the command: **Agentic Coder: Open Panel** (`Ctrl+Shift+P` → search for "Agentic")
+- Or run the command: **Agent 86: Open Panel** (`Ctrl+Shift+P` → search for "Agentic")
 
 ### Starting a Conversation
 
@@ -208,13 +208,13 @@ Alternatively, add to your `settings.json`:
 
 ### Attaching Files
 
-1. Click the paperclip icon or run **Agentic Coder: Attach Files**
+1. Click the paperclip icon or run **Agent 86: Attach Files**
 2. Select one or more files from the workspace
 3. File contents will be included as context in your first message
 
 ### Starting a New Session
 
-- Click the **New Session** button or run **Agentic Coder: New Session**
+- Click the **New Session** button or run **Agent 86: New Session**
 - This clears the conversation history and starts fresh
 
 ### Approval Workflow
@@ -248,8 +248,8 @@ The assistant can use special block syntax to perform actions:
 ### Connection Errors
 
 1. Verify your LLM server is running
-2. Check the `agentCoder.baseUrl` setting matches your server URL
-3. Ensure the model name in `agentCoder.model` matches your server's model
+2. Check the `agent86.baseUrl` setting matches your server URL
+3. Ensure the model name in `agent86.model` matches your server's model
 
 ### Session Not Persisting
 
