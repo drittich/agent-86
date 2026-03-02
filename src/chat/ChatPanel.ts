@@ -16,6 +16,7 @@ import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTo
 import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
 import { parseDeleteBlocks, resolveDeleteBlockPath, deleteFile, formatDeleteResult } from '../tools/DeleteFileTool';
 import { ConfigManager, Session } from '../config/ConfigManager';
+import { TokenCounter } from '../tools/TokenCounter';
 
 const DIFF_SCHEME = 'agentic-diff';
 
@@ -62,6 +63,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _approvalCounter = 0;
   private readonly _configManager: ConfigManager;
   private _currentSession: Session;
+  private readonly _tokenCounter: TokenCounter;
 
   // Backpressure handling: buffer deltas when webview is hidden
   private _isViewVisible = true;
@@ -78,6 +80,17 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, this._diffProvider)
     );
     this._configManager = new ConfigManager(context);
+
+    this._tokenCounter = new TokenCounter(context.globalStorageUri.fsPath, log);
+    this._reloadTokenizer();
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('agentCoder.tokenizerModel')) {
+          this._reloadTokenizer();
+        }
+      })
+    );
+
     // Restore last session, or start a fresh one
     const restored = this._configManager.loadLastSession();
     if (restored) {
@@ -318,6 +331,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const half = Math.floor(maxChunks / 2);
     const start = Math.max(0, bestIdx - half);
     return chunks.slice(start, start + maxChunks);
+  }
+
+  private _reloadTokenizer(): void {
+    const cfg = vscode.workspace.getConfiguration('agentCoder');
+    const modelId = cfg.get<string>('tokenizerModel')?.trim() ?? '';
+    if (modelId) {
+      this._tokenCounter.load(modelId);
+    }
   }
 
   private _getProvider(): OpenAIProvider {
@@ -614,8 +635,12 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         const provider = this._getProvider();
 
         this._log.appendLine(`[stream] starting request (chunk round ${chunkRound})`);
+        const messages = this._buildMessages(agentsMdContent);
+        const contextTokens = await this._tokenCounter.countMessages(messages);
+        const exact = this._tokenCounter.isReady;
+        this._postMessage({ type: 'status', text: `Sending ${exact ? '' : '~'}${contextTokens.toLocaleString()} tokens…` });
         await provider.stream(
-          this._buildMessages(agentsMdContent),
+          messages,
           this._abortController.signal,
           (event) => {
             if (event.type === 'delta') {

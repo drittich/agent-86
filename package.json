@@ -78,6 +78,11 @@
           "default": 16384,
           "description": "Maximum context tokens for the model"
         },
+        "agentCoder.tokenizerModel": {
+          "type": "string",
+          "default": "Qwen/Qwen3-8B",
+          "description": "HuggingFace model ID used to load the tokenizer for accurate token counting (e.g. Qwen/Qwen3-8B). Leave empty to use the char/4 heuristic."
+        },
         "agentCoder.provider": {
           "type": "string",
           "enum": [
@@ -109,6 +114,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@huggingface/tokenizers": "^0.1.2",
     "@types/dompurify": "^3.0.5",
     "@vscode/ripgrep": "^1.15.9",
     "dompurify": "^3.3.1",
