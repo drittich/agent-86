@@ -242,12 +242,14 @@ export function formatSearchResultBlock(
 }
 
 /**
- * Search a file for a ripgrep pattern. Returns up to 50 matches with 2 lines of context.
+ * Search a file or directory for a ripgrep pattern. Returns up to 50 matches with 2 lines of context.
+ * When `globFilter` is provided, passes it via `--glob` so rg filters files within the directory.
  */
 export async function searchFileWithRg(
   absolutePath: string,
   pattern: string,
-  caseSensitive = true
+  caseSensitive = true,
+  globFilter?: string
 ): Promise<{ lines: string[]; matchCount: number; error?: string }> {
   const MAX_MATCHES = 50;
   const CONTEXT_LINES = 2;
@@ -302,6 +304,7 @@ export async function searchFileWithRg(
       '--no-heading',
       caseSensitive ? '--case-sensitive' : '--ignore-case',
       '--max-count', String(MAX_MATCHES),
+      ...(globFilter ? ['--glob', globFilter] : []),
       '-e', pattern,
       absolutePath,
     ];

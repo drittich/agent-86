@@ -562,13 +562,33 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           const parts: string[] = [];
           for (const req of searchRequests) {
             const caseSensitive = req.caseSensitive ?? true;
-            const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
-            const absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
-            const displayUri = resolved?.relativePath ?? req.uri;
+            const isGlob = /[*?{]/.test(req.uri);
+            let absolutePath: string;
+            let displayUri: string;
+            let globFilter: string | undefined;
+            if (isGlob) {
+              // Extract the non-glob prefix directory (e.g. "src/**/*" → "src", "backend/**/*" → "backend")
+              const slashIdx = req.uri.search(/[*?{]/);
+              const prefix = req.uri.slice(0, slashIdx).replace(/[\\/]+$/, '');
+              const wsRoot = wsRoots[0] ?? '';
+              absolutePath = prefix ? path.join(wsRoot, prefix) : wsRoot;
+              // Verify the directory exists; fall back to workspace root
+              try { await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath)); }
+              catch { absolutePath = wsRoot; }
+              // Only pass --glob if the pattern specifies a file extension filter (e.g. src/**/*.ts).
+              // For generic patterns like src/**/* the directory root alone is sufficient.
+              globFilter = /\.\w+$/.test(req.uri) ? req.uri : undefined;
+              displayUri = req.uri;
+            } else {
+              const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
+              absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
+              displayUri = resolved?.relativePath ?? req.uri;
+            }
             const { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
               absolutePath,
               req.pattern,
-              caseSensitive
+              caseSensitive,
+              globFilter
             );
             if (searchError) {
               this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
