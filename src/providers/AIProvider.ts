@@ -1,5 +1,5 @@
-import { streamText } from 'ai';
-import { IProvider, ChatMessage, ProviderEvent, ILogger } from './IProvider';
+import { streamText, ToolSet } from 'ai';
+import { IProvider, ChatMessage, ProviderEvent, StreamOptions } from './IProvider';
 import { ProviderConfig } from '../config/ConfigManager';
 import { createProvider, AIProviderInstance } from './ProviderFactory';
 
@@ -7,23 +7,27 @@ import { createProvider, AIProviderInstance } from './ProviderFactory';
  * AIProvider wraps the Vercel AI SDK to provide streaming chat completions.
  * Supports multiple providers (OpenAI, Anthropic, OpenRouter, OpenAI-compatible)
  * via auto-detection from the base URL.
+ *
+ * When `toolUse` is enabled and tools are provided, uses native tool calling via
+ * `fullStream` and emits `tool-call` events. Falls back to text-only streaming
+ * when `toolUse` is false (for models that don't support tool calling).
  */
 export class AIProvider implements IProvider {
   private readonly model: string;
-  private readonly logger?: ILogger;
   private readonly provider: AIProviderInstance;
+  private readonly toolUse: boolean;
 
-  constructor(config: ProviderConfig, logger?: ILogger) {
+  constructor(config: ProviderConfig, _logger?: unknown) {
     this.model = config.model;
-    this.logger = logger;
-    // Create the appropriate Vercel AI SDK provider
+    this.toolUse = config.toolUse ?? true;
     this.provider = createProvider(config);
   }
 
   /**
-   * Converts ChatMessage[] to model message format expected by AI SDK v6
+   * Converts ChatMessage[] to model message format expected by AI SDK v6.
+   * Tool messages carry toolCallId for proper assistant↔tool pairing.
    */
-  private toModelMessages(messages: ChatMessage[]): Array<{ role: string; content: string; toolCallId?: string }> {
+  private toModelMessages(messages: ChatMessage[]): Array<any> {
     return messages.map(msg => {
       if (msg.role === 'tool' && msg.tool_call_id) {
         return {
@@ -32,9 +36,22 @@ export class AIProvider implements IProvider {
           toolCallId: msg.tool_call_id
         };
       }
+      // Assistant messages with tool calls need toolCalls preserved for the SDK
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        return {
+          role: 'assistant',
+          content: msg.content ?? '',
+          toolCalls: msg.tool_calls.map(tc => ({
+            type: 'tool-call' as const,
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            input: tc.input
+          }))
+        };
+      }
       return {
         role: msg.role,
-        content: msg.content
+        content: msg.content ?? ''
       };
     });
   }
@@ -43,30 +60,59 @@ export class AIProvider implements IProvider {
     messages: ChatMessage[],
     signal: AbortSignal,
     onEvent: (event: ProviderEvent) => void,
-    extraBody?: Record<string, unknown>
+    options?: StreamOptions
   ): Promise<void> {
     try {
-      // Get the language model from the provider using the new v6 API
       const languageModel = this.provider(this.model);
-
-      // Convert messages to model message format
       const modelMessages = this.toModelMessages(messages);
 
-      // Use Vercel AI SDK's streamText
-      const result = streamText({
-        model: languageModel,
-        messages: modelMessages as any, // Type assertion needed for v6 message format compatibility
-        ...extraBody,
-        abortSignal: signal
-      });
+      // Use native tool calling only if enabled AND tools are provided
+      const useNativeTools = this.toolUse && options?.tools && Object.keys(options.tools).length > 0;
 
-      // Stream text deltas
-      for await (const chunk of result.textStream) {
-        onEvent({ type: 'delta', content: chunk });
+      const streamArgs: Parameters<typeof streamText>[0] = {
+        model: languageModel,
+        messages: modelMessages as any,
+        abortSignal: signal,
+        ...(options?.extraBody ?? {})
+      };
+
+      if (useNativeTools) {
+        streamArgs.tools = options!.tools as ToolSet;
+        // Don't set stopWhen — we manage the loop ourselves in ChatPanel
       }
 
-      // Get usage and finish reason from the result after stream completes
-      // In v6, these are PromiseLike and resolve after stream is consumed
+      const result = streamText(streamArgs);
+
+      if (useNativeTools) {
+        // Consume fullStream to get both text deltas and tool calls
+        for await (const part of result.fullStream) {
+          switch (part.type) {
+            case 'text-delta':
+              onEvent({ type: 'delta', content: part.text });
+              break;
+            case 'tool-call':
+              if (!('dynamic' in part) || !part.dynamic) {
+                // Static tool call — input is typed
+                onEvent({
+                  type: 'tool-call',
+                  toolCallId: part.toolCallId,
+                  toolName: part.toolName,
+                  args: (part as any).input as Record<string, unknown>
+                });
+              }
+              break;
+            case 'error':
+              onEvent({ type: 'error', message: String((part as any).error ?? 'Unknown stream error') });
+              break;
+          }
+        }
+      } else {
+        // Fallback: text-only streaming (models without tool support)
+        for await (const chunk of result.textStream) {
+          onEvent({ type: 'delta', content: chunk });
+        }
+      }
+
       const usage = await result.usage;
       const finishReason = await result.finishReason;
 
@@ -85,11 +131,9 @@ export class AIProvider implements IProvider {
         return;
       }
 
-      // Provide a user-friendly error message for common connection issues
       const errMsg = err instanceof Error ? err.message : String(err);
       let friendlyMessage = errMsg;
 
-      // Detect common connection errors
       if (errMsg.includes('fetch failed') ||
         errMsg.includes('ECONNREFUSED') ||
         errMsg.includes('ENOTFOUND') ||

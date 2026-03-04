@@ -11,6 +11,9 @@ import { ChatPanelChunks, AttachedFile as ChunkAttachedFile } from './ChatPanelC
 import { ChatPanelEdits } from './ChatPanelEdits';
 import { ChatPanelActions } from './ChatPanelActions';
 import { ChatPanelSessions } from './ChatPanelSessions';
+import { ToolExecutor } from '../tools/ToolExecutor';
+import { AGENT_TOOLS } from '../tools/ToolRegistry';
+import { ToolCallEvent } from '../providers/IProvider';
 
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -303,7 +306,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return trimmed;
   }
 
-  private _buildMessages(agentsMdContent?: string): ChatMessage[] {
+  private _buildMessages(agentsMdContent?: string, useNativeTools = false): ChatMessage[] {
     const thinkingMode = this._sessions.thinkingMode;
     const behaviorInstructions = thinkingMode
       ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
@@ -312,9 +315,17 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       ? `\n\n## AGENTS.md\n${agentsMdContent}`
       : '';
 
-    const systemPrompt: ChatMessage = {
-      role: 'system',
-      content: `You are a VS Code coding assistant.${agentsMdSection}
+    const nativeToolsPrompt = `You are a VS Code coding assistant.${agentsMdSection}
+
+${behaviorInstructions}
+
+## Files
+Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in tool calls.
+
+## Tools
+Use the provided tools to read files, make edits, run commands, and search. Prefer \`search_file_contents\` to verify usages before reading file sections. Use \`read_file\` with a line range when you need a specific section. Use \`string_replace\` for targeted edits.`;
+
+    const legacyPrompt = `You are a VS Code coding assistant.${agentsMdSection}
 
 ${behaviorInstructions}
 
@@ -347,7 +358,11 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 <RUN>command</RUN>                         result fed back as <RUN_RESULT>; use only when needed
 <MOVE>\nFROM: old/path\nTO: new/path\n</MOVE>   both paths must be inside workspace
 <DELETE>\nPATH: path/to/file\n</DELETE>        moved to OS trash; only when user explicitly asks
-\`\`\``,
+\`\`\``;
+
+    const systemPrompt: ChatMessage = {
+      role: 'system',
+      content: useNativeTools ? nativeToolsPrompt : legacyPrompt,
     };
 
     // Keep the sendable context small (models/servers often have hard 32KB-ish limits).
@@ -515,6 +530,23 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       }
     }
 
+    // Determine whether the active provider supports native tool calling
+    const activeProviders = this._getProviders();
+    const activeIdx = Math.min(this._activeProviderIndex, activeProviders.length - 1);
+    const useNativeTools = activeProviders[activeIdx]?.toolUse ?? true;
+
+    // Build ToolExecutor for native tool dispatch (used only when useNativeTools=true)
+    const toolExecutor = useNativeTools
+      ? new ToolExecutor(
+          {
+            log: this._log,
+            postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
+            requestApproval: (action, payload, reason) => this._requestApproval(action, payload, reason),
+          },
+          vscode.workspace.workspaceFolders ?? []
+        )
+      : null;
+
     const MAX_FILE_ROUNDS = 4;
     let fileRound = 0;
 
@@ -537,14 +569,20 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     let finalResponse = '';
     let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
     let lastFinishReason: string | undefined;
+
+    // Cap native tool rounds to avoid runaway loops
+    const MAX_TOOL_ROUNDS = 20;
+    let toolRound = 0;
+
     try {
       while (true) {
         let fullResponse = '';
+        const pendingToolCalls: ToolCallEvent[] = [];
         this._abortController = new AbortController();
         const provider = this._getProvider();
 
-        this._log.appendLine(`[stream] starting request (chunk round ${chunkRound})`);
-        const messages = this._buildMessages(agentsMdContent);
+        this._log.appendLine(`[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound})`);
+        const messages = this._buildMessages(agentsMdContent, useNativeTools);
         const contextTokens = await this._tokenCounter.countMessages(messages);
         const exact = this._tokenCounter.isReady;
         this._postMessage({
@@ -560,8 +598,10 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
             if (event.type === 'delta') {
               fullResponse += event.content;
               this._postMessage({ type: 'delta', content: event.content });
+            } else if (event.type === 'tool-call') {
+              pendingToolCalls.push(event);
             } else if (event.type === 'done') {
-              this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}`);
+              this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}, toolCalls=${pendingToolCalls.length}`);
               lastUsage = event.usage;
               lastFinishReason = event.finishReason;
             } else if (event.type === 'error') {
@@ -569,111 +609,153 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
               this._postMessage({ type: 'error', message: event.message });
             }
           },
-          { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
+          {
+            tools: useNativeTools ? AGENT_TOOLS : undefined,
+            extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
+          }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
         this._abortController = undefined;
 
-        if (this._userCancelled || !fullResponse) {
+        if (this._userCancelled || (!fullResponse && pendingToolCalls.length === 0)) {
           break;
         }
 
-        // Tentatively record assistant turn
+        // ── Native tool call loop ────────────────────────────────────────────
+        if (useNativeTools && pendingToolCalls.length > 0 && toolExecutor) {
+          toolRound++;
+          if (toolRound > MAX_TOOL_ROUNDS) {
+            this._log.appendLine(`[tools] tool round limit (${MAX_TOOL_ROUNDS}) reached`);
+            this._postMessage({ type: 'status', text: 'Tool call limit reached.' });
+            finalResponse = fullResponse;
+            break;
+          }
+
+          // Record assistant turn with tool calls
+          this._sessions.history.push({
+            role: 'assistant',
+            content: fullResponse,
+            tool_calls: pendingToolCalls.map(tc => ({
+              toolCallId: tc.toolCallId,
+              toolName: tc.toolName,
+              input: tc.args,
+            })),
+          });
+
+          // Execute each tool call and collect results
+          for (const toolCall of pendingToolCalls) {
+            this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
+            this._postMessage({ type: 'status', text: `Tool: ${toolCall.toolName}…` });
+            const toolResult = await toolExecutor.execute(toolCall);
+            // Feed result back as a tool message
+            this._sessions.history.push({
+              role: 'tool',
+              content: toolResult.result,
+              tool_call_id: toolResult.toolCallId,
+            });
+          }
+
+          continue; // Re-stream with tool results injected
+        }
+
+        // ── Tentatively record assistant turn (no tool calls) ────────────────
         this._sessions.history.push({ role: 'assistant', content: fullResponse });
 
-        // Check if the model is requesting a file listing
-        const fileResult = await this._chunks.processFileRequests(fullResponse, wsRoots, MAX_FILE_ROUNDS, fileRound);
-        if (!fileResult.done && fileResult.content) {
-          fileRound = fileResult.nextRound;
-          this._sessions.history.push({ role: 'user', content: fileResult.content });
-          continue;
-        }
+        if (!useNativeTools) {
+          // ── Legacy: JSON/XML data-request loop ──────────────────────────────
 
-        // Check if the model is requesting file searches
-        const searchResult = await this._chunks.processSearchRequests(
-          fullResponse,
-          wsRoots,
-          MAX_SEARCH_ROUNDS,
-          searchRound,
-          enforceSearchFirst,
-          searchFirstRedirects,
-          MAX_SEARCH_FIRST_REDIRECTS
-        );
-        
-        if (searchResult.redirect) {
-          searchFirstRedirects = searchResult.nextRedirects;
-          this._log.appendLine(
-            `[chunks] redirect ${searchFirstRedirects}/${MAX_SEARCH_FIRST_REDIRECTS}:` +
-            ' usage/import query should use search_file before request_chunks'
+          // Check if the model is requesting a file listing
+          const fileResult = await this._chunks.processFileRequests(fullResponse, wsRoots, MAX_FILE_ROUNDS, fileRound);
+          if (!fileResult.done && fileResult.content) {
+            fileRound = fileResult.nextRound;
+            this._sessions.history.push({ role: 'user', content: fileResult.content });
+            continue;
+          }
+
+          // Check if the model is requesting file searches
+          const searchResult = await this._chunks.processSearchRequests(
+            fullResponse,
+            wsRoots,
+            MAX_SEARCH_ROUNDS,
+            searchRound,
+            enforceSearchFirst,
+            searchFirstRedirects,
+            MAX_SEARCH_FIRST_REDIRECTS
           );
-          this._sessions.history.push({
-            role: 'user',
-            content:
-              '<tool_guidance>For usage/import/reference checks, use local ripgrep via search_file first.' +
-              ' Request chunks only after search hits if exact surrounding code is still needed.</tool_guidance>',
-          });
-          continue;
+
+          if (searchResult.redirect) {
+            searchFirstRedirects = searchResult.nextRedirects;
+            this._log.appendLine(
+              `[chunks] redirect ${searchFirstRedirects}/${MAX_SEARCH_FIRST_REDIRECTS}:` +
+              ' usage/import query should use search_file before request_chunks'
+            );
+            this._sessions.history.push({
+              role: 'user',
+              content:
+                '<tool_guidance>For usage/import/reference checks, use local ripgrep via search_file first.' +
+                ' Request chunks only after search hits if exact surrounding code is still needed.</tool_guidance>',
+            });
+            continue;
+          }
+
+          if (!searchResult.done && searchResult.content) {
+            searchRound = searchResult.nextRound;
+            this._sessions.history.push({ role: 'user', content: searchResult.content });
+            continue;
+          }
+
+          if (searchResult.done && searchRound >= MAX_SEARCH_ROUNDS) {
+            this._log.appendLine(`[search] retry limit reached`);
+            this._postMessage({ type: 'status', text: 'Search request limit reached.' });
+            finalResponse = fullResponse;
+            break;
+          }
+
+          // Check if the model is requesting more file chunks
+          const chunkResult = await this._chunks.processChunkRequests(
+            fullResponse,
+            wsRoots,
+            MAX_CHUNK_ROUNDS,
+            chunkRound,
+            sentChunkIds,
+            MAX_CHUNK_NOOP_ROUNDS,
+            chunkNoOpRounds
+          );
+
+          if (chunkResult.noOp && chunkResult.content) {
+            chunkNoOpRounds = chunkResult.nextNoOpRounds;
+            this._sessions.history.push({ role: 'user', content: chunkResult.content });
+            continue;
+          }
+
+          if (!chunkResult.done && chunkResult.content) {
+            chunkRound = chunkResult.nextRound;
+            chunkNoOpRounds = chunkResult.nextNoOpRounds;
+            this._sessions.history.push({ role: 'user', content: chunkResult.content });
+            continue;
+          }
+
+          if (chunkResult.done && chunkRound >= MAX_CHUNK_ROUNDS) {
+            this._log.appendLine(`[chunks] retry limit reached`);
+            this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
+            finalResponse = fullResponse;
+            break;
+          }
+
+          if (fullResponse.trimStart().startsWith('{')) {
+            this._log.appendLine(`[stream] unrecognized JSON response: ${fullResponse.slice(0, 300)}`);
+            this._sessions.history.push({
+              role: 'user',
+              content:
+                '<tool_guidance>Return either plain text OR exactly one of these JSON objects: ' +
+                '{"search_file":[{"uri":"path/or/glob","pattern":"...","case_sensitive":false}]}, ' +
+                '{"request_files":[{"glob":"**/*.ts","reason":"..."}]}, ' +
+                '{"request_chunks":[{"uri":"path","preferred":{"near_line":1,"max_chunks":1}}]}. ' +
+                'Do not output other JSON keys.</tool_guidance>',
+            });
+          }
         }
 
-        if (!searchResult.done && searchResult.content) {
-          searchRound = searchResult.nextRound;
-          this._sessions.history.push({ role: 'user', content: searchResult.content });
-          continue;
-        }
-
-        if (searchResult.done && searchRound >= MAX_SEARCH_ROUNDS) {
-          this._log.appendLine(`[search] retry limit reached`);
-          this._postMessage({ type: 'status', text: 'Search request limit reached.' });
-          // Don't break yet - let the model provide its final response with what it has
-          finalResponse = fullResponse;
-          break;
-        }
-
-        // Check if the model is requesting more file chunks
-        const chunkResult = await this._chunks.processChunkRequests(
-          fullResponse,
-          wsRoots,
-          MAX_CHUNK_ROUNDS,
-          chunkRound,
-          sentChunkIds,
-          MAX_CHUNK_NOOP_ROUNDS,
-          chunkNoOpRounds
-        );
-
-        if (chunkResult.noOp && chunkResult.content) {
-          chunkNoOpRounds = chunkResult.nextNoOpRounds;
-          this._sessions.history.push({ role: 'user', content: chunkResult.content });
-          continue;
-        }
-
-        if (!chunkResult.done && chunkResult.content) {
-          chunkRound = chunkResult.nextRound;
-          chunkNoOpRounds = chunkResult.nextNoOpRounds;
-          this._sessions.history.push({ role: 'user', content: chunkResult.content });
-          continue; // stream again with expanded context
-        }
-
-        if (chunkResult.done && chunkRound >= MAX_CHUNK_ROUNDS) {
-          this._log.appendLine(`[chunks] retry limit reached`);
-          this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
-          finalResponse = fullResponse;
-          break;
-        }
-
-        if (fullResponse.trimStart().startsWith('{')) {
-          this._log.appendLine(`[stream] unrecognized JSON response: ${fullResponse.slice(0, 300)}`);
-          // Provide a small, explicit correction so models that default to tool-JSON
-          // don't get stuck emitting unparseable/unsupported objects.
-          this._sessions.history.push({
-            role: 'user',
-            content:
-              '<tool_guidance>Return either plain text OR exactly one of these JSON objects: ' +
-              '{"search_file":[{"uri":"path/or/glob","pattern":"...","case_sensitive":false}]}, ' +
-              '{"request_files":[{"glob":"**/*.ts","reason":"..."}]}, ' +
-              '{"request_chunks":[{"uri":"path","preferred":{"near_line":1,"max_chunks":1}}]}. ' +
-              'Do not output other JSON keys.</tool_guidance>',
-          });
-        }
         finalResponse = fullResponse;
         break;
       }
@@ -693,8 +775,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         });
       }
 
-      // Process action blocks on the final response only
-      if (finalResponse && !this._userCancelled) {
+      // For legacy (non-native-tool) providers: process XML/JSON action blocks on the final response
+      if (finalResponse && !this._userCancelled && !useNativeTools) {
         await this._edits.processEdits(finalResponse);
         await this._actions.processAllActions(finalResponse);
       }
