@@ -109,6 +109,15 @@ export class ConfigManager {
     this.context.workspaceState.update(LAST_SESSION_KEY, undefined);
   }
 
+  /** Persist the active provider index across sessions. */
+  getActiveProviderIndex(): number {
+    return this.context.globalState.get<number>('agentic.activeProviderIndex') ?? 0;
+  }
+
+  setActiveProviderIndex(index: number): void {
+    this.context.globalState.update('agentic.activeProviderIndex', index);
+  }
+
   /**
    * Load all stored sessions (last session + any additional ones).
    * Returns sessions sorted by creation date (newest first).

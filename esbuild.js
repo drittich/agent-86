@@ -89,6 +89,27 @@ async function build() {
 
   bundleRipgrepBinary();
 
+  // Copy tiktoken WASM file to dist/ so it can be found at runtime when node_modules is absent.
+  // tiktoken's CJS loader checks __dirname first, which resolves to dist/ in the bundled extension.
+  function bundleTiktokenWasm() {
+    const src = path.join(__dirname, 'node_modules', 'tiktoken', 'lite', 'tiktoken_bg.wasm');
+    const destDir = path.join(__dirname, 'dist');
+    const dest = path.join(destDir, 'tiktoken_bg.wasm');
+    try {
+      if (!fs.existsSync(src)) {
+        console.warn(`[build] tiktoken_bg.wasm not found at ${src}`);
+        return;
+      }
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(src, dest);
+      console.log(`[build] bundled tiktoken WASM: ${path.relative(__dirname, dest)}`);
+    } catch (err) {
+      console.warn(`[build] failed to bundle tiktoken WASM: ${String(err)}`);
+    }
+  }
+
+  bundleTiktokenWasm();
+
   if (isWatch) {
     await Promise.all([extensionCtx.watch(), webviewCtx.watch()]);
     console.log('Watching for changes...');

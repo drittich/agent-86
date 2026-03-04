@@ -58,16 +58,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       vscode.workspace.registerTextDocumentContentProvider('agentic-diff', this._diffProvider)
     );
     this._configManager = new ConfigManager(context);
+    this._activeProviderIndex = this._configManager.getActiveProviderIndex();
 
-    this._tokenCounter = new TokenCounter(context.globalStorageUri.fsPath, log);
-    this._reloadTokenizer();
-    context.subscriptions.push(
-      vscode.workspace.onDidChangeConfiguration(e => {
-        if (e.affectsConfiguration('agent86.tokenizerModel')) {
-          this._reloadTokenizer();
-        }
-      })
-    );
+    this._tokenCounter = new TokenCounter();
 
     // Initialize modular components
     this._sessions = new ChatPanelSessions({
@@ -228,14 +221,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    */
   public getConfigManager(): ConfigManager {
     return this._configManager;
-  }
-
-  private _reloadTokenizer(): void {
-    const cfg = vscode.workspace.getConfiguration('agent86');
-    const modelId = cfg.get<string>('tokenizerModel')?.trim() ?? '';
-    if (modelId) {
-      this._tokenCounter.load(modelId);
-    }
   }
 
   private _getProviders(): ProviderConfig[] {
@@ -804,6 +789,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         const providers = this._getProviders();
         if (message.providerIndex >= 0 && message.providerIndex < providers.length) {
           this._activeProviderIndex = message.providerIndex;
+          this._configManager.setActiveProviderIndex(message.providerIndex);
           const provider = providers[message.providerIndex];
           this._postMessage({ type: 'providerStatus', providerName: provider.name, status: 'checking' });
           this._checkProviderHealth(provider.baseUrl).then(online => {

@@ -3,14 +3,16 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.0.64",
+  "version": "0.0.68",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:agent86.panel"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -98,11 +100,6 @@
           "default": 32768,
           "description": "Maximum context tokens for the model"
         },
-        "agent86.tokenizerModel": {
-          "type": "string",
-          "default": "Qwen/Qwen3-8B",
-          "description": "HuggingFace model ID used to load the tokenizer for accurate token counting (e.g. Qwen/Qwen3-8B). Leave empty to use the char/4 heuristic."
-        },
         "agent86.provider": {
           "type": "string",
           "enum": [
@@ -179,7 +176,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.54",
     "@ai-sdk/openai": "^3.0.39",
-    "@huggingface/tokenizers": "^0.1.2",
+    "@anthropic-ai/tokenizer": "^0.0.4",
     "@types/dompurify": "^3.0.5",
     "@vscode/ripgrep": "^1.15.9",
     "ai": "^6.0.111",
