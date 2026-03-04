@@ -1,13 +1,22 @@
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { ProviderConfig } from '../config/ConfigManager';
+
+/**
+ * Extended provider config that includes useChatCompletions option.
+ */
+export interface OpenAIProviderConfig extends ProviderConfig {
+  /** Force use of Chat Completions API instead of Responses API */
+  useChatCompletions?: boolean;
+}
 
 /**
  * Union type representing any Vercel AI SDK provider instance.
  * Different providers (OpenAI, Anthropic, etc.) have different interfaces,
  * so we use a union to handle them all.
  */
-export type AIProviderInstance = ReturnType<typeof createOpenAI> | ReturnType<typeof createAnthropic>;
+export type AIProviderInstance = ReturnType<typeof createOpenAICompatible> | ReturnType<typeof createOpenAI> | ReturnType<typeof createAnthropic>;
 
 /**
  * Detects which Vercel AI SDK provider factory to use from URL.
@@ -20,17 +29,13 @@ function detectProviderFromUrl(baseUrl: string): string {
     return 'anthropic';
   }
 
-  // OpenRouter - uses OpenAI-compatible API but different auth
-  if (url.includes('openrouter.ai')) {
-    return 'openrouter';
-  }
-
-  // OpenAI
+  // OpenAI - use createOpenAI() for official OpenAI API
   if (url.includes('api.openai.com')) {
     return 'openai';
   }
 
-  // Default: OpenAI-compatible (local endpoints, custom servers)
+  // OpenRouter and all other OpenAI-compatible endpoints use createOpenAICompatible()
+  // This includes: OpenRouter, local LLMs (llama-server, LM Studio, Ollama), custom endpoints
   return 'openai-compatible';
 }
 
@@ -38,7 +43,7 @@ function detectProviderFromUrl(baseUrl: string): string {
  * Creates a Vercel AI SDK provider instance based on configuration.
  * Auto-detects provider from URL - no explicit provider type needed.
  */
-export function createProvider(config: ProviderConfig): AIProviderInstance {
+export function createProvider(config: OpenAIProviderConfig): AIProviderInstance {
   const baseUrl = config.baseUrl;
   const apiKey = config.apiKey ?? 'local';
 
@@ -53,26 +58,22 @@ export function createProvider(config: ProviderConfig): AIProviderInstance {
         baseURL: baseUrl || 'https://api.anthropic.com'
       });
 
-    case 'openrouter':
-      // OpenRouter uses OpenAI-compatible API but with different auth headers
-      // Use custom headers required by OpenRouter
-      return createOpenAI({
-        apiKey,
-        baseURL: baseUrl || 'https://openrouter.ai/api/v1',
-        headers: {
-          'HTTP-Referer': 'https://agent86.darcy.dev',
-          'X-Title': 'Agent 86'
-        }
-      });
-
     case 'openai':
-    case 'openai-compatible':
-    default:
-      // OpenAI and all OpenAI-compatible endpoints use createOpenAI()
-      // This includes: OpenAI, local LLMs (llama-server, LM Studio, Ollama), custom endpoints
+      // Official OpenAI API uses createOpenAI()
       return createOpenAI({
         apiKey,
         baseURL: baseUrl || 'https://api.openai.com/v1'
+      });
+
+    case 'openai-compatible':
+    default:
+      // OpenAI-compatible endpoints use createOpenAICompatible()
+      // This includes: OpenRouter, local LLMs (llama-server, LM Studio, Ollama), custom endpoints
+      // createOpenAICompatible defaults to Chat Completions API, avoiding Responses API issues
+      return createOpenAICompatible({
+        name: config.name || 'openai-compatible',
+        apiKey,
+        baseURL: baseUrl || 'http://127.0.0.1:8083/v1'
       });
   }
 }

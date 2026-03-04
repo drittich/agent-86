@@ -4,6 +4,18 @@ import { ProviderConfig } from '../config/ConfigManager';
 import { createProvider, AIProviderInstance } from './ProviderFactory';
 
 /**
+ * Checks if an error indicates the model doesn't support the Responses API
+ * and should fall back to Chat Completions API.
+ */
+function isResponsesAPIError(err: unknown): boolean {
+  const errMsg = err instanceof Error ? err.message : String(err);
+  return errMsg.includes('Invalid Responses API') ||
+    errMsg.includes('No output generated') ||
+    errMsg.includes('Responses API') ||
+    errMsg.includes('invalid_response');
+}
+
+/**
  * AIProvider wraps the Vercel AI SDK to provide streaming chat completions.
  * Supports multiple providers (OpenAI, Anthropic, OpenRouter, OpenAI-compatible)
  * via auto-detection from the base URL.
@@ -11,16 +23,36 @@ import { createProvider, AIProviderInstance } from './ProviderFactory';
  * When `toolUse` is enabled and tools are provided, uses native tool calling via
  * `fullStream` and emits `tool-call` events. Falls back to text-only streaming
  * when `toolUse` is false (for models that don't support tool calling).
+ *
+ * Auto-detects Responses API incompatibility and falls back to Chat Completions.
  */
 export class AIProvider implements IProvider {
   private readonly model: string;
   private readonly provider: AIProviderInstance;
   private readonly toolUse: boolean;
+  private readonly config: ProviderConfig;
+  private chatCompletionsProvider?: AIProviderInstance;
 
   constructor(config: ProviderConfig, _logger?: unknown) {
     this.model = config.model;
     this.toolUse = config.toolUse ?? true;
+    this.config = config;
     this.provider = createProvider(config);
+  }
+
+  /**
+   * Gets or creates a provider that uses Chat Completions API (fallback for models
+   * that don't support the Responses API).
+   */
+  private getChatCompletionsProvider(): AIProviderInstance {
+    if (!this.chatCompletionsProvider) {
+      this.chatCompletionsProvider = createProvider({
+        ...this.config,
+        // Force Chat Completions API instead of Responses API
+        useChatCompletions: true
+      });
+    }
+    return this.chatCompletionsProvider;
   }
 
   /**
@@ -62,8 +94,34 @@ export class AIProvider implements IProvider {
     onEvent: (event: ProviderEvent) => void,
     options?: StreamOptions
   ): Promise<void> {
+    // Try with default provider (Responses API), fall back to Chat Completions on error
+    await this.doStream(this.provider, messages, signal, onEvent, options, false);
+  }
+
+  /**
+   * Internal stream implementation with fallback support.
+   * @param provider The AI provider to use
+   * @param messages Chat messages
+   * @param signal Abort signal
+   * @param onEvent Event callback
+   * @param options Stream options
+   * @param isFallback Whether this is a fallback attempt after Responses API failure
+   * @returns true if a Responses API error was detected and caller should retry
+   */
+  private async doStream(
+    provider: AIProviderInstance,
+    messages: ChatMessage[],
+    signal: AbortSignal,
+    onEvent: (event: ProviderEvent) => void,
+    options?: StreamOptions,
+    isFallback: boolean = false
+  ): Promise<void> {
+    // Track stream errors for fallback detection
+    let streamError: string | null = null;
+    let hasContent = false;
+
     try {
-      const languageModel = this.provider(this.model);
+      const languageModel = provider(this.model);
       const modelMessages = this.toModelMessages(messages);
 
       // Use native tool calling only if enabled AND tools are provided
@@ -88,9 +146,11 @@ export class AIProvider implements IProvider {
         for await (const part of result.fullStream) {
           switch (part.type) {
             case 'text-delta':
+              hasContent = true;
               onEvent({ type: 'delta', content: part.text });
               break;
             case 'tool-call':
+              hasContent = true;
               if (!('dynamic' in part) || !part.dynamic) {
                 // Static tool call — input is typed
                 onEvent({
@@ -102,19 +162,40 @@ export class AIProvider implements IProvider {
               }
               break;
             case 'error':
-              onEvent({ type: 'error', message: String((part as any).error ?? 'Unknown stream error') });
+              // Capture error for fallback detection - don't emit yet
+              streamError = String((part as any).error ?? 'Unknown stream error');
               break;
           }
         }
       } else {
         // Fallback: text-only streaming (models without tool support)
         for await (const chunk of result.textStream) {
+          hasContent = true;
           onEvent({ type: 'delta', content: chunk });
         }
       }
 
       const usage = await result.usage;
       const finishReason = await result.finishReason;
+
+      // Check if we got a Responses API error with no content
+      if (streamError && !hasContent && !isFallback && isResponsesAPIError(streamError)) {
+        // Retry with Chat Completions API
+        console.log('[AIProvider] Responses API error detected, falling back to Chat Completions');
+        await this.doStream(this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
+        return;
+      }
+
+      // If we have a stream error and no content, emit the error
+      if (streamError && !hasContent) {
+        onEvent({ type: 'error', message: streamError });
+        return;
+      }
+
+      // If we have content but also an error, emit the error after content (non-fatal)
+      if (streamError && hasContent) {
+        onEvent({ type: 'error', message: streamError });
+      }
 
       onEvent({
         type: 'done',
@@ -131,24 +212,32 @@ export class AIProvider implements IProvider {
         return;
       }
 
-      const errMsg = err instanceof Error ? err.message : String(err);
-      let friendlyMessage = errMsg;
+      // If this is already a fallback attempt or not a Responses API error, report the error
+      if (isFallback || !isResponsesAPIError(err)) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        let friendlyMessage = errMsg;
 
-      if (errMsg.includes('fetch failed') ||
-        errMsg.includes('ECONNREFUSED') ||
-        errMsg.includes('ENOTFOUND') ||
-        errMsg.includes('ETIMEDOUT') ||
-        errMsg.includes('socket hang up') ||
-        errMsg.includes('Connection refused') ||
-        errMsg.includes('Connection timed out') ||
-        errMsg.includes('getaddrinfo')) {
-        friendlyMessage = `Cannot connect to LLM server.\n\n` +
-          'Please ensure your LLM server is running.\n' +
-          'You can start it with: `llama-server --model <model> --port 8083`\n' +
-          'Or check your settings: File > Preferences > Settings > Agent 86';
+        if (errMsg.includes('fetch failed') ||
+          errMsg.includes('ECONNREFUSED') ||
+          errMsg.includes('ENOTFOUND') ||
+          errMsg.includes('ETIMEDOUT') ||
+          errMsg.includes('socket hang up') ||
+          errMsg.includes('Connection refused') ||
+          errMsg.includes('Connection timed out') ||
+          errMsg.includes('getaddrinfo')) {
+          friendlyMessage = `Cannot connect to LLM server.\n\n` +
+            'Please ensure your LLM server is running.\n' +
+            'You can start it with: `llama-server --model <model> --port 8083`\n' +
+            'Or check your settings: File > Preferences > Settings > Agent 86';
+        }
+
+        onEvent({ type: 'error', message: friendlyMessage });
+        return;
       }
 
-      onEvent({ type: 'error', message: friendlyMessage });
+      // Responses API error - try fallback with Chat Completions
+      console.log('[AIProvider] Responses API error in catch, falling back to Chat Completions');
+      await this.doStream(this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
     }
   }
 }

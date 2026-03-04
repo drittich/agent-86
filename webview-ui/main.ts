@@ -617,6 +617,10 @@ style.textContent = `
   .status-dot.status-checking { background: #d4a017; animation: pulse 1s infinite; }
   .status-dot.status-unknown { background: var(--vscode-descriptionForeground, #888); }
 
+  .status-dot.hidden {
+    display: none;
+  }
+
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
@@ -764,12 +768,22 @@ function renderModelDropdown(): void {
   } else {
     modelSelect.value = String(activeProviderIndex);
   }
+  updateProviderStatusVisibility();
 }
 
 function setProviderStatus(status: 'online' | 'offline' | 'checking' | 'unknown'): void {
   providerStatusDot.className = `status-dot status-${status}`;
   const labels: Record<string, string> = { online: 'Online', offline: 'Offline', checking: 'Checking...', unknown: 'Unknown' };
   providerStatusDot.title = labels[status] ?? 'Unknown';
+}
+
+function updateProviderStatusVisibility(): void {
+  const hasValidSelection = providers.length > 0 && activeProviderIndex >= 0 && activeProviderIndex < providers.length;
+  if (hasValidSelection) {
+    providerStatusDot.classList.remove('hidden');
+  } else {
+    providerStatusDot.classList.add('hidden');
+  }
 }
 /** Tracks whether the current generation was explicitly cancelled by the user. */
 let wasExplicitlyCancelled = false;
