@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.0.62",
+  "version": "0.0.64",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -177,9 +177,12 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.54",
+    "@ai-sdk/openai": "^3.0.39",
     "@huggingface/tokenizers": "^0.1.2",
     "@types/dompurify": "^3.0.5",
     "@vscode/ripgrep": "^1.15.9",
+    "ai": "^6.0.111",
     "dompurify": "^3.3.1",
     "marked": "^17.0.3",
     "openai": "^6.25.0"

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
-import { OpenAIProvider } from '../providers/OpenAIProvider';
+import { AIProvider } from '../providers/AIProvider';
 import { ChatMessage } from '../providers/IProvider';
 import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB, FILE_CAP_BYTES, TOTAL_CAP_BYTES } from '../tools/FileTools';
 import { ConfigManager, Session, ProviderConfig } from '../config/ConfigManager';
@@ -261,11 +261,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return [{ name: model, baseUrl, model, apiKey, toolUse: true, context: 32768 }];
   }
 
-  private _getProvider(): OpenAIProvider {
+  private _getProvider(): AIProvider {
     const providers = this._getProviders();
     const idx = Math.min(this._activeProviderIndex, providers.length - 1);
     const providerConfig = providers[idx];
-    return new OpenAIProvider(providerConfig, this._log);
+    return new AIProvider(providerConfig, this._log);
   }
 
   private async _checkProviderHealth(baseUrl: string): Promise<boolean> {
