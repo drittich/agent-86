@@ -230,6 +230,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const cfg = vscode.workspace.getConfiguration('agent86');
     const inspected = cfg.inspect<ProviderConfig[]>('providers');
     const globalProviders = inspected?.globalValue;
+    
+    this._log.appendLine(`[_getProviders] inspected.globalValue: ${JSON.stringify(globalProviders)}`);
+    this._log.appendLine(`[_getProviders] inspected.workspaceValue: ${JSON.stringify(inspected?.workspaceValue)}`);
 
     if (globalProviders && globalProviders.length > 0) {
       return globalProviders;
@@ -239,6 +242,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
     const apiKey = cfg.get<string>('apiKey') ?? 'local';
+    this._log.appendLine(`[_getProviders] using legacy fallback: ${model}`);
     return [{ name: model, baseUrl, model, apiKey, toolUse: true, context: 32768 }];
   }
 
@@ -847,10 +851,9 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         break;
       }
       case 'saveSettings': {
-        const cfg = vscode.workspace.getConfiguration('agent86');
-        if (message.providers && message.providers.length > 0) {
-          cfg.update('providers', message.providers, vscode.ConfigurationTarget.Global);
-        }
+        this._handleSaveSettings(message.providers).catch((err: unknown) => {
+          this._log.appendLine(`[saveSettings] handler error: ${err}`);
+        });
         break;
       }
       case 'selectModel': {
@@ -873,6 +876,36 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           this._sessions.saveCurrentSession();
         }
         break;
+    }
+  }
+
+  private async _handleSaveSettings(providers: ProviderConfig[] | undefined): Promise<void> {
+    this._log.appendLine(`[_handleSaveSettings] received providers: ${JSON.stringify(providers, null, 2)}`);
+    if (!providers || providers.length === 0) {
+      this._log.appendLine(`[_handleSaveSettings] no providers to save`);
+      return;
+    }
+    
+    const cfg = vscode.workspace.getConfiguration('agent86');
+    this._log.appendLine(`[_handleSaveSettings] calling cfg.update with target: Global`);
+    
+    try {
+      const result = await cfg.update('providers', providers, vscode.ConfigurationTarget.Global);
+      this._log.appendLine(`[_handleSaveSettings] update completed, result: ${JSON.stringify(result)}`);
+      
+      // Verify the save by reading back
+      const verifyCfg = vscode.workspace.getConfiguration('agent86');
+      const verifyInspect = verifyCfg.inspect<ProviderConfig[]>('providers');
+      this._log.appendLine(`[_handleSaveSettings] verify - workspaceValue: ${JSON.stringify(verifyInspect?.workspaceValue)}`);
+      this._log.appendLine(`[_handleSaveSettings] verify - globalValue: ${JSON.stringify(verifyInspect?.globalValue)}`);
+      this._log.appendLine(`[_handleSaveSettings] verify - defaultValue: ${JSON.stringify(verifyInspect?.defaultValue)}`);
+    } catch (err) {
+      this._log.appendLine(`[_handleSaveSettings] update FAILED`);
+      this._log.appendLine(`[_handleSaveSettings] error name: ${err instanceof Error ? err.name : 'unknown'}`);
+      this._log.appendLine(`[_handleSaveSettings] error message: ${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof Error && err.stack) {
+        this._log.appendLine(`[_handleSaveSettings] error stack: ${err.stack}`);
+      }
     }
   }
 
