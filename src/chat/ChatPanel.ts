@@ -12,7 +12,7 @@ import { ChatPanelEdits } from './ChatPanelEdits';
 import { ChatPanelActions } from './ChatPanelActions';
 import { ChatPanelSessions } from './ChatPanelSessions';
 import { ToolExecutor } from '../tools/ToolExecutor';
-import { AGENT_TOOLS } from '../tools/ToolRegistry';
+import { buildAgentTools } from '../tools/ToolRegistry';
 import { ToolCallEvent } from '../providers/IProvider';
 
 function getNonce(): string {
@@ -610,7 +610,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
             }
           },
           {
-            tools: useNativeTools ? AGENT_TOOLS : undefined,
+            tools: useNativeTools ? buildAgentTools() : undefined,
             extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
           }
         );

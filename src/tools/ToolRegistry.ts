@@ -1,4 +1,5 @@
 import { jsonSchema, tool, ToolSet } from 'ai';
+import { execSync } from 'child_process';
 
 /**
  * Native tool definitions for the Vercel AI SDK.
@@ -11,7 +12,23 @@ import { jsonSchema, tool, ToolSet } from 'ai';
  * ToolExecutor so that destructive tools can show an approval gate first.
  */
 
-export const AGENT_TOOLS: ToolSet = {
+// ── Git availability helpers ──────────────────────────────────────────────────
+
+function isGitAvailable(): boolean {
+  try { execSync('git --version', { stdio: 'ignore' }); return true; } catch { return false; }
+}
+
+function isInsideGitRepo(): boolean {
+  try { execSync('git rev-parse --git-dir', { stdio: 'ignore' }); return true; } catch { return false; }
+}
+
+function isGhAvailable(): boolean {
+  try { execSync('gh --version', { stdio: 'ignore' }); return true; } catch { return false; }
+}
+
+// ── Static tools (always available) ──────────────────────────────────────────
+
+const STATIC_TOOLS: ToolSet = {
   // ── File operations ──────────────────────────────────────────────────────
 
   read_file: tool({
@@ -259,6 +276,137 @@ export const AGENT_TOOLS: ToolSet = {
     })
   }),
 
+  // ── Diagnostics ───────────────────────────────────────────────────────────
+
+  get_diagnostics: tool({
+    description:
+      'Get VS Code diagnostics (errors and warnings) for the workspace or a specific file. ' +
+      'Returns problems grouped by file with severity, message, and line number.',
+    inputSchema: jsonSchema<{
+      path?: string;
+    }>({
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Optional workspace-relative file path. Omit to get all workspace diagnostics.'
+        }
+      }
+    })
+  }),
+
+  // ── Web ───────────────────────────────────────────────────────────────────
+
+  web_search: tool({
+    description:
+      'Search the web using Brave Search. Returns titles, URLs, and snippets for the top results. ' +
+      'Requires BRAVE_API_KEY env var or agent86.braveApiKey VS Code setting.',
+    inputSchema: jsonSchema<{
+      query: string;
+      max_results?: number;
+    }>({
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query.'
+        },
+        max_results: {
+          type: 'number',
+          description: 'Maximum number of results to return (1–20). Defaults to 5.'
+        }
+      },
+      required: ['query']
+    })
+  }),
+
+  fetch_url: tool({
+    description:
+      'Fetch the content of a URL and return it as plain text. ' +
+      'Useful for reading documentation, GitHub files, or any public web page. ' +
+      'Content is capped at 32 KB.',
+    inputSchema: jsonSchema<{
+      url: string;
+    }>({
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to fetch.'
+        }
+      },
+      required: ['url']
+    })
+  }),
+
+  // ── Task management ───────────────────────────────────────────────────────
+
+  create_task: tool({
+    description:
+      'Create one or more tasks to track work. Tasks are stored in .agent86/tasks.json in the workspace. ' +
+      'Use this to break down complex requests into trackable steps.',
+    inputSchema: jsonSchema<{
+      tasks: Array<{ title: string; description?: string }>;
+    }>({
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          description: 'List of tasks to create.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', description: 'Short task title.' },
+              description: { type: 'string', description: 'Optional longer description.' }
+            },
+            required: ['title']
+          }
+        }
+      },
+      required: ['tasks']
+    })
+  }),
+
+  list_tasks: tool({
+    description: 'List all tasks grouped by status (pending, in_progress, completed).',
+    inputSchema: jsonSchema<Record<string, never>>({
+      type: 'object',
+      properties: {}
+    })
+  }),
+
+  update_task: tool({
+    description: 'Update the status of a task.',
+    inputSchema: jsonSchema<{
+      id: string;
+      status: 'pending' | 'in_progress' | 'completed';
+    }>({
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Task ID (from list_tasks).' },
+        status: {
+          type: 'string',
+          enum: ['pending', 'in_progress', 'completed'],
+          description: 'New status for the task.'
+        }
+      },
+      required: ['id', 'status']
+    })
+  }),
+
+  delete_task: tool({
+    description: 'Delete a task by ID.',
+    inputSchema: jsonSchema<{
+      id: string;
+    }>({
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Task ID (from list_tasks).' }
+      },
+      required: ['id']
+    })
+  }),
+
   // ── Interaction ───────────────────────────────────────────────────────────
 
   ask_question: tool({
@@ -279,3 +427,182 @@ export const AGENT_TOOLS: ToolSet = {
     })
   }),
 };
+
+// ── Git tools (conditionally included) ───────────────────────────────────────
+
+const GIT_TOOLS: ToolSet = {
+  git_status: tool({
+    description: 'Show the working tree status (modified, staged, untracked files).',
+    inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} })
+  }),
+
+  git_diff: tool({
+    description: 'Show changes between commits, the working tree, or staged changes.',
+    inputSchema: jsonSchema<{
+      args?: string;
+    }>({
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Optional git diff arguments, e.g. "--staged", "HEAD~1", "src/file.ts". Omit for unstaged changes.'
+        }
+      }
+    })
+  }),
+
+  git_log: tool({
+    description: 'Show the commit history.',
+    inputSchema: jsonSchema<{
+      max_count?: number;
+      args?: string;
+    }>({
+      type: 'object',
+      properties: {
+        max_count: { type: 'number', description: 'Number of commits to show. Defaults to 10.' },
+        args: { type: 'string', description: 'Additional git log arguments, e.g. "--oneline", "-- src/file.ts".' }
+      }
+    })
+  }),
+
+  git_add: tool({
+    description: 'Stage files for the next commit. Requires user approval.',
+    inputSchema: jsonSchema<{
+      paths: string[];
+    }>({
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Workspace-relative paths to stage. Use ["."] to stage all changes.'
+        }
+      },
+      required: ['paths']
+    })
+  }),
+
+  git_commit: tool({
+    description: 'Create a commit with the staged changes. Always requires user approval.',
+    inputSchema: jsonSchema<{
+      message: string;
+      body?: string;
+    }>({
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Commit message subject line.' },
+        body: { type: 'string', description: 'Optional commit body (additional detail).' }
+      },
+      required: ['message']
+    })
+  }),
+
+  git_push: tool({
+    description: 'Push commits to the remote. Requires user approval.',
+    inputSchema: jsonSchema<{
+      args?: string;
+    }>({
+      type: 'object',
+      properties: {
+        args: { type: 'string', description: 'Optional push arguments, e.g. "--force-with-lease", "origin main".' }
+      }
+    })
+  }),
+
+  git_pull: tool({
+    description: 'Pull changes from the remote. Requires user approval.',
+    inputSchema: jsonSchema<{
+      args?: string;
+    }>({
+      type: 'object',
+      properties: {
+        args: { type: 'string', description: 'Optional pull arguments, e.g. "--rebase".' }
+      }
+    })
+  }),
+
+  git_branch: tool({
+    description: 'List, create, or delete branches.',
+    inputSchema: jsonSchema<{
+      args?: string;
+    }>({
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Branch arguments: omit to list branches, provide a name to create, "-d name" to delete.'
+        }
+      }
+    })
+  }),
+
+  git_stash: tool({
+    description: 'Stash or restore changes. Requires user approval for push/pop/drop.',
+    inputSchema: jsonSchema<{
+      args?: string;
+    }>({
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Stash arguments: "push" (default), "pop", "list", "drop".'
+        }
+      }
+    })
+  }),
+
+  git_reset: tool({
+    description: 'Reset the current HEAD or unstage files. Hard resets require user approval.',
+    inputSchema: jsonSchema<{
+      args: string;
+    }>({
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'Reset arguments, e.g. "HEAD~1", "--soft HEAD~1", "--hard HEAD~1", "src/file.ts".'
+        }
+      },
+      required: ['args']
+    })
+  }),
+};
+
+const GIT_PR_TOOL: ToolSet = {
+  git_pr: tool({
+    description: 'Create or list pull requests using the GitHub CLI (gh). Requires user approval.',
+    inputSchema: jsonSchema<{
+      args: string;
+    }>({
+      type: 'object',
+      properties: {
+        args: {
+          type: 'string',
+          description: 'gh pr arguments, e.g. "create --title \\"Fix bug\\" --body \\"...\\"", "list".'
+        }
+      },
+      required: ['args']
+    })
+  }),
+};
+
+/**
+ * Build the complete tool set for the current environment.
+ * Git tools are included only if git is installed and the workspace is a git repo.
+ * gh pr tool is included only if the gh CLI is available.
+ */
+export function buildAgentTools(): ToolSet {
+  const tools: ToolSet = { ...STATIC_TOOLS };
+
+  if (isGitAvailable() && isInsideGitRepo()) {
+    Object.assign(tools, GIT_TOOLS);
+    if (isGhAvailable()) {
+      Object.assign(tools, GIT_PR_TOOL);
+    }
+  }
+
+  return tools;
+}
+
+/** @deprecated Use buildAgentTools() instead. */
+export const AGENT_TOOLS: ToolSet = STATIC_TOOLS;

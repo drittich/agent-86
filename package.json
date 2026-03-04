@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.0.70",
+  "version": "0.0.71",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -108,6 +108,11 @@
           ],
           "default": "openai-compatible",
           "description": "LLM provider type"
+        },
+        "agent86.braveApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Brave Search API key for the web_search tool. Can also be set via the BRAVE_API_KEY environment variable."
         },
         "agent86.providers": {
           "type": "array",
