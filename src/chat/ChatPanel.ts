@@ -253,11 +253,27 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return new AIProvider(providerConfig, this._log);
   }
 
-  private async _checkProviderHealth(baseUrl: string): Promise<boolean> {
+  private async _checkProviderHealth(provider: ProviderConfig): Promise<boolean> {
     try {
+      const headers: Record<string, string> = {};
+      const baseUrl = provider.baseUrl;
+
+      // Add authentication headers based on provider type
+      if (provider.apiKey && provider.apiKey !== 'local') {
+        // For OpenRouter and most OpenAI-compatible providers
+        headers['Authorization'] = `Bearer ${provider.apiKey}`;
+
+        // OpenRouter requires additional headers
+        if (baseUrl.toLowerCase().includes('openrouter.ai')) {
+          headers['HTTP-Referer'] = 'https://agent86.darcy.dev';
+          headers['X-Title'] = 'Agent 86';
+        }
+      }
+
       const response = await fetch(`${baseUrl}/models`, {
         method: 'GET',
         signal: AbortSignal.timeout(5000),
+        headers,
       });
       return response.ok;
     } catch {
@@ -863,7 +879,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
           this._configManager.setActiveProviderIndex(message.providerIndex);
           const provider = providers[message.providerIndex];
           this._postMessage({ type: 'providerStatus', providerName: provider.name, status: 'checking' });
-          this._checkProviderHealth(provider.baseUrl).then(online => {
+          this._checkProviderHealth(provider).then(online => {
             this._postMessage({ type: 'providerStatus', providerName: provider.name, status: online ? 'online' : 'offline' });
           });
         }
