@@ -1,8 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-  <!-- Shoe body: toe box curves up, heel is lower -->
-  <path d="M1 13 Q1 14.5 2.5 14.5 L12.5 14.5 Q15 14.5 15 12.5 Q15 11 13 11 L8.5 11 L8.5 9.5 Q8.5 8.5 7.5 8.5 L6.5 8.5 L6 7 Q5.5 4.5 4 4 L2.5 4 Q1 4.5 1 6 Z" fill="black"/>
-  <!-- Phone handset receiver sitting on top of shoe -->
-  <path d="M2.5 4 Q2 2.5 3 1.5 Q3.5 1 4.5 1.5 Q5 2 4.5 3.5 L4 4 Z" fill="black"/>
-  <!-- Heel -->
-  <path d="M1 11.5 Q0.5 12.5 1 13.5 L2 13.5 L2 11.5 Z" fill="black"/>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="14"
+   height="14"
+   viewBox="0 0 3.7041667 3.7041667"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.3.2 (091e20e, 2023-11-25, custom)"
+   sodipodi:docname="icon.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     inkscape:zoom="5.8012346"
+     inkscape:cx="38.095339"
+     inkscape:cy="-6.3779528"
+     inkscape:window-width="1920"
+     inkscape:window-height="1010"
+     inkscape:window-x="-6"
+     inkscape:window-y="-6"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs1" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-62.886931,-104.33684)">
+    <path
+       d="m 64.599415,106.81365 c -0.0095,-0.28257 -0.117475,-0.47625 -0.32385,-0.58102 0.168275,-0.1143 0.254,-0.28893 0.254,-0.5207 0,-0.47625 -0.2413,-0.72073 -0.720725,-0.73025 v 0.42227 l 0.0095,0.003 c 0.117475,0.0222 0.193675,0.1143 0.193675,0.2794 0,0.17462 -0.0635,0.28575 -0.193675,0.3302 v 0.44132 c 0.168275,0.0413 0.250825,0.16828 0.250825,0.381 0,0.20638 -0.07302,0.3175 -0.250825,0.33338 v 0.4191 c 0.536575,-0.01 0.78105,-0.2667 0.78105,-0.77788 z m -1.666875,0 c 0,0.508 0.244475,0.76835 0.78105,0.77788 v -0.4191 c -0.1778,-0.0159 -0.250825,-0.127 -0.250825,-0.33338 0,-0.2159 0.08573,-0.3429 0.26035,-0.381 v -0.44132 c -0.136525,-0.0413 -0.2032,-0.14923 -0.2032,-0.3302 0,-0.17463 0.06668,-0.2667 0.2032,-0.28258 v -0.42227 c -0.4826,0.01 -0.7239,0.254 -0.7239,0.73025 0,0.2286 0.08572,0.40322 0.254,0.5207 -0.2032,0.10477 -0.31115,0.29845 -0.320675,0.58102 z m 3.098801,-1.03822 h 0.568325 v -0.13653 c 0,-0.44132 -0.244475,-0.65405 -0.79375,-0.66357 v 0.4191 c 0.155575,0.0159 0.22225,0.0857 0.225425,0.21272 z m -0.587375,0.72707 c 0.04762,-0.11112 0.1651,-0.14605 0.3683,-0.14605 0.1524,0 0.2286,0.0603 0.2286,0.18098 v 0.39052 c 0,0.16193 -0.08572,0.24448 -0.26035,0.254 v 0.41275 c 0.555625,-0.019 0.83185,-0.26035 0.83185,-0.72072 v -0.37783 c 0,-0.37147 -0.212725,-0.5334 -0.6731,-0.5334 -0.193675,0 -0.358775,0.054 -0.4953,0.1651 v -0.50482 c 0,-0.14288 0.09207,-0.21908 0.27305,-0.23178 v -0.41592 c -0.561975,0.01 -0.84455,0.22542 -0.84455,0.6477 v 1.23825 c 0,0.49847 0.27305,0.72072 0.822325,0.73342 v -0.41275 c -0.1778,-0.0222 -0.250825,-0.1016 -0.250825,-0.24447 z"
+       id="text1"
+       style="font-size:3.175px;font-family:Gunplay;-inkscape-font-specification:'Gunplay, Normal';fill:#808080;fill-opacity:0.502868;stroke-width:0.264583"
+       inkscape:highlight-color="#ee863b"
+       aria-label="86" />
+  </g>
 </svg>
