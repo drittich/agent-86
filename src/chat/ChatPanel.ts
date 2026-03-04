@@ -14,6 +14,7 @@ import { ChatPanelSessions } from './ChatPanelSessions';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { buildAgentTools } from '../tools/ToolRegistry';
 import { ToolCallEvent } from '../providers/IProvider';
+import { getSystemPrompt, getNativeToolsPrompt, getLegacyPrompt } from '../utils/PromptProcessor';
 
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -373,9 +374,30 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 <DELETE>\nPATH: path/to/file\n</DELETE>        moved to OS trash; only when user explicitly asks
 \`\`\``;
 
+    // Try to load system prompt from prompts/system-prompt.md with dynamic system info injection
+    const customSystemPrompt = getSystemPrompt();
+
+    let systemContent: string;
+
+	// throw a warning if system prompt not found
+	if (!customSystemPrompt) {
+		console.warn('** Custom system prompt not found, using fallback prompts.');
+	}
+
+    if (customSystemPrompt) {
+      // Use custom system prompt - append agentsMdSection and behaviorInstructions
+      // The custom prompt already has dynamic system info injected
+      systemContent = `${customSystemPrompt.trim()}\n\n${agentsMdSection}\n\n${behaviorInstructions}`;
+    } else {
+      // Fallback to inline prompts
+      systemContent = useNativeTools
+        ? getNativeToolsPrompt(agentsMdSection, behaviorInstructions)
+        : getLegacyPrompt(agentsMdSection, behaviorInstructions);
+    }
+
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: useNativeTools ? nativeToolsPrompt : legacyPrompt,
+      content: systemContent,
     };
 
     // Keep the sendable context small (models/servers often have hard 32KB-ish limits).
