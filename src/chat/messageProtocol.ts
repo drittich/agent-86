@@ -1,3 +1,5 @@
+import { ProviderConfig } from '../config/ConfigManager';
+
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -17,7 +19,9 @@ export type ExtensionToWebview =
   | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' }
   | { type: 'agentsMdAvailable'; available: boolean }
   | { type: 'checkboxState'; thinkingMode: boolean; includeAgentsMd: boolean }
-  | { type: 'openSettings'; baseUrl: string; model: string; apiKey: string }
+  | { type: 'openSettings'; providers: ProviderConfig[]; activeProviderIndex: number }
+  | { type: 'providerStatus'; providerName: string; status: 'online' | 'offline' | 'checking' }
+  | { type: 'providers'; providers: ProviderConfig[]; activeProviderIndex: number }
   | { type: 'newSession' };
 
 // Messages sent from the webview to the extension host
@@ -30,7 +34,8 @@ export type WebviewToExtension =
   | { type: 'selectSession' }
   | { type: 'approval/response'; approvalId: string; approved: boolean }
   | { type: 'checkboxChange'; includeAgentsMd?: boolean }
-  | { type: 'saveSettings'; baseUrl: string; model: string; apiKey: string };
+  | { type: 'saveSettings'; providers?: ProviderConfig[] }
+  | { type: 'selectModel'; providerIndex: number };
 
 export interface AttachedFile {
   uri: string;

@@ -1,12 +1,32 @@
 import { IProvider, ChatMessage, ProviderEvent, ProviderUsage, ILogger } from './IProvider';
+import { ProviderConfig } from '../config/ConfigManager';
 
 export class OpenAIProvider implements IProvider {
+  private readonly baseURL: string;
+  private readonly model: string;
+  private readonly apiKey: string;
+  private readonly log?: ILogger;
+
+  constructor(baseUrl: string, model: string, apiKey?: string, log?: ILogger);
+  constructor(config: ProviderConfig, log?: ILogger);
   constructor(
-    private readonly baseURL: string,
-    private readonly model: string,
-    private readonly apiKey: string = 'local',
-    private readonly log?: ILogger
-  ) {}
+    baseUrlOrConfig: string | ProviderConfig,
+    modelOrLog?: string | ILogger,
+    apiKey?: string,
+    log?: ILogger
+  ) {
+    if (typeof baseUrlOrConfig === 'string') {
+      this.baseURL = baseUrlOrConfig;
+      this.model = typeof modelOrLog === 'string' ? modelOrLog : '';
+      this.apiKey = apiKey ?? 'local';
+      this.log = log;
+    } else {
+      this.baseURL = baseUrlOrConfig.baseUrl;
+      this.model = baseUrlOrConfig.model;
+      this.apiKey = baseUrlOrConfig.apiKey ?? 'local';
+      this.log = typeof modelOrLog === 'string' ? undefined : modelOrLog;
+    }
+  }
 
   async stream(
     messages: ChatMessage[],

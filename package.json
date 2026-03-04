@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.0.58",
+  "version": "0.0.60",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -111,6 +111,49 @@
           ],
           "default": "openai-compatible",
           "description": "LLM provider type"
+        },
+        "agent86.providers": {
+          "type": "array",
+          "default": [],
+          "description": "List of LLM provider configurations for multi-provider support",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "baseUrl",
+              "model",
+              "toolUse",
+              "context"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Display name for this provider"
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "Base URL for the OpenAI-compatible endpoint"
+              },
+              "model": {
+                "type": "string",
+                "description": "Model name to use"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API key (optional, defaults to 'local')"
+              },
+              "toolUse": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether to enable tool use for this provider"
+              },
+              "context": {
+                "type": "number",
+                "default": 32768,
+                "description": "Context window size in tokens"
+              }
+            }
+          }
         }
       }
     }

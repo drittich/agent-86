@@ -18,12 +18,31 @@ root.innerHTML = `
       <button id="btn-settings-close" title="Close">×</button>
     </div>
     <div id="settings-body">
-      <label for="settings-base-url">Provider URL</label>
-      <input id="settings-base-url" type="text" placeholder="http://127.0.0.1:8083/v1" />
-      <label for="settings-api-key">API Key</label>
-      <input id="settings-api-key" type="password" placeholder="(none required for local)" />
-      <label for="settings-model">Model</label>
-      <input id="settings-model" type="text" placeholder="model name" />
+      <div id="providers-section">
+        <div id="providers-header">Providers</div>
+        <ul id="providers-list"></ul>
+        <button id="btn-add-provider">+ Add Provider</button>
+      </div>
+      <div id="provider-form" hidden>
+        <div id="provider-form-title">Add Provider</div>
+        <label for="pf-name">Name</label>
+        <input id="pf-name" type="text" placeholder="e.g. qwen3-coder:a3b" />
+        <label for="pf-base-url">Base URL</label>
+        <input id="pf-base-url" type="text" placeholder="http://localhost:8080/v1" />
+        <label for="pf-model">Model</label>
+        <input id="pf-model" type="text" placeholder="model name" />
+        <label for="pf-api-key">API Key (optional)</label>
+        <input id="pf-api-key" type="password" placeholder="(none required for local)" />
+        <div id="pf-checkbox-row">
+          <label><input type="checkbox" id="pf-tool-use" checked /> Tool Use</label>
+        </div>
+        <label for="pf-context">Context Window</label>
+        <input id="pf-context" type="number" placeholder="32768" value="32768" />
+        <div id="pf-buttons">
+          <button id="btn-pf-save">Save Provider</button>
+          <button id="btn-pf-cancel">Cancel</button>
+        </div>
+      </div>
     </div>
     <div id="settings-footer">
       <button id="btn-settings-save">Save</button>
@@ -40,6 +59,12 @@ root.innerHTML = `
   </div>
 
   <ul id="attached-files"></ul>
+
+  <div id="model-selector-row">
+    <label for="model-select">Model:</label>
+    <select id="model-select"></select>
+    <span id="provider-status-dot" class="status-dot status-unknown" title="Unknown"></span>
+  </div>
 
   <div id="output-wrapper">
     <div id="output-toolbar">
@@ -453,6 +478,150 @@ style.textContent = `
   #btn-settings-cancel:hover:not(:disabled) {
     background: var(--vscode-button-secondaryHoverBackground, #45494e);
   }
+
+  #settings-divider {
+    border: none;
+    border-top: 1px solid var(--vscode-widget-border, #454545);
+    margin: 8px 0;
+  }
+
+  #providers-header {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--vscode-descriptionForeground, #888);
+    margin-bottom: 6px;
+  }
+
+  #providers-list {
+    list-style: none;
+    margin-bottom: 6px;
+  }
+
+  #providers-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+
+  #providers-list li:hover {
+    background: var(--vscode-list-hoverBackground, #2a2d2e);
+  }
+
+  .provider-item-name { flex: 1; }
+
+  .provider-item-actions { display: flex; gap: 4px; }
+
+  .provider-item-actions button {
+    padding: 1px 6px;
+    font-size: 11px;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+  }
+
+  .provider-item-actions button:hover {
+    background: var(--vscode-button-secondaryHoverBackground, #45494e);
+  }
+
+  #btn-add-provider {
+    font-size: 12px;
+    background: none;
+    border: 1px dashed var(--vscode-widget-border, #454545);
+    color: var(--vscode-foreground, #ccc);
+    width: 100%;
+    padding: 4px;
+    cursor: pointer;
+    border-radius: 3px;
+    margin-bottom: 4px;
+  }
+
+  #btn-add-provider:hover {
+    background: var(--vscode-list-hoverBackground, #2a2d2e);
+  }
+
+  #provider-form {
+    background: var(--vscode-editor-background, #1e1e1e);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    border-radius: 4px;
+    padding: 8px;
+    margin-top: 6px;
+  }
+
+  #provider-form-title {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  #pf-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+    font-size: 12px;
+  }
+
+  #pf-buttons {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    justify-content: flex-end;
+  }
+
+  #btn-pf-cancel {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+  }
+
+  /* Model selector row */
+  #model-selector-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--vscode-widget-border, #454545);
+    font-size: 12px;
+  }
+
+  #model-selector-row label {
+    color: var(--vscode-descriptionForeground, #888);
+    white-space: nowrap;
+  }
+
+  #model-select {
+    flex: 1;
+    background: var(--vscode-dropdown-background, #3c3c3c);
+    color: var(--vscode-dropdown-foreground, #ccc);
+    border: 1px solid var(--vscode-dropdown-border, #454545);
+    border-radius: 2px;
+    padding: 2px 4px;
+    font-size: 12px;
+    font-family: inherit;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot.status-online { background: #4ec94e; }
+  .status-dot.status-offline { background: #e05555; }
+  .status-dot.status-checking { background: #d4a017; animation: pulse 1s infinite; }
+  .status-dot.status-unknown { background: var(--vscode-descriptionForeground, #888); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
 `;
 document.head.appendChild(style);
 
@@ -467,9 +636,6 @@ const btnAttach    = document.getElementById('btn-attach') as HTMLButtonElement;
   const btnAttachEditor = document.getElementById('btn-attach-editor') as HTMLButtonElement;
 const btnSelectSess = document.getElementById('btn-select-session') as HTMLButtonElement;
 const settingsOverlay   = document.getElementById('settings-overlay')!;
-const settingsBaseUrl   = document.getElementById('settings-base-url') as HTMLInputElement;
-const settingsApiKey    = document.getElementById('settings-api-key') as HTMLInputElement;
-const settingsModel     = document.getElementById('settings-model') as HTMLInputElement;
 const btnSettingsClose  = document.getElementById('btn-settings-close') as HTMLButtonElement;
 const btnSettingsSave   = document.getElementById('btn-settings-save') as HTMLButtonElement;
 const btnSettingsCancel = document.getElementById('btn-settings-cancel') as HTMLButtonElement;
@@ -480,13 +646,131 @@ const statusBar    = document.getElementById('status-bar')!;
 const chkThinking  = document.getElementById('chk-thinking') as HTMLInputElement;
 const chkAgentsMd  = document.getElementById('chk-agents-md') as HTMLInputElement;
 const lblAgentsMd  = document.getElementById('lbl-agents-md') as HTMLElement;
+const modelSelect        = document.getElementById('model-select') as HTMLSelectElement;
+const providerStatusDot  = document.getElementById('provider-status-dot')!;
+const providersList      = document.getElementById('providers-list') as HTMLUListElement;
+const btnAddProvider     = document.getElementById('btn-add-provider') as HTMLButtonElement;
+const providerForm       = document.getElementById('provider-form')!;
+const providerFormTitle  = document.getElementById('provider-form-title')!;
+const pfName             = document.getElementById('pf-name') as HTMLInputElement;
+const pfBaseUrl          = document.getElementById('pf-base-url') as HTMLInputElement;
+const pfModel            = document.getElementById('pf-model') as HTMLInputElement;
+const pfApiKey           = document.getElementById('pf-api-key') as HTMLInputElement;
+const pfToolUse          = document.getElementById('pf-tool-use') as HTMLInputElement;
+const pfContext          = document.getElementById('pf-context') as HTMLInputElement;
+const btnPfSave          = document.getElementById('btn-pf-save') as HTMLButtonElement;
+const btnPfCancel        = document.getElementById('btn-pf-cancel') as HTMLButtonElement;
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 interface AttachedFile { uri: string; relativePath: string; }
 
+interface ProviderConfig {
+  name: string;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  toolUse: boolean;
+  context: number;
+}
+
 let attachedFiles: AttachedFile[] = [];
 let isGenerating = false;
+
+// Provider state
+let providers: ProviderConfig[] = [];
+let activeProviderIndex = 0;
+let editingProviderIndex = -1; // -1 = adding new
+
+function renderProvidersList(): void {
+  providersList.innerHTML = '';
+  for (let i = 0; i < providers.length; i++) {
+    const p = providers[i];
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span class="provider-item-name">${escapeHtml(p.name)}</span>
+      <span class="provider-item-actions">
+        <button data-idx="${i}" class="btn-edit-provider">Edit</button>
+        <button data-idx="${i}" class="btn-delete-provider">×</button>
+      </span>
+    `;
+    providersList.appendChild(li);
+  }
+
+  providersList.querySelectorAll('.btn-edit-provider').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt((btn as HTMLElement).dataset.idx ?? '0', 10);
+      openProviderForm(idx);
+    });
+  });
+
+  providersList.querySelectorAll('.btn-delete-provider').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt((btn as HTMLElement).dataset.idx ?? '0', 10);
+      providers.splice(idx, 1);
+      if (activeProviderIndex >= providers.length) {
+        activeProviderIndex = Math.max(0, providers.length - 1);
+      }
+      renderProvidersList();
+    });
+  });
+}
+
+function openProviderForm(idx: number): void {
+  editingProviderIndex = idx;
+  if (idx === -1) {
+    providerFormTitle.textContent = 'Add Provider';
+    pfName.value = '';
+    pfBaseUrl.value = '';
+    pfModel.value = '';
+    pfApiKey.value = '';
+    pfToolUse.checked = true;
+    pfContext.value = '32768';
+  } else {
+    const p = providers[idx];
+    providerFormTitle.textContent = 'Edit Provider';
+    pfName.value = p.name;
+    pfBaseUrl.value = p.baseUrl;
+    pfModel.value = p.model;
+    pfApiKey.value = p.apiKey ?? '';
+    pfToolUse.checked = p.toolUse;
+    pfContext.value = String(p.context);
+  }
+  providerForm.hidden = false;
+  pfName.focus();
+}
+
+function closeProviderForm(): void {
+  providerForm.hidden = true;
+  editingProviderIndex = -1;
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderModelDropdown(): void {
+  const prev = modelSelect.value;
+  modelSelect.innerHTML = '';
+  for (let i = 0; i < providers.length; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = providers[i].name;
+    modelSelect.appendChild(opt);
+  }
+  // Restore selection or use activeProviderIndex
+  if (prev && modelSelect.querySelector(`option[value="${prev}"]`)) {
+    modelSelect.value = prev;
+  } else {
+    modelSelect.value = String(activeProviderIndex);
+  }
+}
+
+function setProviderStatus(status: 'online' | 'offline' | 'checking' | 'unknown'): void {
+  providerStatusDot.className = `status-dot status-${status}`;
+  const labels: Record<string, string> = { online: 'Online', offline: 'Offline', checking: 'Checking...', unknown: 'Unknown' };
+  providerStatusDot.title = labels[status] ?? 'Unknown';
+}
 /** Tracks whether the current generation was explicitly cancelled by the user. */
 let wasExplicitlyCancelled = false;
 /** Tracks whether there is an active editor in VS Code. */
@@ -761,16 +1045,48 @@ settingsOverlay.addEventListener('click', (e) => {
 btnSettingsSave.addEventListener('click', () => {
   vscode.postMessage({
     type: 'saveSettings',
-    baseUrl: settingsBaseUrl.value.trim(),
-    model: settingsModel.value.trim(),
-    apiKey: settingsApiKey.value,
+    providers,
   });
+  renderModelDropdown();
   closeSettings();
 });
 
 // Sync checkbox state changes to the extension immediately
 chkAgentsMd.addEventListener('change', () => {
   vscode.postMessage({ type: 'checkboxChange', includeAgentsMd: chkAgentsMd.checked });
+});
+
+// Provider form handlers
+btnAddProvider.addEventListener('click', () => openProviderForm(-1));
+
+btnPfCancel.addEventListener('click', closeProviderForm);
+
+btnPfSave.addEventListener('click', () => {
+  const p: ProviderConfig = {
+    name: pfName.value.trim() || pfModel.value.trim() || 'unnamed',
+    baseUrl: pfBaseUrl.value.trim(),
+    model: pfModel.value.trim(),
+    apiKey: pfApiKey.value || undefined,
+    toolUse: pfToolUse.checked,
+    context: parseInt(pfContext.value, 10) || 32768,
+  };
+  if (editingProviderIndex === -1) {
+    providers.push(p);
+  } else {
+    providers[editingProviderIndex] = p;
+  }
+  renderProvidersList();
+  closeProviderForm();
+});
+
+// Model dropdown selection
+modelSelect.addEventListener('change', () => {
+  const idx = parseInt(modelSelect.value, 10);
+  if (!isNaN(idx)) {
+    activeProviderIndex = idx;
+    setProviderStatus('checking');
+    vscode.postMessage({ type: 'selectModel', providerIndex: idx });
+  }
 });
 
 // ── Copy actions ──────────────────────────────────────────────────────────────
@@ -1159,6 +1475,10 @@ window.addEventListener('message', (event: MessageEvent) => {
     baseUrl?: string;
     model?: string;
     apiKey?: string;
+    providers?: ProviderConfig[];
+    activeProviderIndex?: number;
+    providerName?: string;
+    status?: 'online' | 'offline' | 'checking';
   };
 
   switch (msg.type) {
@@ -1254,11 +1574,34 @@ window.addEventListener('message', (event: MessageEvent) => {
     }
 
     case 'openSettings': {
-      settingsBaseUrl.value = msg.baseUrl ?? '';
-      settingsApiKey.value = msg.apiKey ?? '';
-      settingsModel.value = msg.model ?? '';
+      if (msg.providers) {
+        providers = msg.providers;
+        activeProviderIndex = msg.activeProviderIndex ?? 0;
+        renderProvidersList();
+        renderModelDropdown();
+      }
       settingsOverlay.hidden = false;
-      settingsBaseUrl.focus();
+      break;
+    }
+
+    case 'providers': {
+      if (msg.providers) {
+        providers = msg.providers;
+        activeProviderIndex = msg.activeProviderIndex ?? 0;
+        renderModelDropdown();
+        // Check health of active provider on load
+        if (providers.length > 0) {
+          setProviderStatus('checking');
+          vscode.postMessage({ type: 'selectModel', providerIndex: activeProviderIndex });
+        }
+      }
+      break;
+    }
+
+    case 'providerStatus': {
+      if (msg.status) {
+        setProviderStatus(msg.status);
+      }
       break;
     }
   }

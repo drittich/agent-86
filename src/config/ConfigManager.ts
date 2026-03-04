@@ -5,6 +5,17 @@ import { AttachedFile } from '../chat/messageProtocol';
 // Session storage key prefix
 const SESSION_STORAGE_PREFIX = 'agentic.session.';
 
+// ── Provider schema ───────────────────────────────────────────────────────────
+
+export interface ProviderConfig {
+  name: string;        // Display name, e.g., "qwen3-coder:a3b"
+  baseUrl: string;     // e.g., "http://localhost:8080/v1"
+  model: string;       // e.g., "qwen3-coder:a3b"
+  apiKey?: string;     // Optional API key (default: "local")
+  toolUse: boolean;    // Whether to enable tool use
+  context: number;     // Context window size
+}
+
 // ── Session schema ────────────────────────────────────────────────────────────
 
 export interface Session {

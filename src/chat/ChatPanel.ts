@@ -15,7 +15,7 @@ import {
 import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
 import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
 import { parseDeleteBlocks, resolveDeleteBlockPath, deleteFile, formatDeleteResult } from '../tools/DeleteFileTool';
-import { ConfigManager, Session } from '../config/ConfigManager';
+import { ConfigManager, Session, ProviderConfig } from '../config/ConfigManager';
 import { TokenCounter } from '../tools/TokenCounter';
 
 const DIFF_SCHEME = 'agentic-diff';
@@ -73,6 +73,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _hasActiveEditor = false;
   private _thinkingMode = false;
   private _includeAgentsMd = false;
+
+  // Multi-provider support
+  private _activeProviderIndex = 0;
 
   constructor(private readonly context: vscode.ExtensionContext, log: vscode.OutputChannel) {
     this._log = log;
@@ -191,11 +194,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   public openSettings(): void {
-    const cfg = vscode.workspace.getConfiguration('agent86');
-    const baseUrl = cfg.get<string>('baseUrl') ?? '';
-    const model = cfg.get<string>('model') ?? '';
-    const apiKey = cfg.get<string>('apiKey') ?? '';
-    this._postMessage({ type: 'openSettings', baseUrl, model, apiKey });
+    const providers = this._getProviders();
+    this._postMessage({ type: 'openSettings', providers, activeProviderIndex: this._activeProviderIndex });
   }
 
   public attachFiles(): void {
@@ -365,12 +365,36 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     }
   }
 
-  private _getProvider(): OpenAIProvider {
+  private _getProviders(): ProviderConfig[] {
     const cfg = vscode.workspace.getConfiguration('agent86');
+    const providers = cfg.get<ProviderConfig[]>('providers');
+    if (providers && providers.length > 0) {
+      return providers;
+    }
+    // Legacy fallback: build a single provider from old settings
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
     const apiKey = cfg.get<string>('apiKey') ?? 'local';
-    return new OpenAIProvider(baseUrl, model, apiKey, this._log);
+    return [{ name: model, baseUrl, model, apiKey, toolUse: true, context: 32768 }];
+  }
+
+  private _getProvider(): OpenAIProvider {
+    const providers = this._getProviders();
+    const idx = Math.min(this._activeProviderIndex, providers.length - 1);
+    const providerConfig = providers[idx];
+    return new OpenAIProvider(providerConfig, this._log);
+  }
+
+  private async _checkProviderHealth(baseUrl: string): Promise<boolean> {
+    try {
+      const response = await fetch(`${baseUrl}/models`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
   }
 
   private _estimateMessageChars(messages: ChatMessage[]): number {
@@ -1455,9 +1479,21 @@ if (searchRequests) {
       }
       case 'saveSettings': {
         const cfg = vscode.workspace.getConfiguration('agent86');
-        cfg.update('baseUrl', message.baseUrl, vscode.ConfigurationTarget.Global);
-        cfg.update('model', message.model, vscode.ConfigurationTarget.Global);
-        cfg.update('apiKey', message.apiKey, vscode.ConfigurationTarget.Global);
+        if (message.providers) {
+          cfg.update('providers', message.providers, vscode.ConfigurationTarget.Global);
+        }
+        break;
+      }
+      case 'selectModel': {
+        const providers = this._getProviders();
+        if (message.providerIndex >= 0 && message.providerIndex < providers.length) {
+          this._activeProviderIndex = message.providerIndex;
+          const provider = providers[message.providerIndex];
+          this._postMessage({ type: 'providerStatus', providerName: provider.name, status: 'checking' });
+          this._checkProviderHealth(provider.baseUrl).then(online => {
+            this._postMessage({ type: 'providerStatus', providerName: provider.name, status: online ? 'online' : 'offline' });
+          });
+        }
         break;
       }
       case 'checkboxChange':
@@ -1550,6 +1586,8 @@ if (searchRequests) {
     this._postMessage({ type: 'editorState', hasActiveEditor: this._hasActiveEditor });
     // Send checkbox states so the UI reflects the restored session
     this._postMessage({ type: 'checkboxState', thinkingMode: this._thinkingMode, includeAgentsMd: this._includeAgentsMd });
+    // Send providers so the model dropdown is populated
+    this._postMessage({ type: 'providers', providers: this._getProviders(), activeProviderIndex: this._activeProviderIndex });
 
     if (this._attachedFiles.length > 0) {
       this._postMessage({ type: 'attachments', files: this._attachedFiles });
