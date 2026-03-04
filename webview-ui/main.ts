@@ -45,8 +45,7 @@ root.innerHTML = `
       </div>
     </div>
     <div id="settings-footer">
-      <button id="btn-settings-save">Save</button>
-      <button id="btn-settings-cancel">Cancel</button>
+      <button id="btn-settings-cancel">Close</button>
     </div>
   </div>
 </div>
@@ -472,11 +471,11 @@ style.textContent = `
     border-top: 1px solid var(--vscode-widget-border, #454545);
   }
   #btn-settings-cancel {
-    background: var(--vscode-button-secondaryBackground, #3a3d41);
-    color: var(--vscode-button-secondaryForeground, #ccc);
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
   }
   #btn-settings-cancel:hover:not(:disabled) {
-    background: var(--vscode-button-secondaryHoverBackground, #45494e);
+    background: var(--vscode-button-hoverBackground);
   }
 
   #settings-divider {
@@ -637,7 +636,6 @@ const btnAttach    = document.getElementById('btn-attach') as HTMLButtonElement;
 const btnSelectSess = document.getElementById('btn-select-session') as HTMLButtonElement;
 const settingsOverlay   = document.getElementById('settings-overlay')!;
 const btnSettingsClose  = document.getElementById('btn-settings-close') as HTMLButtonElement;
-const btnSettingsSave   = document.getElementById('btn-settings-save') as HTMLButtonElement;
 const btnSettingsCancel = document.getElementById('btn-settings-cancel') as HTMLButtonElement;
 const btnCopyMd    = document.getElementById('btn-copy-markdown') as HTMLButtonElement;
 const btnCopyRaw   = document.getElementById('btn-copy-raw') as HTMLButtonElement;
@@ -711,7 +709,9 @@ function renderProvidersList(): void {
       if (activeProviderIndex >= providers.length) {
         activeProviderIndex = Math.max(0, providers.length - 1);
       }
+      vscode.postMessage({ type: 'saveSettings', providers });
       renderProvidersList();
+      renderModelDropdown();
     });
   });
 }
@@ -1042,14 +1042,6 @@ settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) { closeSettings(); }
 });
 
-btnSettingsSave.addEventListener('click', () => {
-  vscode.postMessage({
-    type: 'saveSettings',
-    providers,
-  });
-  renderModelDropdown();
-  closeSettings();
-});
 
 // Sync checkbox state changes to the extension immediately
 chkAgentsMd.addEventListener('change', () => {
@@ -1075,7 +1067,9 @@ btnPfSave.addEventListener('click', () => {
   } else {
     providers[editingProviderIndex] = p;
   }
+  vscode.postMessage({ type: 'saveSettings', providers });
   renderProvidersList();
+  renderModelDropdown();
   closeProviderForm();
 });
 

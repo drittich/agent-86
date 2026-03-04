@@ -228,20 +228,13 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   private _getProviders(): ProviderConfig[] {
     const cfg = vscode.workspace.getConfiguration('agent86');
-    
-    // Explicitly check workspace scope first, then global
-    const workspaceProviders = cfg.inspect<ProviderConfig[]>('providers')?.workspaceValue;
-    const globalProviders = cfg.inspect<ProviderConfig[]>('providers')?.globalValue;
-    
-    // Use workspace value if it exists and has items, otherwise fall back to global
-    const providers = (workspaceProviders && workspaceProviders.length > 0) 
-      ? workspaceProviders 
-      : globalProviders;
-    
-    if (providers && providers.length > 0) {
-      return providers;
+    const inspected = cfg.inspect<ProviderConfig[]>('providers');
+    const globalProviders = inspected?.globalValue;
+
+    if (globalProviders && globalProviders.length > 0) {
+      return globalProviders;
     }
-    
+
     // Legacy fallback: build a single provider from old settings
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
@@ -855,15 +848,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       }
       case 'saveSettings': {
         const cfg = vscode.workspace.getConfiguration('agent86');
-        if (message.providers) {
-          // Determine the appropriate configuration target:
-          // - If a workspace is open, save to workspace scope so it takes effect
-          // - Otherwise, save to global (user) scope
-          const hasWorkspace = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0;
-          const target = hasWorkspace 
-            ? vscode.ConfigurationTarget.Workspace 
-            : vscode.ConfigurationTarget.Global;
-          cfg.update('providers', message.providers, target);
+        if (message.providers && message.providers.length > 0) {
+          cfg.update('providers', message.providers, vscode.ConfigurationTarget.Global);
         }
         break;
       }
