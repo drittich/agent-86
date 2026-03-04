@@ -1,7 +1,21 @@
-import { streamText, ToolSet } from 'ai';
+import { streamText, ToolSet, RetryError } from 'ai';
 import { IProvider, ChatMessage, ProviderEvent, StreamOptions } from './IProvider';
 import { ProviderConfig } from '../config/ConfigManager';
 import { createProvider, AIProviderInstance } from './ProviderFactory';
+
+/**
+ * Extracts the root cause error from AI SDK error wrappers.
+ * AI SDK wraps errors in RetryError which contains lastError.
+ */
+function extractRootError(error: unknown): unknown {
+	// Handle AI SDK RetryError - extract the last error
+	if (RetryError.isInstance(error)) {
+		if (error.lastError) {
+			return extractRootError(error.lastError);
+		}
+	}
+	return error;
+}
 
 /**
  * Checks if an error indicates the model doesn't support the Responses API
@@ -179,6 +193,7 @@ export class AIProvider implements IProvider {
       const finishReason = await result.finishReason;
 
       // Check if we got a Responses API error with no content
+      console.log('[AIProvider] streamError:', streamError, 'hasContent:', hasContent, 'isFallback:', isFallback, 'isResponsesAPIError:', isFallback ? false : isResponsesAPIError(streamError));
       if (streamError && !hasContent && !isFallback && isResponsesAPIError(streamError)) {
         // Retry with Chat Completions API
         console.log('[AIProvider] Responses API error detected, falling back to Chat Completions');
@@ -209,6 +224,27 @@ export class AIProvider implements IProvider {
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
         onEvent({ type: 'done', finishReason: 'aborted' });
+        return;
+      }
+
+      // AI SDK wraps errors in RetryError - extract the root error first
+      const rootError = extractRootError(err);
+
+      // Check for AI_NoOutputGeneratedError - model returned empty response
+      if (rootError instanceof Error && 
+          (rootError.name === 'AI_NoOutputGeneratedError' || 
+           rootError.message.includes('No output generated'))) {
+        // Check if there's an underlying API error
+        if (rootError !== err) {
+          // There's a real error underneath - check if it's a Responses API error
+          if (!isFallback && isResponsesAPIError(rootError)) {
+            console.log('[AIProvider] Responses API error (from NoOutputGeneratedError), falling back to Chat Completions');
+            await this.doStream(this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
+            return;
+          }
+        }
+        // No underlying error or not a Responses API error - emit as empty response
+        onEvent({ type: 'done', finishReason: 'stop' });
         return;
       }
 
