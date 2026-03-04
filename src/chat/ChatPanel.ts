@@ -4,45 +4,21 @@ import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageP
 import { OpenAIProvider } from '../providers/OpenAIProvider';
 import { ChatMessage } from '../providers/IProvider';
 import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB, FILE_CAP_BYTES, TOTAL_CAP_BYTES } from '../tools/FileTools';
-import { parseEditOps, resolveEditPath, applyAnchorOp } from '../tools/editParser';
-import {
-  chunkFile, formatChunkBlock, buildChunkMeta, parseChunkRequests,
-  parseFileRequests, formatFileListBlock,
-  parseSearchRequests, formatSearchResultBlock, searchFileWithRg,
-  extractPromptTokens, selectBestChunk, selectExactLineRangeChunks,
-  FileChunkMeta, FileChunk, ChunkRequest,
-} from '../tools/ChunkManager';
-import { parseRunBlocks, runCommand, formatRunResult } from '../tools/TerminalTool';
-import { parseMoveBlocks, resolveMoveBlockPath, moveFile, formatMoveResult } from '../tools/MoveFileTool';
-import { parseDeleteBlocks, resolveDeleteBlockPath, deleteFile, formatDeleteResult } from '../tools/DeleteFileTool';
 import { ConfigManager, Session, ProviderConfig } from '../config/ConfigManager';
 import { TokenCounter } from '../tools/TokenCounter';
+import { DiffContentProvider } from './DiffContentProvider';
+import { ChatPanelChunks, AttachedFile as ChunkAttachedFile } from './ChatPanelChunks';
+import { ChatPanelEdits } from './ChatPanelEdits';
+import { ChatPanelActions } from './ChatPanelActions';
+import { ChatPanelSessions } from './ChatPanelSessions';
 
-const DIFF_SCHEME = 'agentic-diff';
-
-/** Normalize common incorrect file extensions in glob patterns. */
-function normalizeGlob(glob: string): string {
-  return glob
-    .replace(/\bc#\b/g, 'cs')     // C# → cs
-    .replace(/\bc\+\+\b/g, 'cpp') // C++ → cpp
-    .replace(/\bf#\b/g, 'fs');    // F# → fs
-}
-
-/** In-memory content provider for diff previews. */
-class DiffContentProvider implements vscode.TextDocumentContentProvider {
-  private _contents = new Map<string, string>();
-
-  set(key: string, content: string): void {
-    this._contents.set(key, content);
+function getNonce(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 32; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-
-  delete(key: string): void {
-    this._contents.delete(key);
-  }
-
-  provideTextDocumentContent(uri: vscode.Uri): string {
-    return this._contents.get(uri.path) ?? '';
-  }
+  return result;
 }
 
 export class ChatPanel implements vscode.WebviewViewProvider {
@@ -51,18 +27,13 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private readonly _log: vscode.OutputChannel;
   /** Set to true when the user explicitly clicks Stop; cleared on new send. */
   private _userCancelled = false;
-  private _history: ChatMessage[] = [];
-  private _attachedFiles: AttachedFile[] = [];
   /** Tracks which attached file URIs have already been injected into _history. */
   private _injectedFileUris = new Set<string>();
-  /** Maps workspace-relative URI → chunk metadata for files chunked in the current session. */
-  private _chunkMeta = new Map<string, FileChunkMeta>();
   private readonly _diffProvider = new DiffContentProvider();
   /** Pending approval resolvers keyed by approvalId. */
   private readonly _approvalResolvers = new Map<string, (approved: boolean) => void>();
   private _approvalCounter = 0;
   private readonly _configManager: ConfigManager;
-  private _currentSession: Session;
   private readonly _tokenCounter: TokenCounter;
 
   // Backpressure handling: buffer deltas when webview is hidden
@@ -71,16 +42,20 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   // Track active editor state
   private _hasActiveEditor = false;
-  private _thinkingMode = false;
-  private _includeAgentsMd = false;
 
   // Multi-provider support
   private _activeProviderIndex = 0;
 
+  // Modular components
+  private readonly _sessions: ChatPanelSessions;
+  private readonly _chunks: ChatPanelChunks;
+  private readonly _edits: ChatPanelEdits;
+  private readonly _actions: ChatPanelActions;
+
   constructor(private readonly context: vscode.ExtensionContext, log: vscode.OutputChannel) {
     this._log = log;
     context.subscriptions.push(
-      vscode.workspace.registerTextDocumentContentProvider(DIFF_SCHEME, this._diffProvider)
+      vscode.workspace.registerTextDocumentContentProvider('agentic-diff', this._diffProvider)
     );
     this._configManager = new ConfigManager(context);
 
@@ -94,18 +69,40 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       })
     );
 
+    // Initialize modular components
+    this._sessions = new ChatPanelSessions({
+      configManager: this._configManager,
+      log: this._log,
+      postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
+    });
+
+    this._chunks = new ChatPanelChunks({
+      log: this._log,
+      getWorkspaceFolders: () => vscode.workspace.workspaceFolders ?? [],
+      postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
+    });
+
+    this._edits = new ChatPanelEdits({
+      log: this._log,
+      diffProvider: this._diffProvider,
+      postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
+      requestApproval: (action, payload, reason) => this._requestApproval(action, payload, reason),
+      pushHistory: (msg) => this._sessions.history.push(msg),
+      saveSession: () => this._sessions.saveCurrentSession(),
+    });
+
+    this._actions = new ChatPanelActions({
+      log: this._log,
+      postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
+      requestApproval: (action, payload, reason) => this._requestApproval(action, payload, reason),
+      pushHistory: (msg) => this._sessions.history.push(msg),
+      saveSession: () => this._sessions.saveCurrentSession(),
+    });
+
     // Restore last session, or start a fresh one
-    const restored = this._configManager.loadLastSession();
-    if (restored) {
-      this._currentSession = restored;
-      this._history = restored.messages;
-      this._attachedFiles = restored.attachments;
-      // All restored attachments are already baked into history — don't re-inject them
-      this._injectedFileUris = new Set(restored.attachments.map(f => f.uri));
-      this._thinkingMode = restored.thinkingMode ?? false;
-      this._includeAgentsMd = restored.includeAgentsMd ?? false;
-    } else {
-      this._currentSession = this._configManager.createSession();
+    const restored = this._sessions.loadLastSession();
+    if (!restored) {
+      this._sessions.newSession();
     }
 
     // Track active editor state changes
@@ -173,16 +170,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       this._approvalResolvers.delete(id);
       resolve(false);
     }
-    this._history = [];
-    this._attachedFiles = [];
     this._injectedFileUris = new Set();
-    this._chunkMeta = new Map();
-    this._thinkingMode = false;
-    this._includeAgentsMd = false;
+    this._chunks.chunkMeta = new Map();
     // Discard any buffered deltas — the webview is about to clear its output
     this._deltaBuffer = [];
-    this._currentSession = this._configManager.createSession();
-    this._saveCurrentSession();
+    this._sessions.newSession();
     if (this._view) {
       this._postMessage({ type: 'newSession' });
       this._postMessage({ type: 'attachments', files: [] });
@@ -206,16 +198,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * Get the currently attached files (used by the file tree picker).
    */
   public getAttachedFiles(): AttachedFile[] {
-    return this._attachedFiles;
+    return this._sessions.attachedFiles;
   }
 
   /**
    * Update the attached files list (used by the file tree picker).
    */
   public updateAttachedFiles(files: AttachedFile[]): void {
-    this._attachedFiles = files;
+    this._sessions.attachedFiles = files;
     this._postMessage({ type: 'attachments', files });
-    this._saveCurrentSession();
+    this._sessions.saveCurrentSession();
   }
 
   /**
@@ -224,14 +216,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   public restoreSession(session: Session): void {
     this._abortController?.abort();
     this._abortController = undefined;
-    this._history = session.messages;
-    this._attachedFiles = session.attachments;
-    // Mark all restored attachments as already injected (they're baked into history)
     this._injectedFileUris = new Set(session.attachments.map(f => f.uri));
-    this._chunkMeta = new Map();
-    this._thinkingMode = session.thinkingMode ?? false;
-    this._includeAgentsMd = session.includeAgentsMd ?? false;
-    this._currentSession = session;
+    this._chunks.chunkMeta = new Map();
+    this._sessions.restoreSession(session);
     this._postMessage({ type: 'status', text: `Restored session: ${session.title}` });
     this._restoreSessionUi();
   }
@@ -241,120 +228,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    */
   public getConfigManager(): ConfigManager {
     return this._configManager;
-  }
-
-  /**
-   * Resolve a workspace-relative path to an absolute path, with a
-   * case-insensitive basename glob fallback if the exact path doesn't exist.
-   * Returns { absolutePath, relativePath } or null if unresolvable.
-   */
-  private async _resolvePathWithFallback(
-    relativePath: string,
-    wsRoots: string[]
-  ): Promise<{ absolutePath: string; relativePath: string } | null> {
-    const pathResult = resolveEditPath(relativePath, wsRoots);
-    if (!pathResult.error) {
-      // Check it actually exists on disk
-      try {
-        await vscode.workspace.fs.stat(vscode.Uri.file(pathResult.resolvedPath!));
-        return { absolutePath: pathResult.resolvedPath!, relativePath };
-      } catch { /* fall through to glob */ }
-    }
-
-    // Glob fallback: match by basename (case-insensitive)
-    const basename = path.basename(relativePath);
-    const basenameLower = basename.toLowerCase();
-    let uris: vscode.Uri[] = [];
-    try { uris = await vscode.workspace.findFiles(`**/${basename}`, FILE_EXCLUDE_GLOB, 10); } catch { /* ignore */ }
-    if (uris.length === 0) {
-      try {
-        const all = await vscode.workspace.findFiles('**/*', FILE_EXCLUDE_GLOB, 500);
-        uris = all.filter(u => path.basename(u.fsPath).toLowerCase() === basenameLower);
-      } catch { /* ignore */ }
-    }
-    if (uris.length === 1) {
-      const wsRoot = wsRoots[0] ?? '';
-      const abs = uris[0].fsPath;
-      const rel = abs.startsWith(wsRoot + path.sep)
-        ? abs.slice(wsRoot.length + 1).replace(/\\/g, '/')
-        : abs.replace(/\\/g, '/');
-      this._log.appendLine(`[resolve] "${relativePath}" → "${rel}" via glob fallback`);
-      return { absolutePath: abs, relativePath: rel };
-    }
-    return null;
-  }
-
-  /**
-   * Read, chunk, and cache metadata for a single file.
-   * Returns the chunks array, or null if the file cannot be read.
-   */
-  private async _getChunksForUri(
-    relativePath: string,
-    wsRoots: string[]
-  ): Promise<FileChunk[] | null> {
-    const resolved = await this._resolvePathWithFallback(relativePath, wsRoots);
-    if (!resolved) {
-      this._log.appendLine(`[chunks] could not read "${relativePath}" — file not found or outside workspace`);
-      return null;
-    }
-
-    const { absolutePath, relativePath: resolvedRelativePath } = resolved;
-    const fileUri = vscode.Uri.file(absolutePath);
-    let content: string;
-    let docVersion: number;
-    try {
-      const doc = await vscode.workspace.openTextDocument(fileUri);
-      content = doc.getText();
-      docVersion = doc.version;
-    } catch {
-      try {
-        const bytes = await vscode.workspace.fs.readFile(fileUri);
-        content = Buffer.from(bytes).toString('utf8');
-        docVersion = 0;
-      } catch {
-        this._log.appendLine(`[chunks] could not read "${relativePath}"`);
-        return null;
-      }
-    }
-
-    const chunks = chunkFile(resolvedRelativePath, content, docVersion);
-    this._chunkMeta.set(resolvedRelativePath, buildChunkMeta(chunks));
-    return chunks;
-  }
-
-  /**
-   * Select chunks to fulfil a `request_chunks` request.
-   * Supports either:
-   * - `preferred.line_range` (exact inclusive lines, no overlap padding), or
-   * - `preferred.near_line` (chunk window around a line).
-   * Defaults to first N chunks.
-   */
-  private _selectChunksForRequest(
-    chunks: FileChunk[],
-    preferred?: ChunkRequest['preferred']
-  ): FileChunk[] {
-    const maxChunks = preferred?.max_chunks ?? 2;
-    const lineRange = preferred?.line_range;
-    if (lineRange) {
-      return selectExactLineRangeChunks(chunks, lineRange, maxChunks);
-    }
-    const nearLine = preferred?.near_line;
-    if (!nearLine) {
-      return chunks.slice(0, maxChunks);
-    }
-    // Find chunk whose lineStart is closest to nearLine
-    let bestIdx = 0;
-    let bestDist = Math.abs(chunks[0].lineStart - nearLine);
-    for (let i = 1; i < chunks.length; i++) {
-      const dist = Math.abs(chunks[i].lineStart - nearLine);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestIdx = i;
-      }
-    }
-    const half = Math.floor(maxChunks / 2);
-    const start = Math.max(0, bestIdx - half);
-    return chunks.slice(start, start + maxChunks);
   }
 
   private _reloadTokenizer(): void {
@@ -367,10 +240,20 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   private _getProviders(): ProviderConfig[] {
     const cfg = vscode.workspace.getConfiguration('agent86');
-    const providers = cfg.get<ProviderConfig[]>('providers');
+    
+    // Explicitly check workspace scope first, then global
+    const workspaceProviders = cfg.inspect<ProviderConfig[]>('providers')?.workspaceValue;
+    const globalProviders = cfg.inspect<ProviderConfig[]>('providers')?.globalValue;
+    
+    // Use workspace value if it exists and has items, otherwise fall back to global
+    const providers = (workspaceProviders && workspaceProviders.length > 0) 
+      ? workspaceProviders 
+      : globalProviders;
+    
     if (providers && providers.length > 0) {
       return providers;
     }
+    
     // Legacy fallback: build a single provider from old settings
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
@@ -400,54 +283,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _estimateMessageChars(messages: ChatMessage[]): number {
     // Rough char-based budget; keeps this logic fast and dependency-free.
     return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
-  }
-
-  /**
-   * Compress large tool blocks in older history so sessions stay small.
-   * Keeps head+tail so tags remain visible.
-   */
-  private _summarizeToolHeavyMessage(content: string): string {
-    const HEAD = 3000;
-    const TAIL = 500;
-    if (content.length <= HEAD + TAIL + 200) {
-      return content;
-    }
-    const head = content.slice(0, HEAD);
-    const tail = content.slice(-TAIL);
-    return `${head}\n\n... [history truncated] ...\n\n${tail}`;
-  }
-
-  private _looksLikeToolPayload(content: string): boolean {
-    return (
-      content.includes('<search_result') ||
-      content.includes('<file_list') ||
-      content.includes('<file_chunk') ||
-      content.includes('<RUN_RESULT') ||
-      content.includes('<MOVE_RESULT') ||
-      content.includes('<DELETE_RESULT')
-    );
-  }
-
-  /**
-   * Mutate stored history: summarize older tool payloads so the persisted session
-   * doesn't keep growing indefinitely.
-   */
-  private _compactHistoryInPlace(): void {
-    const KEEP_LAST = 4;
-    const MAX_RAW_LEN = 4500;
-    for (let i = 0; i < Math.max(0, this._history.length - KEEP_LAST); i++) {
-      const m = this._history[i];
-      if (m.role !== 'user') {
-        continue;
-      }
-      if (!m.content || m.content.length < MAX_RAW_LEN) {
-        continue;
-      }
-      if (!this._looksLikeToolPayload(m.content)) {
-        continue;
-      }
-      this._history[i] = { ...m, content: this._summarizeToolHeavyMessage(m.content) };
-    }
   }
 
   /** Trim the message list by dropping oldest turns (after system) until under budget. */
@@ -484,7 +319,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _buildMessages(agentsMdContent?: string): ChatMessage[] {
-    const behaviorInstructions = this._thinkingMode
+    const thinkingMode = this._sessions.thinkingMode;
+    const behaviorInstructions = thinkingMode
       ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
       : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`;
     const agentsMdSection = agentsMdContent
@@ -511,7 +347,7 @@ Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not c
 
 For questions about symbol usage (for example: "is this import unused?", references, call-sites), use \`search_file\` first and search the whole file with ripgrep. Do not use \`request_chunks\` to discover usages; only request chunks after search when exact surrounding code is still required.
 
-**File listing:** \`{"request_files":[{"glob":"src/**/*","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs (e.g. \`**/*.cs\`, \`src/**/*.py\`); \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded. Use correct extensions: \`cs\` for C#, \`cpp\` for C++, \`fs\` for F# (not \`c#\`, \`c++\`, \`f#\`).
+**File listing:** \`{"request_files":[{"glob":"src/**/*","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs (e.g. **/*.cs, \`src/**/*.py\`); \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded. Use correct extensions: \`cs\` for C#, \`cpp\` for C++, \`fs\` for F# (not \`c#\`, \`c++\`, \`f#\`).
 
 ## Editing files
 Output anywhere in your response (optionally in a \`\`\`json fence):
@@ -524,8 +360,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 ## Shell / file ops
 \`\`\`
 <RUN>command</RUN>                         result fed back as <RUN_RESULT>; use only when needed
-<MOVE>\\nFROM: old/path\\nTO: new/path\\n</MOVE>   both paths must be inside workspace
-<DELETE>\\nPATH: path/to/file\\n</DELETE>        moved to OS trash; only when user explicitly asks
+<MOVE>\nFROM: old/path\nTO: new/path\n</MOVE>   both paths must be inside workspace
+<DELETE>\nPATH: path/to/file\n</DELETE>        moved to OS trash; only when user explicitly asks
 \`\`\``,
     };
 
@@ -534,8 +370,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 
     // For send-only: summarize older tool payloads; keep the most recent few messages verbatim.
     const KEEP_LAST_VERBOSE = 6;
-    const historyForSend = this._history.map((m, idx) => {
-      const fromEnd = this._history.length - idx;
+    const historyForSend = this._sessions.history.map((m, idx) => {
+      const fromEnd = this._sessions.history.length - idx;
       if (fromEnd <= KEEP_LAST_VERBOSE) {
         return m;
       }
@@ -548,7 +384,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     const rawMessages = [systemPrompt, ...historyForSend];
     const messages = this._trimMessagesToBudget(rawMessages, CONTEXT_BUDGET_CHARS);
 
-    this._log.appendLine(`[buildMessages] ${messages.length} message(s), thinkingMode=${this._thinkingMode}`);
+    this._log.appendLine(`[buildMessages] ${messages.length} message(s), thinkingMode=${thinkingMode}`);
     this._log.appendLine(`[buildMessages] approxChars=${this._estimateMessageChars(messages)}/${CONTEXT_BUDGET_CHARS}`);
     for (const m of messages) {
       const preview = m.content.slice(0, 120).replace(/\n/g, '↵');
@@ -556,6 +392,28 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     }
 
     return messages;
+  }
+
+  private _looksLikeToolPayload(content: string): boolean {
+    return (
+      content.includes('<search_result') ||
+      content.includes('<file_list') ||
+      content.includes('<file_chunk') ||
+      content.includes('<RUN_RESULT') ||
+      content.includes('<MOVE_RESULT') ||
+      content.includes('<DELETE_RESULT')
+    );
+  }
+
+  private _summarizeToolHeavyMessage(content: string): string {
+    const HEAD = 3000;
+    const TAIL = 500;
+    if (content.length <= HEAD + TAIL + 200) {
+      return content;
+    }
+    const head = content.slice(0, HEAD);
+    const tail = content.slice(-TAIL);
+    return `${head}\n\n... [history truncated] ...\n\n${tail}`;
   }
 
   private async _handleSend(prompt: string): Promise<void> {
@@ -566,8 +424,8 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     this._userCancelled = false;
 
     // Auto-detect file references in the prompt and attach them before sending
-    const previouslyAttachedUris = new Set(this._attachedFiles.map(f => f.uri));
-    const autoAttachResult = await autoDetectAndAttachFiles(prompt, this._attachedFiles);
+    const previouslyAttachedUris = new Set(this._sessions.attachedFiles.map(f => f.uri));
+    const autoAttachResult = await autoDetectAndAttachFiles(prompt, this._sessions.attachedFiles);
     const autoAttached = autoAttachResult.files;
     const autoAttachReport = autoAttachResult.report;
 
@@ -577,10 +435,10 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         .map(f => f.uri)
     );
 
-    this._log.appendLine(`[autoAttach] before=${this._attachedFiles.length} after=${autoAttached.length}`);
-    if (autoAttached.length > this._attachedFiles.length) {
-      this._attachedFiles = autoAttached;
-      this._postMessage({ type: 'attachments', files: this._attachedFiles });
+    this._log.appendLine(`[autoAttach] before=${this._sessions.attachedFiles.length} after=${autoAttached.length}`);
+    if (autoAttached.length > this._sessions.attachedFiles.length) {
+      this._sessions.attachedFiles = autoAttached;
+      this._postMessage({ type: 'attachments', files: this._sessions.attachedFiles });
     }
 
     // Surface auto-attach skips in-chat (not just as VS Code toasts)
@@ -597,19 +455,19 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
         text:
           `Auto-attach skipped ${autoAttachReport.skipped.length} file(s) due to the total attachment quota.\n\n` +
           `Skipped:\n${skippedList}${more}\n\n` +
-          `Tip: attach fewer files, or use “Attach Editor” with a selection to include only the relevant section.`,
+          `Tip: attach fewer files, or use "Attach Editor" with a selection to include only the relevant section.`,
       });
     }
 
     // Build user message, prepending any attached files that haven't been injected yet
     let userContent = prompt;
     const wsRoots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
-    const newFiles = this._attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
+    const newFiles = this._sessions.attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
     /** Chunk IDs delivered in the initial user message — seeded into sentChunkIds below. */
     const initialChunkIds: string[] = [];
 
     // Context meter: attachment bytes (capped per-file to align with FileTools total cap accounting)
-    const attachmentBytes = this._attachedFiles.reduce(
+    const attachmentBytes = this._sessions.attachedFiles.reduce(
       (sum, f) => sum + Math.min(f.sizeBytes, FILE_CAP_BYTES),
       0
     );
@@ -617,58 +475,18 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       ? Math.min(100, Math.round((attachmentBytes / TOTAL_CAP_BYTES) * 100))
       : 0;
     if (newFiles.length > 0) {
-      const chunkBlocks: string[] = [];
-      const promptTokens = extractPromptTokens(prompt);
-      const wsRoot = wsRoots[0] ?? '';
-
-      // Cap how much attachment context we inject into the initial user message.
       const MAX_INJECTED_CHARS = 18_000;
-      let injectedChars = 0;
-      const resolvedPaths: string[] = [];
-
-       const skippedDueToInjectionCap: string[] = [];
-       for (const f of newFiles) {
-         if (injectedChars >= MAX_INJECTED_CHARS) {
-           this._log.appendLine(`[chunks] injection cap reached (${MAX_INJECTED_CHARS} chars) — skipping remaining attached files`);
-           skippedDueToInjectionCap.push(f.relativePath);
-           continue;
-         }
-const chunks = await this._getChunksForUri(f.relativePath, wsRoots);
-        let block: string | null = null;
-
-        if (chunks && chunks.length > 0) {
-          if (autoDetectedThisTurnUris.has(f.uri)) {
-            const absolutePath = path.join(wsRoot, f.relativePath);
-            this._postMessage({ type: 'status', text: `Searching ${f.relativePath}…` });
-            const best = await selectBestChunk(chunks, absolutePath, promptTokens);
-            block = formatChunkBlock(best);
-            initialChunkIds.push(best.chunkId);
-            this._log.appendLine(`[chunks] sending ${best.uri} lines ${best.lineStart}-${best.lineEnd} (rg-scored, total=${best.totalChunks})`);
-          } else {
-            const first = chunks[0];
-            block = formatChunkBlock(first);
-            initialChunkIds.push(first.chunkId);
-            this._log.appendLine(`[chunks] sending ${first.uri} lines ${first.lineStart}-${first.lineEnd} (manual attach, initial=1, total=${first.totalChunks})`);
-          }
-        } else {
-          // Fallback for unreadable/unsaved files
-          block = `<file path="${f.relativePath}" language="${f.languageId}">\n${f.content}\n</file>`;
-        }
-
-        if (!block) {
-          continue;
-        }
-
-         if (injectedChars + block.length > MAX_INJECTED_CHARS) {
-           this._log.appendLine(`[chunks] skipping ${f.relativePath} — would exceed injection cap (${MAX_INJECTED_CHARS} chars)`);
-           skippedDueToInjectionCap.push(f.relativePath);
-           continue;
-         }
-chunkBlocks.push(block);
-        injectedChars += block.length;
-        resolvedPaths.push(`  - ${f.relativePath}`);
-        this._injectedFileUris.add(f.uri);
-      }
+      const { chunkBlocks, resolvedPaths, skippedDueToInjectionCap, initialChunkIds: ids } =
+        await this._chunks.prepareFileChunks(
+          newFiles as ChunkAttachedFile[],
+          wsRoots,
+          prompt,
+          autoDetectedThisTurnUris,
+          MAX_INJECTED_CHARS,
+          this._log
+        );
+      
+      initialChunkIds.push(...ids);
 
       if (chunkBlocks.length > 0) {
         this._postMessage({ type: 'status', text: `Sending chunks for ${chunkBlocks.length} file(s)…` });
@@ -697,11 +515,12 @@ chunkBlocks.push(block);
       }
     }
 
-    this._history.push({ role: 'user', content: userContent, displayContent: prompt });
+    this._sessions.history.push({ role: 'user', content: userContent, displayContent: prompt });
 
     // Read AGENTS.md once for this send if the user has opted in
     let agentsMdContent: string | undefined;
-    if (this._includeAgentsMd && wsRoots.length > 0) {
+    const includeAgentsMd = this._sessions.includeAgentsMd;
+    if (includeAgentsMd && wsRoots.length > 0) {
       const agentsMdUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'AGENTS.md');
       try {
         const bytes = await vscode.workspace.fs.readFile(agentsMdUri);
@@ -730,10 +549,10 @@ chunkBlocks.push(block);
     const enforceSearchFirst = /\b(unused|usage|used|reference|references|import|call[- ]?site|where\s+used)\b/i.test(prompt);
     /** Chunk IDs that have already been sent to the model in this turn. */
     const sentChunkIds = new Set<string>(initialChunkIds);
-     let finalResponse = '';
-     let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
-     let lastFinishReason: string | undefined;
-try {
+    let finalResponse = '';
+    let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
+    let lastFinishReason: string | undefined;
+    try {
       while (true) {
         let fullResponse = '';
         this._abortController = new AbortController();
@@ -765,7 +584,7 @@ try {
               this._postMessage({ type: 'error', message: event.message });
             }
           },
-          { chat_template_kwargs: { enable_thinking: this._thinkingMode } }
+          { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
         this._abortController = undefined;
@@ -775,182 +594,34 @@ try {
         }
 
         // Tentatively record assistant turn
-        this._history.push({ role: 'assistant', content: fullResponse });
+        this._sessions.history.push({ role: 'assistant', content: fullResponse });
 
         // Check if the model is requesting a file listing
-        const fileRequests = parseFileRequests(fullResponse);
-        if (fileRequests && fileRound < MAX_FILE_ROUNDS) {
-          fileRound++;
-          this._log.appendLine(`[files] ${fileRequests.length} glob request(s), round ${fileRound}/${MAX_FILE_ROUNDS}`);
-          this._postMessage({ type: 'status', text: `Searching ${fileRequests.length} glob pattern(s)…` });
-          const parts: string[] = [];
-          for (const req of fileRequests) {
-            const normalizedGlob = normalizeGlob(req.glob);
-            if (normalizedGlob !== req.glob) {
-              this._log.appendLine(`[files] normalized glob "${req.glob}" → "${normalizedGlob}"`);
-            }
-            this._log.appendLine(`[files] glob="${normalizedGlob}" reason="${req.reason ?? ''}"`);
-            let uris: vscode.Uri[] = [];
-            try { uris = await vscode.workspace.findFiles(normalizedGlob, FILE_EXCLUDE_GLOB, 200); }
-            catch (err) { this._log.appendLine(`[files] findFiles error: ${err}`); }
-            // Retry with case-insensitive basename matching if nothing matched
-            if (uris.length === 0) {
-              const basenameMatch = req.glob.match(/^(.*\/)([^/*]+)$/);
-              if (basenameMatch) {
-                const [, dir, base] = basenameMatch;
-                const relaxed = `${dir}*`;
-                const baseLower = base.toLowerCase();
-                try {
-                  const all = await vscode.workspace.findFiles(relaxed, FILE_EXCLUDE_GLOB, 500);
-                  uris = all.filter(u => path.basename(u.fsPath).toLowerCase() === baseLower);
-                  if (uris.length > 0) {
-                    this._log.appendLine(`[files] case-insensitive retry matched ${uris.length} file(s) for "${req.glob}"`);
-                  }
-                } catch (err) { this._log.appendLine(`[files] case-insensitive retry error: ${err}`); }
-              }
-            }
-            const paths = uris.map(u => {
-              for (const root of wsRoots) {
-                if (u.fsPath.startsWith(root + path.sep) || u.fsPath === root) {
-                  return u.fsPath.slice(root.length + 1).replace(/\\/g, '/');
-                }
-              }
-              return u.fsPath.replace(/\\/g, '/');
-            }).sort();
-            parts.push(formatFileListBlock(req.glob, paths));
-            this._log.appendLine(`[files] matched ${paths.length} file(s)`);
-          }
-          this._history.push({ role: 'user', content: parts.join('\n\n') });
+        const fileResult = await this._chunks.processFileRequests(fullResponse, wsRoots, MAX_FILE_ROUNDS, fileRound);
+        if (!fileResult.done && fileResult.content) {
+          fileRound = fileResult.nextRound;
+          this._sessions.history.push({ role: 'user', content: fileResult.content });
           continue;
         }
 
         // Check if the model is requesting file searches
-         const searchRequests = parseSearchRequests(fullResponse);
-         if (searchRequests && searchRound < MAX_SEARCH_ROUNDS) {
-           searchRound++;
-
-           // Hard cap: avoid a model asking for many searches and inflating the next request.
-           const MAX_SEARCH_REQUESTS_PER_ROUND = 2;
-           const effectiveSearchRequests = searchRequests.slice(0, MAX_SEARCH_REQUESTS_PER_ROUND);
-           const capped = effectiveSearchRequests.length !== searchRequests.length;
-
-           this._log.appendLine(
-             `[search] round ${searchRound}/${MAX_SEARCH_ROUNDS}, ${effectiveSearchRequests.length}/${searchRequests.length} request(s)` +
-             (capped ? ' (capped)' : '')
-           );
-           this._postMessage({ type: 'status', text: `Searching ${effectiveSearchRequests.length} file(s)…` });
-
-           const parts: string[] = [];
-           for (const req of effectiveSearchRequests) {
-              const caseSensitive = req.caseSensitive ?? true;
-              const isGlob = /[*?{]/.test(req.uri);
-              let absolutePath: string;
-              let displayUri: string;
-              let globFilter: string | undefined;
-              if (isGlob) {
-                // Extract the non-glob prefix directory (e.g. "src/**/*" → "src", "backend/**/*" → "backend")
-                const slashIdx = req.uri.search(/[*?{]/);
-                const prefix = req.uri.slice(0, slashIdx).replace(/[\\/]+$/, '');
-                const wsRoot = wsRoots[0] ?? '';
-                absolutePath = prefix ? path.join(wsRoot, prefix) : wsRoot;
-                // Verify the directory exists; fall back to workspace root
-                try { await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath)); }
-                catch { absolutePath = wsRoot; }
-                // Only pass --glob if the pattern specifies a file extension filter (e.g. src/**/*.ts).
-                // For generic patterns like src/**/* the directory root alone is sufficient.
-                globFilter = /\.\w+$/.test(req.uri) ? req.uri : undefined;
-                displayUri = req.uri;
-              } else {
-                const resolved = await this._resolvePathWithFallback(req.uri, wsRoots);
-                absolutePath = resolved?.absolutePath ?? path.join(wsRoots[0] ?? '', req.uri);
-                displayUri = resolved?.relativePath ?? req.uri;
-              }
-
-              // Directory-wide searches can produce huge ripgrep output and hit the 96KB stdout cap.
-              // Apply a conservative default file glob unless the model already supplied one.
-              if (!globFilter) {
-                try {
-                  const stat = await vscode.workspace.fs.stat(vscode.Uri.file(absolutePath));
-                  if (stat.type === vscode.FileType.Directory) {
-                    globFilter = '**/*.{ts,tsx,js,jsx,mjs,cjs,cs,py,java,kt,go,rs,cpp,c,h,hpp,fs,fsx}';
-                    this._log.appendLine(`[search] default globFilter applied for directory search: ${globFilter}`);
-                  }
-                } catch {
-                  // ignore
-                }
-              }
-
-              let { lines: matches, matchCount, error: searchError } = await searchFileWithRg(
-                absolutePath,
-                req.pattern,
-                caseSensitive,
-                globFilter
-              );
-
-              // For directory searches, `searchFileWithRg()` returns a file list (paths relative to the searched dir).
-              // Prefix them back to workspace-relative paths so the model can drill into specific files.
-              if (isGlob && matches.length > 0) {
-                const base = displayUri.slice(0, displayUri.search(/[*?{]/)).replace(/[\\/]+$/, '').replace(/\\/g, '/');
-                if (base) {
-                  matches = matches.map((l) => {
-                    const t = l.trim();
-                    if (!t || t.startsWith('(') || t.startsWith('<') || t.startsWith('@') || t.startsWith('>')) {
-                      return l;
-                    }
-                    if (t.includes(':')) {
-                      return l;
-                    }
-                    if (t.startsWith(base + '/')) {
-                      return t;
-                    }
-                    return `${base}/${t}`;
-                  });
-                }
-              }
-
-              if (searchError) {
-                this._log.appendLine(`[search] rg error for "${displayUri}": ${searchError}`);
-              }
-              this._log.appendLine(
-                `[search] "${req.pattern}" in ${displayUri} (${absolutePath})` +
-                ` [case_sensitive=${caseSensitive}] → ${matchCount} match(es)` +
-                `${searchError ? ' (error)' : ''}`
-              );
-              parts.push(formatSearchResultBlock(displayUri, req.pattern, matches, matchCount, searchError, caseSensitive));
-           }
-
-           if (capped) {
-             parts.push(
-               `<tool_note>Search requests capped to ${MAX_SEARCH_REQUESTS_PER_ROUND} per round to stay within context budget.</tool_note>`
-             );
-           }
-
-           this._history.push({ role: 'user', content: parts.join('\n\n') });
-           continue;
-         }
-if (searchRequests) {
-          this._log.appendLine(`[search] retry limit reached`);
-          this._postMessage({ type: 'status', text: 'Search request limit reached.' });
-          // Don't break yet - let the model provide its final response with what it has
-          finalResponse = fullResponse;
-          break;
-        }
-
-        // Check if the model is requesting more file chunks
-        const chunkRequests = parseChunkRequests(fullResponse);
-        if (
-          chunkRequests &&
-          enforceSearchFirst &&
-          !searchRequests &&
-          searchRound < MAX_SEARCH_ROUNDS &&
-          searchFirstRedirects < MAX_SEARCH_FIRST_REDIRECTS
-        ) {
-          searchFirstRedirects++;
+        const searchResult = await this._chunks.processSearchRequests(
+          fullResponse,
+          wsRoots,
+          MAX_SEARCH_ROUNDS,
+          searchRound,
+          enforceSearchFirst,
+          searchFirstRedirects,
+          MAX_SEARCH_FIRST_REDIRECTS
+        );
+        
+        if (searchResult.redirect) {
+          searchFirstRedirects = searchResult.nextRedirects;
           this._log.appendLine(
             `[chunks] redirect ${searchFirstRedirects}/${MAX_SEARCH_FIRST_REDIRECTS}:` +
             ' usage/import query should use search_file before request_chunks'
           );
-          this._history.push({
+          this._sessions.history.push({
             role: 'user',
             content:
               '<tool_guidance>For usage/import/reference checks, use local ripgrep via search_file first.' +
@@ -959,89 +630,56 @@ if (searchRequests) {
           continue;
         }
 
-        if (chunkRequests) {
-          if (chunkRound >= MAX_CHUNK_ROUNDS) {
-            // Hard limit reached while model still wants more.
-            this._log.appendLine(`[chunks] retry limit reached`);
-            this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
-            finalResponse = fullResponse;
-            break;
-          }
+        if (!searchResult.done && searchResult.content) {
+          searchRound = searchResult.nextRound;
+          this._sessions.history.push({ role: 'user', content: searchResult.content });
+          continue;
+        }
 
-          this._log.appendLine(
-            `[chunks] model requested ${chunkRequests.length} chunk(s), round ${chunkRound + 1}/${MAX_CHUNK_ROUNDS}`
-          );
-          this._postMessage({ type: 'status', text: `Fetching ${chunkRequests.length} requested chunk(s)…` });
+        if (searchResult.done && searchRound >= MAX_SEARCH_ROUNDS) {
+          this._log.appendLine(`[search] retry limit reached`);
+          this._postMessage({ type: 'status', text: 'Search request limit reached.' });
+          // Don't break yet - let the model provide its final response with what it has
+          finalResponse = fullResponse;
+          break;
+        }
 
-          const parts: string[] = [];
-          for (const req of chunkRequests) {
-            const chunks = await this._getChunksForUri(req.uri, wsRoots);
-            if (!chunks) {
-              this._log.appendLine(`[chunks] could not read "${req.uri}" — skipping`);
-              // Do not count this as a successful chunk delivery.
-              continue;
-            }
+        // Check if the model is requesting more file chunks
+        const chunkResult = await this._chunks.processChunkRequests(
+          fullResponse,
+          wsRoots,
+          MAX_CHUNK_ROUNDS,
+          chunkRound,
+          sentChunkIds,
+          MAX_CHUNK_NOOP_ROUNDS,
+          chunkNoOpRounds
+        );
 
-            const maxNew = req.preferred?.max_chunks ?? 2;
-            let newSent = 0;
-            const selected = this._selectChunksForRequest(chunks, req.preferred);
-            if (req.preferred?.line_range) {
-              const { start, end } = req.preferred.line_range;
-              this._log.appendLine(`[chunks] using line_range ${start}-${end} for "${req.uri}"`);
-            }
+        if (chunkResult.noOp && chunkResult.content) {
+          chunkNoOpRounds = chunkResult.nextNoOpRounds;
+          this._sessions.history.push({ role: 'user', content: chunkResult.content });
+          continue;
+        }
 
-            for (const chunk of selected) {
-              if (sentChunkIds.has(chunk.chunkId)) {
-                this._log.appendLine(`[chunks] skipping already-sent chunk ${chunk.chunkId}`);
-                continue;
-              }
-              if (newSent >= maxNew) {
-                this._log.appendLine(`[chunks] max_chunks cap (${maxNew}) reached for "${req.uri}"`);
-                break;
-              }
-              sentChunkIds.add(chunk.chunkId);
-              parts.push(formatChunkBlock(chunk));
-              this._log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
-              newSent++;
-            }
-          }
-
-          if (parts.length === 0) {
-            chunkNoOpRounds++;
-            this._log.appendLine(`[chunks] no new chunks to send (noop ${chunkNoOpRounds}/${MAX_CHUNK_NOOP_ROUNDS})`);
-            this._postMessage({
-              type: 'status',
-              text: 'No new chunks to send. Try specifying near_line/line_range or attaching more of the file.',
-            });
-
-            if (chunkNoOpRounds >= MAX_CHUNK_NOOP_ROUNDS) {
-              // Avoid looping forever; let the model respond with what it has.
-              finalResponse = fullResponse;
-              break;
-            }
-
-            // Give the model another chance to adjust its request (without consuming a chunk round).
-            this._history.push({
-              role: 'user',
-              content:
-                '<tool_guidance>No new chunks were available for your request. ' +
-                'If you need a different section, request a different near_line/line_range, or provide a workspace-relative URI.</tool_guidance>',
-            });
-            continue;
-          }
-
-          // Successful chunk delivery.
-          chunkNoOpRounds = 0;
-          chunkRound++;
-          this._history.push({ role: 'user', content: parts.join('\n\n') });
+        if (!chunkResult.done && chunkResult.content) {
+          chunkRound = chunkResult.nextRound;
+          chunkNoOpRounds = chunkResult.nextNoOpRounds;
+          this._sessions.history.push({ role: 'user', content: chunkResult.content });
           continue; // stream again with expanded context
+        }
+
+        if (chunkResult.done && chunkRound >= MAX_CHUNK_ROUNDS) {
+          this._log.appendLine(`[chunks] retry limit reached`);
+          this._postMessage({ type: 'status', text: 'Chunk request limit reached. Try attaching more of the file manually.' });
+          finalResponse = fullResponse;
+          break;
         }
 
         if (fullResponse.trimStart().startsWith('{')) {
           this._log.appendLine(`[stream] unrecognized JSON response: ${fullResponse.slice(0, 300)}`);
           // Provide a small, explicit correction so models that default to tool-JSON
           // don't get stuck emitting unparseable/unsupported objects.
-          this._history.push({
+          this._sessions.history.push({
             role: 'user',
             content:
               '<tool_guidance>Return either plain text OR exactly one of these JSON objects: ' +
@@ -1066,16 +704,14 @@ if (searchRequests) {
           type: 'warning',
           text:
             'The model stopped because it hit the output token limit (finish_reason="length"). ' +
-            'Try asking a narrower question or request “continue”.',
+            'Try asking a narrower question or request "continue".',
         });
       }
 
       // Process action blocks on the final response only
       if (finalResponse && !this._userCancelled) {
-        await this._showEditDiffs(finalResponse);
-        await this._processRunBlocks(finalResponse);
-        await this._processMoveBlocks(finalResponse);
-        await this._processDeleteBlocks(finalResponse);
+        await this._edits.processEdits(finalResponse);
+        await this._actions.processAllActions(finalResponse);
       }
     } catch (err) {
       this._log.appendLine(`[stream] caught exception: ${err}`);
@@ -1087,335 +723,8 @@ if (searchRequests) {
     // Persist session after each completed turn (skip if cancelled mid-stream
     // with no content, to avoid storing an empty assistant turn)
     if (finalResponse || !this._userCancelled) {
-      this._saveCurrentSession();
+      this._sessions.saveCurrentSession();
     }
-  }
-
-  /**
-   * Parse JSON anchor edit ops from the assistant response and open a VS Code
-   * diff tab for each one so the user can review changes before applying.
-   */
-  private async _showEditDiffs(assistantText: string): Promise<void> {
-    const wsRoots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
-    if (wsRoots.length === 0) {
-      return;
-    }
-
-    const { ops, warnings } = parseEditOps(assistantText);
-
-    this._log.appendLine(`[edit] ops found: ${ops.length}, warnings: ${warnings.length}`);
-    for (const op of ops) {
-      const anchorPreview = op.anchor !== undefined
-        ? JSON.stringify(op.anchor.length > 80 ? op.anchor.slice(0, 80) + '…' : op.anchor)
-        : '(none)';
-      this._log.appendLine(`[edit] op=${op.op} uri=${op.uri} anchor=${anchorPreview}`);
-    }
-    for (const w of warnings) {
-      this._log.appendLine(`[edit] warning: ${w}`);
-      this._postMessage({ type: 'status', text: `Edit parse warning: ${w}` });
-    }
-
-    const resultLines: string[] = [];
-
-    for (const op of ops) {
-      const pathResult = resolveEditPath(op.uri, wsRoots);
-      if (pathResult.error) {
-        const errMsg = `\n\n> **Edit error**: ${pathResult.error}`;
-        this._postMessage({ type: 'delta', content: errMsg });
-        resultLines.push(`<EDIT_RESULT path="${op.uri}" status="failed" error="${pathResult.error}"/>`);
-        continue;
-      }
-
-      const fileUri = vscode.Uri.file(pathResult.resolvedPath!);
-
-      // Read current file content (may not exist yet for new-file ops)
-      let originalContent = '';
-      let fileExists = true;
-      try {
-        const bytes = await vscode.workspace.fs.readFile(fileUri);
-        originalContent = Buffer.from(bytes).toString('utf8');
-      } catch {
-        // File doesn't exist — treat as empty (new file)
-        fileExists = false;
-      }
-
-      // Apply the operation to compute new content
-      const result = applyAnchorOp(op, originalContent);
-      if (typeof result === 'object') {
-        const errMsg = `\n\n> **Edit error** (${op.uri}): ${result.error}. Try attaching the file first so the model can read the current content.`;
-        this._postMessage({ type: 'delta', content: errMsg });
-        resultLines.push(`<EDIT_RESULT path="${op.uri}" status="failed" error="${result.error}"/>`);
-        continue;
-      }
-      const newContent = result;
-
-      // Register both sides with the in-memory provider (only when diffing existing files)
-      let oldUri: vscode.Uri | undefined;
-      let newUri: vscode.Uri | undefined;
-      if (fileExists) {
-        const oldKey = `${op.uri}?side=old`;
-        const newKey = `${op.uri}?side=new`;
-        this._diffProvider.set(oldKey, originalContent);
-        this._diffProvider.set(newKey, newContent);
-
-        oldUri = vscode.Uri.parse(`${DIFF_SCHEME}:${oldKey}`);
-        newUri = vscode.Uri.parse(`${DIFF_SCHEME}:${newKey}`);
-        const title = `Review: ${op.uri}`;
-
-        await vscode.commands.executeCommand('vscode.diff', oldUri, newUri, title, {
-          preview: true,
-        });
-      }
-
-      // Ask via the in-chat approval card (cannot be accidentally dismissed).
-      const approved = await this._requestApproval(
-        'applyEdit',
-        { path: op.uri },
-        `op: ${op.op}`
-      );
-
-      // Close the diff editor tab and clean up the in-memory provider entries.
-      if (fileExists && oldUri && newUri) {
-        const oldKey = `${op.uri}?side=old`;
-        const newKey = `${op.uri}?side=new`;
-        const diffTabsToClose: vscode.Tab[] = [];
-        for (const group of vscode.window.tabGroups.all) {
-          for (const tab of group.tabs) {
-            if (tab.input instanceof vscode.TabInputTextDiff) {
-              const oUri = tab.input.original.toString();
-              const mUri = tab.input.modified.toString();
-              if (oUri === oldUri.toString() || mUri === newUri.toString()) {
-                diffTabsToClose.push(tab);
-              }
-            }
-          }
-        }
-        if (diffTabsToClose.length > 0) {
-          await vscode.window.tabGroups.close(diffTabsToClose);
-        }
-        this._diffProvider.delete(oldKey);
-        this._diffProvider.delete(newKey);
-      }
-
-      this._log.appendLine(`[edit] user answered: ${approved ? 'Apply' : 'Deny'} for ${op.uri}`);
-      if (!approved) {
-        this._postMessage({ type: 'status', text: `Edit cancelled: ${op.uri}` });
-        this._postMessage({ type: 'editResult', uri: op.uri, outcome: 'cancelled' });
-        resultLines.push(`<EDIT_RESULT path="${op.uri}" status="denied by user"/>`);
-        continue;
-      }
-
-      // Apply via WorkspaceEdit for undo history support; fall back to writeFile for new files.
-      // Use LF-only content — VSCode normalises to the document's EOL on write.
-      const lfContent = newContent.replace(/\r\n/g, '\n');
-      if (fileExists) {
-        const wsEdit = new vscode.WorkspaceEdit();
-        const doc = await vscode.workspace.openTextDocument(fileUri);
-        const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
-        wsEdit.replace(fileUri, fullRange, lfContent);
-        await vscode.workspace.applyEdit(wsEdit);
-        await doc.save();
-      } else {
-        const encoder = new TextEncoder();
-        await vscode.workspace.fs.writeFile(fileUri, encoder.encode(lfContent));
-      }
-      this._log.appendLine(`[edit] applied: ${op.uri}`);
-      this._postMessage({ type: 'status', text: `Applied: ${op.uri}` });
-      this._postMessage({ type: 'editResult', uri: op.uri, outcome: 'applied' });
-      resultLines.push(`<EDIT_RESULT path="${op.uri}" status="applied"/>`);
-    }
-
-    if (resultLines.length > 0) {
-      // Feed edit outcomes back to the model as a user message so it knows
-      // which edits were applied, denied, or failed.
-      this._history.push({ role: 'user', content: resultLines.join('\n') });
-      this._saveCurrentSession();
-    }
-  }
-
-  /**
-   * Parse @@RUN blocks from the assistant response, request approval for each,
-   * execute approved commands, and append a summary back into the conversation
-   * so the model can see the output.
-   */
-  private async _processRunBlocks(assistantText: string): Promise<void> {
-    const wsRoots = vscode.workspace.workspaceFolders ?? [];
-    if (wsRoots.length === 0) {
-      return;
-    }
-
-    const cwd = wsRoots[0].uri.fsPath;
-    const blocks = parseRunBlocks(assistantText);
-    if (blocks.length === 0) {
-      return;
-    }
-
-    const resultLines: string[] = [];
-
-    for (const block of blocks) {
-      const approved = await this._requestApproval(
-        'runCommand',
-        { command: block.command },
-        'The assistant wants to run a terminal command.'
-      );
-
-      if (!approved) {
-        this._postMessage({ type: 'status', text: `Command cancelled: ${block.command}` });
-        resultLines.push(`<RUN_RESULT command="${block.command}" status="cancelled by user"/>`);
-        continue;
-      }
-
-      this._postMessage({ type: 'status', text: `Running: ${block.command}` });
-      const result = await runCommand(block.command, cwd);
-      const summary = formatRunResult(result);
-      resultLines.push(summary);
-
-      const statusText = result.timedOut
-        ? `Timed out: ${block.command}`
-        : `Done (exit ${result.exitCode ?? '?'}): ${block.command}`;
-      this._postMessage({ type: 'status', text: statusText });
-    }
-
-    if (resultLines.length === 0) {
-      return;
-    }
-
-    // Feed results back to the model as a user message so it can continue.
-    const feedbackContent = resultLines.join('\n\n');
-    this._history.push({ role: 'user', content: feedbackContent });
-    this._saveCurrentSession();
-  }
-
-  /**
-   * Parse @@MOVE blocks from the assistant response, request approval for each,
-   * execute approved moves, and append a summary back into the conversation
-   * so the model can see the result.
-   */
-  private async _processMoveBlocks(assistantText: string): Promise<void> {
-    const wsRoots = vscode.workspace.workspaceFolders ?? [];
-    if (wsRoots.length === 0) {
-      return;
-    }
-
-    const wsRootPaths = wsRoots.map(f => f.uri.fsPath);
-    const blocks = parseMoveBlocks(assistantText);
-    if (blocks.length === 0) {
-      return;
-    }
-
-    const resultLines: string[] = [];
-
-    for (const block of blocks) {
-      const fromAbsolute = resolveMoveBlockPath(block.from, wsRootPaths);
-      const toAbsolute = resolveMoveBlockPath(block.to, wsRootPaths);
-
-      if (!fromAbsolute) {
-        const msg = `Move blocked: source path "${block.from}" is outside the workspace.`;
-        this._postMessage({ type: 'status', text: msg });
-        resultLines.push(`<MOVE_RESULT from="${block.from}" to="${block.to}" status="failed" error="${msg}"/>`);
-        continue;
-      }
-
-      if (!toAbsolute) {
-        const msg = `Move blocked: destination path "${block.to}" is outside the workspace.`;
-        this._postMessage({ type: 'status', text: msg });
-        resultLines.push(`<MOVE_RESULT from="${block.from}" to="${block.to}" status="failed" error="${msg}"/>`);
-        continue;
-      }
-
-      const approved = await this._requestApproval(
-        'moveFile',
-        { from: block.from, to: block.to },
-        'The assistant wants to move a file.'
-      );
-
-      if (!approved) {
-        this._postMessage({ type: 'status', text: `Move cancelled: ${block.from} → ${block.to}` });
-        resultLines.push(`<MOVE_RESULT from="${block.from}" to="${block.to}" status="cancelled by user"/>`);
-        continue;
-      }
-
-      this._postMessage({ type: 'status', text: `Moving: ${block.from} → ${block.to}` });
-      const result = await moveFile(fromAbsolute, toAbsolute);
-      const summary = formatMoveResult(result);
-      resultLines.push(summary);
-
-      const statusText = result.success
-        ? `Moved: ${block.from} → ${block.to}`
-        : `Move failed: ${result.error}`;
-      this._postMessage({ type: 'status', text: statusText });
-    }
-
-    if (resultLines.length === 0) {
-      return;
-    }
-
-    // Feed results back to the model as a user message so it can continue.
-    const feedbackContent = resultLines.join('\n\n');
-    this._history.push({ role: 'user', content: feedbackContent });
-    this._saveCurrentSession();
-  }
-
-  /**
-   * Parse @@DELETE blocks from the assistant response, request approval for each,
-   * execute approved deletions (to trash), and append a summary back into the
-   * conversation so the model can see the result.
-   */
-  private async _processDeleteBlocks(assistantText: string): Promise<void> {
-    const wsRoots = vscode.workspace.workspaceFolders ?? [];
-    if (wsRoots.length === 0) {
-      return;
-    }
-
-    const wsRootPaths = wsRoots.map(f => f.uri.fsPath);
-    const blocks = parseDeleteBlocks(assistantText);
-    if (blocks.length === 0) {
-      return;
-    }
-
-    const resultLines: string[] = [];
-
-    for (const block of blocks) {
-      const fileAbsolute = resolveDeleteBlockPath(block.filePath, wsRootPaths);
-
-      if (!fileAbsolute) {
-        const msg = `Delete blocked: path "${block.filePath}" is outside the workspace.`;
-        this._postMessage({ type: 'status', text: msg });
-        resultLines.push(`<DELETE_RESULT path="${block.filePath}" status="failed" error="${msg}"/>`);
-        continue;
-      }
-
-      const approved = await this._requestApproval(
-        'deleteFile',
-        { path: block.filePath },
-        'The assistant wants to delete a file (will be moved to trash).'
-      );
-
-      if (!approved) {
-        this._postMessage({ type: 'status', text: `Delete cancelled: ${block.filePath}` });
-        resultLines.push(`<DELETE_RESULT path="${block.filePath}" status="cancelled by user"/>`);
-        continue;
-      }
-
-      this._postMessage({ type: 'status', text: `Deleting: ${block.filePath}` });
-      const result = await deleteFile(fileAbsolute);
-      const summary = formatDeleteResult(result);
-      resultLines.push(summary);
-
-      const statusText = result.success
-        ? `Deleted (trashed): ${block.filePath}`
-        : `Delete failed: ${result.error}`;
-      this._postMessage({ type: 'status', text: statusText });
-    }
-
-    if (resultLines.length === 0) {
-      return;
-    }
-
-    // Feed results back to the model as a user message so it can continue.
-    const feedbackContent = resultLines.join('\n\n');
-    this._history.push({ role: 'user', content: feedbackContent });
-    this._saveCurrentSession();
   }
 
   /**
@@ -1433,8 +742,8 @@ if (searchRequests) {
   private _handleMessage(message: WebviewToExtension): void {
     switch (message.type) {
       case 'send':
-        this._thinkingMode = message.thinkingMode ?? false;
-        this._includeAgentsMd = message.includeAgentsMd ?? false;
+        this._sessions.thinkingMode = message.thinkingMode ?? false;
+        this._sessions.includeAgentsMd = message.includeAgentsMd ?? false;
         this._handleSend(message.prompt).catch((err) => {
           this._postMessage({ type: 'error', message: String(err) });
           this._abortController = undefined;
@@ -1480,7 +789,14 @@ if (searchRequests) {
       case 'saveSettings': {
         const cfg = vscode.workspace.getConfiguration('agent86');
         if (message.providers) {
-          cfg.update('providers', message.providers, vscode.ConfigurationTarget.Global);
+          // Determine the appropriate configuration target:
+          // - If a workspace is open, save to workspace scope so it takes effect
+          // - Otherwise, save to global (user) scope
+          const hasWorkspace = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0;
+          const target = hasWorkspace 
+            ? vscode.ConfigurationTarget.Workspace 
+            : vscode.ConfigurationTarget.Global;
+          cfg.update('providers', message.providers, target);
         }
         break;
       }
@@ -1499,8 +815,8 @@ if (searchRequests) {
       case 'checkboxChange':
         // Update internal state when checkbox is toggled (without sending a message)
         if (message.includeAgentsMd !== undefined) {
-          this._includeAgentsMd = message.includeAgentsMd;
-          this._saveCurrentSession();
+          this._sessions.includeAgentsMd = message.includeAgentsMd;
+          this._sessions.saveCurrentSession();
         }
         break;
     }
@@ -1511,16 +827,16 @@ if (searchRequests) {
   }
 
   private async _handleAttachActiveEditor(): Promise<void> {
-    const updated = await readActiveEditor(this._attachedFiles);
+    const updated = await readActiveEditor(this._sessions.attachedFiles);
     if (updated) {
-      this._attachedFiles = updated;
+      this._sessions.attachedFiles = updated;
       this._postMessage({ type: 'attachments', files: updated });
-      this._saveCurrentSession();
+      this._sessions.saveCurrentSession();
     }
   }
 
   private async _handleSelectSession(): Promise<void> {
-    const sessions = this._configManager.loadAllSessions();
+    const sessions = this._sessions.loadAllSessions();
     if (!sessions || sessions.length === 0) {
       this._postMessage({ type: 'status', text: 'No sessions found.' });
       return;
@@ -1542,21 +858,6 @@ if (searchRequests) {
     if (selected) {
       this.restoreSession(selected.session);
     }
-  }
-
-  private _saveCurrentSession(): void {
-    // Keep persisted history lean: tool outputs (search results, file lists, etc.)
-    // can be large and quickly exceed local model/server limits.
-    this._compactHistoryInPlace();
-
-    this._currentSession = {
-      ...this._currentSession,
-      messages: this._history,
-      attachments: this._attachedFiles,
-      thinkingMode: this._thinkingMode,
-      includeAgentsMd: this._includeAgentsMd,
-    };
-    this._configManager.saveSession(this._currentSession);
   }
 
   /**
@@ -1585,17 +886,17 @@ if (searchRequests) {
     // Send the current editor state
     this._postMessage({ type: 'editorState', hasActiveEditor: this._hasActiveEditor });
     // Send checkbox states so the UI reflects the restored session
-    this._postMessage({ type: 'checkboxState', thinkingMode: this._thinkingMode, includeAgentsMd: this._includeAgentsMd });
+    this._postMessage({ type: 'checkboxState', thinkingMode: this._sessions.thinkingMode, includeAgentsMd: this._sessions.includeAgentsMd });
     // Send providers so the model dropdown is populated
     this._postMessage({ type: 'providers', providers: this._getProviders(), activeProviderIndex: this._activeProviderIndex });
 
-    if (this._attachedFiles.length > 0) {
-      this._postMessage({ type: 'attachments', files: this._attachedFiles });
+    if (this._sessions.attachedFiles.length > 0) {
+      this._postMessage({ type: 'attachments', files: this._sessions.attachedFiles });
     }
-    if (this._history.length > 0) {
+    if (this._sessions.history.length > 0) {
       // Replay the conversation as a series of delta messages followed by done,
       // so the existing output area rendering logic is reused without changes.
-      for (const msg of this._history) {
+      for (const msg of this._sessions.history) {
         if (msg.role === 'user') {
           const display = msg.displayContent ?? msg.content;
           this._postMessage({ type: 'delta', content: `\n\n**You:** ${display}\n\n---\n\n` });
@@ -1659,13 +960,4 @@ if (searchRequests) {
 </body>
 </html>`;
   }
-}
-
-function getNonce(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < 32; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
 }
