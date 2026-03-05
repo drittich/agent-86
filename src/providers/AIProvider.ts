@@ -27,7 +27,8 @@ function isToolSupportError(err: unknown): boolean {
     /400.*\b(tool|function|parameter)\b/i.test(msg) ||
     /\btools?\s+(not\s+supported|are\s+not\s+supported|unsupported)\b/i.test(msg) ||
     /\b(invalid|unsupported)\s+(tool|function)\b/i.test(msg) ||
-    /invalid character.*looking for.*tools/i.test(msg)
+    /invalid character.*looking for.*tools/i.test(msg) ||
+    /invalid character.*after top-level value/i.test(msg)
   );
 }
 
@@ -87,7 +88,7 @@ export class AIProvider implements IProvider {
    * Converts ChatMessage[] to model message format expected by AI SDK v6.
    * Tool messages carry toolCallId for proper assistant↔tool pairing.
    */
-  private toModelMessages(messages: ChatMessage[]): Array<any> {
+  private toModelMessages(messages: ChatMessage[], preserveToolCalls: boolean): Array<any> {
     return messages.map(msg => {
       if (msg.role === 'tool' && msg.tool_call_id) {
         return {
@@ -97,7 +98,7 @@ export class AIProvider implements IProvider {
         };
       }
       // Assistant messages with tool calls need toolCalls preserved for the SDK
-      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      if (preserveToolCalls && msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
         return {
           role: 'assistant',
           content: msg.content ?? '',
@@ -114,6 +115,64 @@ export class AIProvider implements IProvider {
         content: msg.content ?? ''
       };
     });
+  }
+
+  private isEmptyAssistantMessage(message: ChatMessage): boolean {
+    if (message.role !== 'assistant') {
+      return false;
+    }
+    const hasContent = typeof message.content === 'string' && message.content.trim().length > 0;
+    const hasToolCalls = !!message.tool_calls && message.tool_calls.length > 0;
+    return !hasContent && !hasToolCalls;
+  }
+
+  /**
+   * Remove invalid/unsupported message shapes before sending to the model:
+   * - empty assistant messages
+   * - orphaned tool messages that follow empty assistant messages
+   */
+  private sanitizeConversation(messages: ChatMessage[]): ChatMessage[] {
+    const sanitized: ChatMessage[] = [];
+    const skipIndices = new Set<number>();
+
+    for (let i = 0; i < messages.length; i++) {
+      if (this.isEmptyAssistantMessage(messages[i])) {
+        skipIndices.add(i);
+        let j = i + 1;
+        while (j < messages.length && messages[j].role === 'tool') {
+          skipIndices.add(j);
+          j++;
+        }
+      }
+    }
+
+    for (let i = 0; i < messages.length; i++) {
+      if (!skipIndices.has(i)) {
+        sanitized.push(messages[i]);
+      }
+    }
+
+    return sanitized;
+  }
+
+  /**
+   * Strip native tool-calling history artifacts for models running without native tools.
+   */
+  private stripNativeToolHistory(messages: ChatMessage[]): ChatMessage[] {
+    const stripped: ChatMessage[] = [];
+    for (const message of messages) {
+      if (message.role === 'tool') {
+        continue;
+      }
+      if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {
+        if (message.content.trim().length > 0) {
+          stripped.push({ role: 'assistant', content: message.content, displayContent: message.displayContent });
+        }
+        continue;
+      }
+      stripped.push(message);
+    }
+    return stripped;
   }
 
   async stream(
@@ -150,10 +209,15 @@ export class AIProvider implements IProvider {
 
     try {
       const languageModel = provider(this.model);
-      const modelMessages = this.toModelMessages(messages);
 
       // Use native tool calling only if enabled AND tools are provided
-      const useNativeTools = this.toolUse && options?.tools && Object.keys(options.tools).length > 0;
+      const hasTools = !!options?.tools && Object.keys(options.tools).length > 0;
+      const useNativeTools = this.toolUse && hasTools;
+      const sanitizedMessages = this.sanitizeConversation(messages);
+      const preparedMessages = useNativeTools
+        ? sanitizedMessages
+        : this.stripNativeToolHistory(sanitizedMessages);
+      const modelMessages = this.toModelMessages(preparedMessages, useNativeTools);
 
       const streamArgs: Parameters<typeof streamText>[0] = {
         model: languageModel,

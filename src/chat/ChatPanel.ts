@@ -316,6 +316,63 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return trimmed;
   }
 
+  private _isEmptyAssistantMessage(message: ChatMessage): boolean {
+    if (message.role !== 'assistant') {
+      return false;
+    }
+    const hasContent = typeof message.content === 'string' && message.content.trim().length > 0;
+    const hasToolCalls = !!message.tool_calls && message.tool_calls.length > 0;
+    return !hasContent && !hasToolCalls;
+  }
+
+  /**
+   * Remove native tool-calling artifacts from history for legacy fallback mode.
+   * Legacy format cannot consume `tool` role messages or assistant `tool_calls`.
+   */
+  private _sanitizeHistoryForLegacyMode(history: ChatMessage[]): ChatMessage[] {
+    const sanitized: ChatMessage[] = [];
+    const skipIndices = new Set<number>();
+
+    // First pass: mark empty assistant messages and orphan tool results to skip.
+    for (let i = 0; i < history.length; i++) {
+      if (this._isEmptyAssistantMessage(history[i])) {
+        skipIndices.add(i);
+        let j = i + 1;
+        while (j < history.length && history[j].role === 'tool') {
+          skipIndices.add(j);
+          j++;
+        }
+      }
+    }
+
+    for (let i = 0; i < history.length; i++) {
+      if (skipIndices.has(i)) {
+        continue;
+      }
+      const message = history[i];
+      if (message.role === 'tool') {
+        continue;
+      }
+      if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {
+        // Keep textual assistant content, but remove native tool_calls metadata.
+        if (message.content.trim().length > 0) {
+          sanitized.push({
+            role: 'assistant',
+            content: message.content,
+            displayContent: message.displayContent,
+          });
+        }
+        continue;
+      }
+      if (message.role === 'user' && message.content === 'Please continue.') {
+        continue;
+      }
+      sanitized.push(message);
+    }
+
+    return sanitized;
+  }
+
   private _buildMessages(agentsMdContent?: string, useNativeTools = false): ChatMessage[] {
     const thinkingMode = this._sessions.thinkingMode;
     const behaviorInstructions = thinkingMode
@@ -325,88 +382,22 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       ? `\n\n## AGENTS.md\n${agentsMdContent}`
       : '';
 
-    const nativeToolsPrompt = `You are a VS Code coding assistant.${agentsMdSection}
-
-${behaviorInstructions}
-
-## Files
-Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in tool calls.
-
-## Tools
-Use the provided tools to read files, make edits, run commands, and search. Prefer \`search_file_contents\` to verify usages before reading file sections. Use \`read_file\` with a line range when you need a specific section. Use \`string_replace\` for targeted edits.`;
-
-    const legacyPrompt = `You are a VS Code coding assistant.${agentsMdSection}
-
-${behaviorInstructions}
-
-## Files
-Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in \`search_file\` and \`request_chunks\` URIs.
-
-## Requesting data
-Before any file search, resolve workspace-relative paths and confirm existence.
-
-Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not combine with \`edits\` or each other):
-
-**Search file:** \`{"search_file":[{"uri":"src/foo.ts","pattern":"MyImport","case_sensitive":false,"reason":"…"}]}\` → returns \`<search_result uri pattern case_sensitive count>\` with each hit plus nearby context lines. Omit \`case_sensitive\` or set \`true\` for exact-case matching; set \`false\` when case may vary. Use this to find identifier usages across a whole file without reading every chunk. **Prefer this over requesting more chunks when you need to verify whether something is used.**
-
-**More chunks:** \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"near_line":250,"max_chunks":2}}]}\` or \`{"request_chunks":[{"uri":"src/foo.ts","reason":"…","preferred":{"line_range":{"start":45,"end":90},"max_chunks":2}}]}\`. Use \`line_range\` when you need exact lines. Keep \`max_chunks\` small (1–2); the context window is limited.
-
-For questions about symbol usage (for example: "is this import unused?", references, call-sites), use \`search_file\` first and search the whole file with ripgrep. Do not use \`request_chunks\` to discover usages; only request chunks after search when exact surrounding code is still required.
-
-**File listing:** \`{"request_files":[{"glob":"src/**/*","reason":"…"}]}\` → returns \`<file_list glob count>paths…</file_list>\`. Be specific with globs (e.g. **/*.cs, \`src/**/*.py\`); \`node_modules\`, \`.git\`, \`dist\`, \`build\` are excluded. Use correct extensions: \`cs\` for C#, \`cpp\` for C++, \`fs\` for F# (not \`c#\`, \`c++\`, \`f#\`).
-
-## Editing files
-Output anywhere in your response (optionally in a \`\`\`json fence):
-\`\`\`json
-{"edits":[{"uri":"src/file.ts","op":"replace_first","anchor":"exact text","text":"replacement"}]}
-\`\`\`
-Ops: \`replace_first\` · \`delete_first\` (omit text) · \`insert_after\` · \`insert_before\` · \`replace_all\` (omit anchor, replaces whole file).
-URIs: workspace-relative, forward slashes, no leading slash. Anchor must match exactly — copy verbatim from the chunk. If you haven't read the file, use \`replace_all\`.
-
-## Shell / file ops
-\`\`\`
-<RUN>command</RUN>                         result fed back as <RUN_RESULT>; use only when needed
-<MOVE>\nFROM: old/path\nTO: new/path\n</MOVE>   both paths must be inside workspace
-<DELETE>\nPATH: path/to/file\n</DELETE>        moved to OS trash; only when user explicitly asks
-\`\`\``;
-
     // Try to load system prompt from prompts/system-prompt.md with dynamic system info injection
     const customSystemPrompt = getSystemPrompt();
 
     let systemContent: string;
 
-	// throw a warning if system prompt not found
-	if (!customSystemPrompt) {
-		console.warn('** Custom system prompt not found, using fallback prompts.');
-	}
+    // throw a warning if system prompt not found
+    if (!customSystemPrompt) {
+      console.warn('** Custom system prompt not found, using fallback prompts.');
+    }
 
-    // Legacy editing instructions appended when native tools are not available.
-    const legacyEditInstructions = `
-
-## Editing files
-Output anywhere in your response (optionally in a \`\`\`json fence):
-\`\`\`json
-{"edits":[{"uri":"src/file.ts","op":"replace_first","anchor":"exact text","text":"replacement"}]}
-\`\`\`
-Ops: \`replace_first\` · \`delete_first\` (omit text) · \`insert_after\` · \`insert_before\` · \`replace_all\` (omit anchor, replaces whole file).
-URIs: workspace-relative, forward slashes, no leading slash. Anchor must match exactly.
-
-## Shell / file ops
-\`\`\`
-<RUN>command</RUN>                         result fed back as <RUN_RESULT>; use only when needed
-<MOVE>\\nFROM: old/path\\nTO: new/path\\n</MOVE>   both paths must be inside workspace
-<DELETE>\\nPATH: path/to/file\\n</DELETE>        moved to OS trash; only when user explicitly asks
-\`\`\`
-
-IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function>, <tool_use>). Use ONLY the JSON edits format above for file changes.`;
-
-    if (customSystemPrompt) {
-      // Use custom system prompt - append agentsMdSection and behaviorInstructions
-      // When native tools aren't available, also append legacy edit format instructions
-      const legacySuffix = useNativeTools ? '' : legacyEditInstructions;
-      systemContent = `${customSystemPrompt.trim()}\n\n${agentsMdSection}\n\n${behaviorInstructions}${legacySuffix}`;
+    if (useNativeTools && customSystemPrompt) {
+      // Custom system prompt may contain native-tool-specific guidance.
+      systemContent = `${customSystemPrompt.trim()}${agentsMdSection}\n\n${behaviorInstructions}`;
     } else {
-      // Fallback to inline prompts
+      // In legacy fallback mode, always use the dedicated legacy prompt to avoid
+      // conflicting native-tool instructions from custom prompts.
       systemContent = useNativeTools
         ? getNativeToolsPrompt(agentsMdSection, behaviorInstructions)
         : getLegacyPrompt(agentsMdSection, behaviorInstructions);
@@ -422,8 +413,11 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
 
     // For send-only: summarize older tool payloads; keep the most recent few messages verbatim.
     const KEEP_LAST_VERBOSE = 6;
-    const historyForSend = this._sessions.history.map((m, idx) => {
-      const fromEnd = this._sessions.history.length - idx;
+    const baseHistory = useNativeTools
+      ? this._sessions.history
+      : this._sanitizeHistoryForLegacyMode(this._sessions.history);
+    const historyForSend = baseHistory.map((m, idx) => {
+      const fromEnd = baseHistory.length - idx;
       if (fromEnd <= KEEP_LAST_VERBOSE) {
         return m;
       }
@@ -436,7 +430,10 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
     const rawMessages = [systemPrompt, ...historyForSend];
     const messages = this._trimMessagesToBudget(rawMessages, CONTEXT_BUDGET_CHARS);
 
-    this._log.appendLine(`[buildMessages] ${messages.length} message(s), thinkingMode=${thinkingMode}`);
+    const strippedForLegacy = this._sessions.history.length - baseHistory.length;
+    this._log.appendLine(
+      `[buildMessages] ${messages.length} message(s), thinkingMode=${thinkingMode}, nativeTools=${useNativeTools}, strippedForLegacy=${Math.max(0, strippedForLegacy)}`
+    );
     this._log.appendLine(`[buildMessages] approxChars=${this._estimateMessageChars(messages)}/${CONTEXT_BUDGET_CHARS}`);
     for (const m of messages) {
       const preview = m.content.slice(0, 120).replace(/\n/g, '↵');
@@ -457,6 +454,30 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
     );
   }
 
+  /**
+   * Detect legacy action syntax in assistant text responses (JSON edits/XML tags).
+   * Used as a compatibility fallback when a native-tool model emits legacy format.
+   */
+  private _looksLikeLegacyActionOutput(content: string): boolean {
+    const trimmed = content.trimStart();
+    if (/^```(?:json|xml)?\s*\n/i.test(trimmed)) {
+      return true;
+    }
+    if (trimmed.startsWith('{')) {
+      return (
+        trimmed.includes('"edits"') ||
+        trimmed.includes('"request_chunks"') ||
+        trimmed.includes('"request_files"') ||
+        trimmed.includes('"search_file"')
+      );
+    }
+    return (
+      trimmed.includes('<RUN>') ||
+      trimmed.includes('<MOVE>') ||
+      trimmed.includes('<DELETE>')
+    );
+  }
+
   private _summarizeToolHeavyMessage(content: string): string {
     const HEAD = 3000;
     const TAIL = 500;
@@ -466,6 +487,15 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
     const head = content.slice(0, HEAD);
     const tail = content.slice(-TAIL);
     return `${head}\n\n... [history truncated] ...\n\n${tail}`;
+  }
+
+  /** Compact single-line preview for debug logs. */
+  private _previewForLog(content: string, maxLen = 300): string {
+    const singleLine = content.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+    if (singleLine.length <= maxLen) {
+      return singleLine;
+    }
+    return `${singleLine.slice(0, maxLen)}...`;
   }
 
   private async _handleSend(prompt: string): Promise<void> {
@@ -625,6 +655,8 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
     // Cap native tool rounds to avoid runaway loops
     const MAX_TOOL_ROUNDS = 20;
     let toolRound = 0;
+    const MAX_EMPTY_RESPONSE_RETRIES = 1;
+    let emptyResponseRetries = 0;
 
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
@@ -635,11 +667,14 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
       while (true) {
         let fullResponse = '';
         const pendingToolCalls: ToolCallEvent[] = [];
+        const nativeToolMode = useNativeTools && !toolsFallbackActive;
         this._abortController = new AbortController();
         const provider = this._getProvider();
 
-        this._log.appendLine(`[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound})`);
-        const messages = this._buildMessages(agentsMdContent, useNativeTools);
+        this._log.appendLine(
+          `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode})`
+        );
+        const messages = this._buildMessages(agentsMdContent, nativeToolMode);
         const contextTokens = await this._tokenCounter.countMessages(messages);
         const exact = this._tokenCounter.isReady;
         this._postMessage({
@@ -670,39 +705,18 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
             }
           },
           {
-            tools: useNativeTools && !toolsFallbackActive ? buildAgentTools() : undefined,
+            tools: nativeToolMode ? buildAgentTools() : undefined,
             extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
           }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
         this._abortController = undefined;
 
-        // If the provider rejected tool calling, re-stream with the legacy prompt (no tools).
-        if (toolsFallbackActive && !this._userCancelled) {
+        // If the provider rejected tool calling, switch to legacy mode and re-run the round.
+        if (nativeToolMode && toolsFallbackActive && !this._userCancelled) {
+          this._sessions.history = this._sanitizeHistoryForLegacyMode(this._sessions.history);
           this._postMessage({ type: 'status', text: 'Model does not support tool calling — retrying with legacy format…' });
-          fullResponse = '';
-          this._abortController = new AbortController();
-          const legacyMessages = this._buildMessages(agentsMdContent, false);
-          await provider.stream(
-            legacyMessages,
-            this._abortController.signal,
-            (event) => {
-              if (event.type === 'delta') {
-                fullResponse += event.content;
-                this._postMessage({ type: 'delta', content: event.content });
-              } else if (event.type === 'done') {
-                lastUsage = event.usage;
-                lastFinishReason = event.finishReason;
-              } else if (event.type === 'error') {
-                this._log.appendLine(`[stream] legacy fallback error: ${event.message}`);
-                this._postMessage({ type: 'error', message: event.message });
-              }
-            },
-            {
-              extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
-            }
-          );
-          this._abortController = undefined;
+          continue;
         }
 
         if (this._userCancelled) {
@@ -711,18 +725,12 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
 
         // If the model returned empty with no tool calls after we just fed it tool results,
         // the model can't continue the native tool loop. Fall back to legacy mode.
-        if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && useNativeTools && !toolsFallbackActive) {
+        if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && nativeToolMode) {
           this._log.appendLine(`[tools] empty response after tool results — falling back to legacy prompt`);
           toolsFallbackActive = true;
 
-          // Strip tool-related messages from history that the legacy prompt can't understand:
-          // remove tool messages, assistant messages with tool_calls, and nudge "Please continue." messages.
-          this._sessions.history = this._sessions.history.filter(m => {
-            if (m.role === 'tool') { return false; }
-            if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) { return false; }
-            if (m.role === 'user' && m.content === 'Please continue.') { return false; }
-            return true;
-          });
+          // Strip tool-related messages from history that the legacy prompt can't understand.
+          this._sessions.history = this._sanitizeHistoryForLegacyMode(this._sessions.history);
 
           // Add explicit instruction to continue with JSON edit format
           this._sessions.history.push({
@@ -730,47 +738,30 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
             content: 'Please continue and complete the file edit using the JSON format described in the system prompt.'
           });
 
-          // Re-stream with legacy prompt
           this._postMessage({ type: 'status', text: 'Model cannot continue tool loop — retrying with legacy format…' });
-          fullResponse = '';
-          this._abortController = new AbortController();
-          const legacyMessages = this._buildMessages(agentsMdContent, false);
-          const legacyProvider = this._getProvider();
-          await legacyProvider.stream(
-            legacyMessages,
-            this._abortController.signal,
-            (event) => {
-              if (event.type === 'delta') {
-                fullResponse += event.content;
-                this._postMessage({ type: 'delta', content: event.content });
-              } else if (event.type === 'done') {
-                lastUsage = event.usage;
-                lastFinishReason = event.finishReason;
-              } else if (event.type === 'error') {
-                this._log.appendLine(`[stream] legacy fallback error: ${event.message}`);
-                this._postMessage({ type: 'error', message: event.message });
-              }
-            },
-            {
-              extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
-            }
-          );
-          this._abortController = undefined;
-
-          if (fullResponse) {
-            this._sessions.history.push({ role: 'assistant', content: fullResponse });
-            finalResponse = fullResponse;
-          }
-          break;
+          continue;
         }
 
 
         if (!fullResponse && pendingToolCalls.length === 0) {
+          if (!this._userCancelled && emptyResponseRetries < MAX_EMPTY_RESPONSE_RETRIES) {
+            emptyResponseRetries++;
+            this._log.appendLine(`[stream] empty response (retry ${emptyResponseRetries}/${MAX_EMPTY_RESPONSE_RETRIES})`);
+            this._sessions.history.push({ role: 'user', content: 'Please continue.' });
+            continue;
+          }
+          if (!this._userCancelled) {
+            this._postMessage({
+              type: 'warning',
+              text: 'Model returned an empty response. Try asking the model to continue or switching providers.'
+            });
+          }
           break;
         }
+        emptyResponseRetries = 0;
 
         // ── Native tool call loop ────────────────────────────────────────────
-        if (useNativeTools && pendingToolCalls.length > 0 && toolExecutor) {
+        if (nativeToolMode && pendingToolCalls.length > 0 && toolExecutor) {
           toolRound++;
           if (toolRound > MAX_TOOL_ROUNDS) {
             this._log.appendLine(`[tools] tool round limit (${MAX_TOOL_ROUNDS}) reached`);
@@ -809,7 +800,7 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
         // ── Tentatively record assistant turn (no tool calls) ────────────────
         this._sessions.history.push({ role: 'assistant', content: fullResponse });
 
-        if (!useNativeTools) {
+        if (!nativeToolMode) {
           // ── Legacy: JSON/XML data-request loop ──────────────────────────────
 
           // Check if the model is requesting a file listing
@@ -902,6 +893,11 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
                 'Do not output other JSON keys.</tool_guidance>',
             });
           }
+          else if (fullResponse.trim().length > 0) {
+            this._log.appendLine(
+              `[stream] legacy non-actionable response (${fullResponse.length} chars): ${this._previewForLog(fullResponse)}`
+            );
+          }
         }
 
         finalResponse = fullResponse;
@@ -923,8 +919,22 @@ IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function
         });
       }
 
-      // For legacy (non-native-tool) providers: process XML/JSON action blocks on the final response
-      if (finalResponse && !this._userCancelled && (!useNativeTools || toolsFallbackActive)) {
+      // Process legacy JSON/XML action blocks on:
+      // 1) explicit legacy mode, or
+      // 2) native mode compatibility path when a tool-capable model emits legacy syntax.
+      const shouldProcessLegacyActions =
+        !!finalResponse &&
+        !this._userCancelled &&
+        (
+          !useNativeTools ||
+          toolsFallbackActive ||
+          this._looksLikeLegacyActionOutput(finalResponse)
+        );
+
+      if (shouldProcessLegacyActions) {
+        if (useNativeTools && !toolsFallbackActive) {
+          this._log.appendLine('[stream] compatibility: processing legacy action syntax while native tools are enabled');
+        }
         await this._edits.processEdits(finalResponse);
         await this._actions.processAllActions(finalResponse);
       }
