@@ -31,7 +31,8 @@ export type ProviderEvent =
   | { type: 'delta'; content: string }
   | ToolCallEvent
   | { type: 'done'; usage?: ProviderUsage; finishReason?: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'tool-unsupported' };
 
 /** Simple logger interface that matches vscode.OutputChannel */
 export interface ILogger {

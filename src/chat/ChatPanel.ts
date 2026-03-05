@@ -232,9 +232,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const inspected = cfg.inspect<ProviderConfig[]>('providers');
     const globalProviders = inspected?.globalValue;
     
-    this._log.appendLine(`[_getProviders] inspected.globalValue: ${JSON.stringify(globalProviders)}`);
-    this._log.appendLine(`[_getProviders] inspected.workspaceValue: ${JSON.stringify(inspected?.workspaceValue)}`);
-
     if (globalProviders && globalProviders.length > 0) {
       return globalProviders;
     }
@@ -243,7 +240,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
     const apiKey = cfg.get<string>('apiKey') ?? 'local';
-    this._log.appendLine(`[_getProviders] using legacy fallback: ${model}`);
     return [{ name: model, baseUrl, model, apiKey, toolUse: true, context: 32768 }];
   }
 
@@ -384,10 +380,31 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
 		console.warn('** Custom system prompt not found, using fallback prompts.');
 	}
 
+    // Legacy editing instructions appended when native tools are not available.
+    const legacyEditInstructions = `
+
+## Editing files
+Output anywhere in your response (optionally in a \`\`\`json fence):
+\`\`\`json
+{"edits":[{"uri":"src/file.ts","op":"replace_first","anchor":"exact text","text":"replacement"}]}
+\`\`\`
+Ops: \`replace_first\` · \`delete_first\` (omit text) · \`insert_after\` · \`insert_before\` · \`replace_all\` (omit anchor, replaces whole file).
+URIs: workspace-relative, forward slashes, no leading slash. Anchor must match exactly.
+
+## Shell / file ops
+\`\`\`
+<RUN>command</RUN>                         result fed back as <RUN_RESULT>; use only when needed
+<MOVE>\\nFROM: old/path\\nTO: new/path\\n</MOVE>   both paths must be inside workspace
+<DELETE>\\nPATH: path/to/file\\n</DELETE>        moved to OS trash; only when user explicitly asks
+\`\`\`
+
+IMPORTANT: Do NOT use any other tool-calling format (e.g. [TOOL_CALL], <function>, <tool_use>). Use ONLY the JSON edits format above for file changes.`;
+
     if (customSystemPrompt) {
       // Use custom system prompt - append agentsMdSection and behaviorInstructions
-      // The custom prompt already has dynamic system info injected
-      systemContent = `${customSystemPrompt.trim()}\n\n${agentsMdSection}\n\n${behaviorInstructions}`;
+      // When native tools aren't available, also append legacy edit format instructions
+      const legacySuffix = useNativeTools ? '' : legacyEditInstructions;
+      systemContent = `${customSystemPrompt.trim()}\n\n${agentsMdSection}\n\n${behaviorInstructions}${legacySuffix}`;
     } else {
       // Fallback to inline prompts
       systemContent = useNativeTools
@@ -609,6 +626,11 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
     const MAX_TOOL_ROUNDS = 20;
     let toolRound = 0;
 
+    // Set to true if the provider signals it doesn't support native tools;
+    // triggers a legacy-prompt re-stream for the current turn.
+    let toolsFallbackActive = false;
+
+
     try {
       while (true) {
         let fullResponse = '';
@@ -639,20 +661,111 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
               this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}, toolCalls=${pendingToolCalls.length}`);
               lastUsage = event.usage;
               lastFinishReason = event.finishReason;
+            } else if (event.type === 'tool-unsupported') {
+              this._log.appendLine(`[stream] tool-unsupported: falling back to legacy prompt`);
+              toolsFallbackActive = true;
             } else if (event.type === 'error') {
               this._log.appendLine(`[stream] error event: ${event.message}`);
               this._postMessage({ type: 'error', message: event.message });
             }
           },
           {
-            tools: useNativeTools ? buildAgentTools() : undefined,
+            tools: useNativeTools && !toolsFallbackActive ? buildAgentTools() : undefined,
             extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
           }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
         this._abortController = undefined;
 
-        if (this._userCancelled || (!fullResponse && pendingToolCalls.length === 0)) {
+        // If the provider rejected tool calling, re-stream with the legacy prompt (no tools).
+        if (toolsFallbackActive && !this._userCancelled) {
+          this._postMessage({ type: 'status', text: 'Model does not support tool calling — retrying with legacy format…' });
+          fullResponse = '';
+          this._abortController = new AbortController();
+          const legacyMessages = this._buildMessages(agentsMdContent, false);
+          await provider.stream(
+            legacyMessages,
+            this._abortController.signal,
+            (event) => {
+              if (event.type === 'delta') {
+                fullResponse += event.content;
+                this._postMessage({ type: 'delta', content: event.content });
+              } else if (event.type === 'done') {
+                lastUsage = event.usage;
+                lastFinishReason = event.finishReason;
+              } else if (event.type === 'error') {
+                this._log.appendLine(`[stream] legacy fallback error: ${event.message}`);
+                this._postMessage({ type: 'error', message: event.message });
+              }
+            },
+            {
+              extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
+            }
+          );
+          this._abortController = undefined;
+        }
+
+        if (this._userCancelled) {
+          break;
+        }
+
+        // If the model returned empty with no tool calls after we just fed it tool results,
+        // the model can't continue the native tool loop. Fall back to legacy mode.
+        if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && useNativeTools && !toolsFallbackActive) {
+          this._log.appendLine(`[tools] empty response after tool results — falling back to legacy prompt`);
+          toolsFallbackActive = true;
+
+          // Strip tool-related messages from history that the legacy prompt can't understand:
+          // remove tool messages, assistant messages with tool_calls, and nudge "Please continue." messages.
+          this._sessions.history = this._sessions.history.filter(m => {
+            if (m.role === 'tool') { return false; }
+            if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) { return false; }
+            if (m.role === 'user' && m.content === 'Please continue.') { return false; }
+            return true;
+          });
+
+          // Add explicit instruction to continue with JSON edit format
+          this._sessions.history.push({
+            role: 'user',
+            content: 'Please continue and complete the file edit using the JSON format described in the system prompt.'
+          });
+
+          // Re-stream with legacy prompt
+          this._postMessage({ type: 'status', text: 'Model cannot continue tool loop — retrying with legacy format…' });
+          fullResponse = '';
+          this._abortController = new AbortController();
+          const legacyMessages = this._buildMessages(agentsMdContent, false);
+          const legacyProvider = this._getProvider();
+          await legacyProvider.stream(
+            legacyMessages,
+            this._abortController.signal,
+            (event) => {
+              if (event.type === 'delta') {
+                fullResponse += event.content;
+                this._postMessage({ type: 'delta', content: event.content });
+              } else if (event.type === 'done') {
+                lastUsage = event.usage;
+                lastFinishReason = event.finishReason;
+              } else if (event.type === 'error') {
+                this._log.appendLine(`[stream] legacy fallback error: ${event.message}`);
+                this._postMessage({ type: 'error', message: event.message });
+              }
+            },
+            {
+              extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
+            }
+          );
+          this._abortController = undefined;
+
+          if (fullResponse) {
+            this._sessions.history.push({ role: 'assistant', content: fullResponse });
+            finalResponse = fullResponse;
+          }
+          break;
+        }
+
+
+        if (!fullResponse && pendingToolCalls.length === 0) {
           break;
         }
 
@@ -811,7 +924,7 @@ URIs: workspace-relative, forward slashes, no leading slash. Anchor must match e
       }
 
       // For legacy (non-native-tool) providers: process XML/JSON action blocks on the final response
-      if (finalResponse && !this._userCancelled && !useNativeTools) {
+      if (finalResponse && !this._userCancelled && (!useNativeTools || toolsFallbackActive)) {
         await this._edits.processEdits(finalResponse);
         await this._actions.processAllActions(finalResponse);
       }

@@ -18,6 +18,20 @@ function extractRootError(error: unknown): unknown {
 }
 
 /**
+ * Checks if an error indicates the model doesn't support tool/function calling at all.
+ * Matches patterns from OpenRouter, Ollama, and other providers.
+ */
+function isToolSupportError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /400.*\b(tool|function|parameter)\b/i.test(msg) ||
+    /\btools?\s+(not\s+supported|are\s+not\s+supported|unsupported)\b/i.test(msg) ||
+    /\b(invalid|unsupported)\s+(tool|function)\b/i.test(msg) ||
+    /invalid character.*looking for.*tools/i.test(msg)
+  );
+}
+
+/**
  * Checks if an error indicates the model doesn't support the Responses API
  * and should fall back to Chat Completions API.
  */
@@ -192,6 +206,12 @@ export class AIProvider implements IProvider {
       const usage = await result.usage;
       const finishReason = await result.finishReason;
 
+      // Check if model doesn't support tool calling at all
+      if (streamError && !hasContent && isToolSupportError(streamError)) {
+        onEvent({ type: 'tool-unsupported' });
+        return;
+      }
+
       // Check if we got a Responses API error with no content
       console.log('[AIProvider] streamError:', streamError, 'hasContent:', hasContent, 'isFallback:', isFallback, 'isResponsesAPIError:', isFallback ? false : isResponsesAPIError(streamError));
       if (streamError && !hasContent && !isFallback && isResponsesAPIError(streamError)) {
@@ -229,6 +249,12 @@ export class AIProvider implements IProvider {
 
       // AI SDK wraps errors in RetryError - extract the root error first
       const rootError = extractRootError(err);
+
+      // Check if model doesn't support tool calling at all
+      if (isToolSupportError(rootError ?? err)) {
+        onEvent({ type: 'tool-unsupported' });
+        return;
+      }
 
       // Check for AI_NoOutputGeneratedError - model returned empty response
       if (rootError instanceof Error && 
