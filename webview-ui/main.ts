@@ -12,7 +12,7 @@ const vscode = acquireVsCodeApi();
 const root = document.getElementById('root')!;
 root.innerHTML = `
 <div id="settings-overlay" hidden>
-  <div id="settings-panel">
+  <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div id="settings-header">
       <span id="settings-title">Settings</span>
       <button id="btn-settings-close" title="Close">×</button>
@@ -80,7 +80,7 @@ root.innerHTML = `
     </div>
   </div>
 
-  <div id="status-bar"></div>
+  <div id="status-bar" aria-live="polite"></div>
 
   <div id="model-selector-row">
     <label for="model-select">Model:</label>
@@ -145,7 +145,7 @@ style.textContent = `
     font-family: var(--vscode-font-family, sans-serif);
     font-size: var(--vscode-font-size, 13px);
     color: var(--vscode-foreground);
-    background: var(--vscode-sideBar-background, #1e1e1e);
+    background: var(--vscode-sideBar-background, Canvas);
     display: flex;
     flex-direction: column;
   }
@@ -183,6 +183,8 @@ style.textContent = `
     color: var(--vscode-icon-foreground, var(--vscode-foreground));
     border: 1px solid transparent;
     padding: 3px 6px;
+    min-width: 28px;
+    min-height: 28px;
     border-radius: 3px;
     display: inline-flex;
     align-items: center;
@@ -255,12 +257,12 @@ style.textContent = `
   #output {
     flex: 1;
     overflow-y: auto;
-    border: 1px solid var(--vscode-widget-border, #444);
+    border: 1px solid var(--vscode-widget-border, ButtonBorder);
     padding: 8px;
     word-break: break-word;
     line-height: 1.5;
-    background: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
+    background: var(--vscode-editor-background, Canvas);
+    color: var(--vscode-editor-foreground, CanvasText);
     border-radius: 2px;
     min-height: 60px;
   }
@@ -277,14 +279,14 @@ style.textContent = `
     height: 7px;
     border-radius: 50%;
     background: var(--vscode-foreground);
-    opacity: 0.4;
-    animation: typing-bounce 1.2s ease-in-out infinite;
+    opacity: 0.15;
+    animation: typing-fade 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
   #typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
   #typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes typing-bounce {
-    0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
-    40% { transform: translateY(-5px); opacity: 1; }
+  @keyframes typing-fade {
+    0%, 60%, 100% { opacity: 0.15; }
+    30% { opacity: 0.9; }
   }
 
   /* Markdown prose styles */
@@ -490,7 +492,7 @@ style.textContent = `
   #settings-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.5);
+    background: color-mix(in srgb, var(--vscode-sideBar-background, #000) 50%, transparent);
     z-index: 100;
     display: flex;
     align-items: center;
@@ -705,9 +707,9 @@ style.textContent = `
     flex-shrink: 0;
   }
 
-  .status-dot.status-online { background: #4ec94e; }
-  .status-dot.status-offline { background: #e05555; }
-  .status-dot.status-checking { background: #d4a017; animation: pulse 1s infinite; }
+  .status-dot.status-online { background: var(--vscode-testing-passedForeground, #4ec94e); }
+  .status-dot.status-offline { background: var(--vscode-testing-errorForeground, #e05555); }
+  .status-dot.status-checking { background: var(--vscode-inputValidation-warningBorder, #d4a017); animation: pulse 1s infinite; }
   .status-dot.status-unknown { background: var(--vscode-descriptionForeground, #888); }
 
   .status-dot.hidden {
@@ -788,8 +790,8 @@ function renderProvidersList(): void {
     li.innerHTML = `
       <span class="provider-item-name">${escapeHtml(p.name)}</span>
       <span class="provider-item-actions">
-        <button data-idx="${i}" class="btn-edit-provider">Edit</button>
-        <button data-idx="${i}" class="btn-delete-provider">×</button>
+        <button data-idx="${i}" class="btn-edit-provider" aria-label="Edit ${escapeHtml(p.name)}">Edit</button>
+        <button data-idx="${i}" class="btn-delete-provider" aria-label="Delete ${escapeHtml(p.name)}">×</button>
       </span>
     `;
     providersList.appendChild(li);
@@ -1027,9 +1029,17 @@ function buildToolAccordionHtml(key: string, json: string): string {
   return `\n<details class="edit-accordion"><summary>${title}</summary><pre><code>${escaped}</code></pre></details>\n`;
 }
 
+const EMPTY_STATE_HTML = DOMPurify.sanitize(
+  '<p style="color:var(--vscode-descriptionForeground);margin:0;">Configure a provider in settings (⚙), then type a message below to get started.</p>'
+);
+
 function flushMarkdown(): void {
   const wasAtBottom =
     outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 8;
+  if (!markdownBuffer) {
+    outputEl.innerHTML = EMPTY_STATE_HTML;
+    return;
+  }
   const processedMd = replaceEditJsonWithAccordions(markdownBuffer);
   outputEl.innerHTML = DOMPurify.sanitize(marked.parse(processedMd) as string);
   if (wasAtBottom) {
@@ -1054,7 +1064,7 @@ function clearOutput(): void {
     clearTimeout(renderTimer);
     renderTimer = null;
   }
-  outputEl.innerHTML = '';
+  outputEl.innerHTML = EMPTY_STATE_HTML;
 }
 
 function setGenerating(active: boolean): void {
@@ -1139,8 +1149,29 @@ btnAttachEditor.addEventListener('click', () => {
   vscode.postMessage({ type: 'attachActiveEditor' });
 });
 
+/** Last focused element before settings opened — restored on close. */
+let _settingsReturnFocus: HTMLElement | null = null;
+
+function getSettingsFocusable(): HTMLElement[] {
+  const panel = document.getElementById('settings-panel')!;
+  return Array.from(panel.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter(el => !el.closest('[hidden]'));
+}
+
+function openSettingsPanel(): void {
+  _settingsReturnFocus = document.activeElement as HTMLElement | null;
+  settingsOverlay.hidden = false;
+  requestAnimationFrame(() => {
+    const first = getSettingsFocusable()[0];
+    if (first) first.focus();
+  });
+}
+
 function closeSettings(): void {
   settingsOverlay.hidden = true;
+  _settingsReturnFocus?.focus();
+  _settingsReturnFocus = null;
 }
 
 btnSettingsClose.addEventListener('click', closeSettings);
@@ -1148,6 +1179,25 @@ btnSettingsCancel.addEventListener('click', closeSettings);
 
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) { closeSettings(); }
+});
+
+settingsOverlay.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSettings();
+    return;
+  }
+  if (e.key === 'Tab') {
+    const focusable = getSettingsFocusable();
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }
 });
 
 
@@ -1683,7 +1733,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         renderProvidersList();
         renderModelDropdown();
       }
-      settingsOverlay.hidden = false;
+      openSettingsPanel();
       break;
     }
 
