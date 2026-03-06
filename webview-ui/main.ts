@@ -188,10 +188,16 @@ style.textContent = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    transition: background 0.12s ease, transform 0.1s ease, color 0.15s ease;
   }
   .icon-button svg { width: 16px; height: 16px; display: block; }
   .icon-button:hover:not(:disabled) {
     background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.18));
+    transform: translateY(-1px);
+  }
+  .icon-button:active:not(:disabled) {
+    transform: scale(0.85);
+    transition-duration: 0.05s;
   }
 
   #attached-files {
@@ -241,6 +247,7 @@ style.textContent = `
     z-index: 2;
     opacity: 0;
     pointer-events: none;
+    transition: opacity 0.25s ease;
   }
 
   #output-wrapper:hover #output-toolbar,
@@ -279,13 +286,13 @@ style.textContent = `
     border-radius: 50%;
     background: var(--vscode-foreground);
     opacity: 0.15;
-    animation: typing-fade 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    animation: typing-wave 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
   #typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
   #typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes typing-fade {
-    0%, 60%, 100% { opacity: 0.15; }
-    30% { opacity: 0.9; }
+  @keyframes typing-wave {
+    0%, 60%, 100% { opacity: 0.15; transform: translateY(0); }
+    30% { opacity: 0.9; transform: translateY(-4px); }
   }
 
   /* Markdown prose styles */
@@ -430,7 +437,8 @@ style.textContent = `
 
   #prompt-input {
     width: 100%;
-    resize: vertical;
+    resize: none;
+    overflow-y: hidden;
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, #555);
@@ -439,6 +447,7 @@ style.textContent = `
     font-family: inherit;
     font-size: inherit;
     border-radius: 2px;
+    transition: border-color 0.15s ease;
   }
   #prompt-input:focus { outline: 1px solid var(--vscode-focusBorder); }
 
@@ -713,6 +722,32 @@ style.textContent = `
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
+  }
+
+  /* ── Delight ─────────────────────────────────────────────────── */
+
+  /* Copy feedback — briefly turns green */
+  .icon-button.flash-success {
+    color: var(--vscode-testing-passedForeground, #4ec94e) !important;
+    transform: scale(1.2) !important;
+  }
+
+  /* Attached file chips — slide + fade in */
+  @keyframes chip-enter {
+    from { opacity: 0; transform: translateY(-5px) scale(0.93); }
+    to   { opacity: 1; transform: none; }
+  }
+  #attached-files li {
+    animation: chip-enter 0.18s ease-out both;
+  }
+
+  /* Settings panel — fade + slide down on open */
+  @keyframes panel-enter {
+    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    to   { opacity: 1; transform: none; }
+  }
+  #settings-overlay:not([hidden]) #settings-panel {
+    animation: panel-enter 0.2s cubic-bezier(0.25, 1, 0.5, 1) both;
   }
 `;
 document.head.appendChild(style);
@@ -1123,6 +1158,13 @@ function renderAttachedFiles(): void {
 
 btnSend.addEventListener('click', sendPrompt);
 
+// Auto-resize textarea as the user types
+function autoResizeTextarea(): void {
+  promptInput.style.height = 'auto';
+  promptInput.style.height = Math.min(promptInput.scrollHeight, 220) + 'px';
+}
+promptInput.addEventListener('input', autoResizeTextarea);
+
 promptInput.addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
@@ -1249,6 +1291,8 @@ btnCopyMd.addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(markdownBuffer);
     setStatus('Markdown copied to clipboard.');
+    btnCopyMd.classList.add('flash-success');
+    setTimeout(() => btnCopyMd.classList.remove('flash-success'), 500);
   } catch {
     setStatus('Failed to copy markdown.');
   }
@@ -1267,6 +1311,8 @@ btnCopyRaw.addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(rawText);
     setStatus('Raw text copied to clipboard.');
+    btnCopyRaw.classList.add('flash-success');
+    setTimeout(() => btnCopyRaw.classList.remove('flash-success'), 500);
   } catch {
     setStatus('Failed to copy raw text.');
   }
@@ -1281,6 +1327,7 @@ function sendPrompt(): void {
   appendOutput('**You:** ' + prompt + '\n\n---\n\n');
   vscode.postMessage({ type: 'send', prompt, thinkingMode: chkThinking.checked, includeAgentsMd: chkAgentsMd.checked });
   promptInput.value = '';
+  promptInput.style.height = '';
 }
 
 // ── Warning notice ────────────────────────────────────────────────────────────
