@@ -14,7 +14,7 @@ import { ChatPanelSessions } from './ChatPanelSessions';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { buildAgentTools } from '../tools/ToolRegistry';
 import { ToolCallEvent } from '../providers/IProvider';
-import { getSystemPrompt, getNativeToolsPrompt, getLegacyPrompt } from '../utils/PromptProcessor';
+import { getSystemPrompt, getNativeToolsPrompt } from '../utils/PromptProcessor';
 
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -283,7 +283,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
   }
 
-  private _createSystemPrompt(agentsMdContent?: string, useNativeTools = false): string {
+  private _createSystemPrompt(agentsMdContent?: string): string {
     const thinkingMode = this._sessions.thinkingMode;
     const behaviorInstructions = thinkingMode
       ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
@@ -295,32 +295,25 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     // Try to load system prompt from prompts/system-prompt.md with dynamic system info injection
     const customSystemPrompt = getSystemPrompt();
 
-    let systemContent: string;
-
     // throw a warning if system prompt not found
     if (!customSystemPrompt) {
       console.warn('** Custom system prompt not found, using fallback prompts.');
     }
 
-    if (useNativeTools && customSystemPrompt) {
-      // Custom system prompt may contain native-tool-specific guidance.
-      systemContent = `${customSystemPrompt.trim()}${agentsMdSection}\n\n${behaviorInstructions}`;
-    } else {
-      // In legacy fallback mode, always use the dedicated legacy prompt to avoid
-      // conflicting native-tool instructions from custom prompts.
-      systemContent = useNativeTools
-        ? getNativeToolsPrompt(agentsMdSection, behaviorInstructions)
-        : getLegacyPrompt(agentsMdSection, behaviorInstructions);
+    // Keep one stable system prompt for the entire turn/session, even if the runtime
+    // path falls back from native tool-calling to legacy parsing behavior.
+    if (customSystemPrompt) {
+      return `${customSystemPrompt.trim()}${agentsMdSection}\n\n${behaviorInstructions}`;
     }
 
-    return systemContent;
+    return getNativeToolsPrompt(agentsMdSection, behaviorInstructions);
   }
 
   private _buildMessages(agentsMdContent?: string, useNativeTools = false): ChatMessage[] {
     const thinkingMode = this._sessions.thinkingMode;
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: this._sessions.getOrCreateSystemPrompt(() => this._createSystemPrompt(agentsMdContent, useNativeTools)),
+      content: this._sessions.getOrCreateSystemPrompt(() => this._createSystemPrompt(agentsMdContent)),
     };
 
     // Strict append-only context: always resend the exact stored history in order.
@@ -642,9 +635,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           this._log.appendLine(`[tools] empty response after tool results — falling back to legacy prompt`);
           toolsFallbackActive = true;
 
-          // Prompt the model to summarise findings in plain text — tool results have been
-          // stripped from history by stripNativeToolHistory(), so asking for JSON would
-          // confuse the model into outputting wrong formats.
+          // Prompt the model to summarize findings in plain text while preserving
+          // prior tool context in conversation history.
           this._sessions.history.push({
             role: 'user',
             content: 'The search has completed. Based on the information gathered so far, please respond in plain text with your findings and answer the original question directly. Do not output JSON.'
