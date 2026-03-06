@@ -83,7 +83,6 @@ root.innerHTML = `
   <div id="status-bar" aria-live="polite"></div>
 
   <div id="model-selector-row">
-    <label for="model-select">Model:</label>
     <select id="model-select"></select>
     <span id="provider-status-dot" class="status-dot status-unknown" title="Unknown"></span>
   </div>
@@ -682,11 +681,6 @@ style.textContent = `
     padding: 4px 8px;
     border-top: 1px solid var(--vscode-widget-border, #454545);
     font-size: 12px;
-  }
-
-  #model-selector-row label {
-    color: var(--vscode-descriptionForeground, #888);
-    white-space: nowrap;
   }
 
   #model-select {
