@@ -11,6 +11,7 @@ import { resolveDeleteBlockPath, deleteFile } from './DeleteFileTool';
 import { searchFileWithRg } from './ChunkManager';
 import { resolveEditPath } from './editParser';
 import { FILE_EXCLUDE_GLOB } from './FileTools';
+import { GitIgnoreFilter } from '../utils/GitIgnoreFilter';
 
 export interface ToolExecutorDeps {
   log: vscode.OutputChannel;
@@ -47,6 +48,7 @@ interface Task {
 export class ToolExecutor {
   private readonly wsRoots: string[];
   private readonly wsRoot: string;
+  private readonly gitIgnoreFilter: GitIgnoreFilter;
 
   constructor(
     private readonly deps: ToolExecutorDeps,
@@ -54,6 +56,7 @@ export class ToolExecutor {
   ) {
     this.wsRoots = workspaceFolders.map(f => f.uri.fsPath);
     this.wsRoot = this.wsRoots[0] ?? '';
+    this.gitIgnoreFilter = new GitIgnoreFilter(this.wsRoots);
   }
 
   async execute(call: ToolCallEvent): Promise<ToolResult> {
@@ -113,6 +116,10 @@ export class ToolExecutor {
     const relPath = String(args['path'] ?? '');
     const resolved = resolveEditPath(relPath, this.wsRoots);
     if (resolved.error) { return `Error: ${resolved.error}`; }
+
+    if (this.gitIgnoreFilter.isIgnored(relPath)) {
+      return `Error: "${relPath}" is excluded by .gitignore.`;
+    }
 
     const fileUri = vscode.Uri.file(resolved.resolvedPath!);
     let content: string;
@@ -346,6 +353,7 @@ export class ToolExecutor {
         }
         return u.fsPath.replace(/\\/g, '/');
       })
+      .filter(p => !this.gitIgnoreFilter.isIgnored(p))
       .sort();
 
     if (paths.length === 0) { return `No files matched glob: ${glob}`; }
@@ -434,7 +442,16 @@ export class ToolExecutor {
     const basename = path.basename(relPath);
     try {
       const uris = await vscode.workspace.findFiles(`**/${basename}`, FILE_EXCLUDE_GLOB, 5);
-      if (uris.length === 1) { return uris[0].fsPath; }
+      const nonIgnored = uris.filter(u => {
+        for (const root of this.wsRoots) {
+          if (u.fsPath.startsWith(root + path.sep)) {
+            const rel = u.fsPath.slice(root.length + 1).replace(/\\/g, '/');
+            return !this.gitIgnoreFilter.isIgnored(rel);
+          }
+        }
+        return true;
+      });
+      if (nonIgnored.length === 1) { return nonIgnored[0].fsPath; }
     } catch { /* ignore */ }
     return null;
   }
