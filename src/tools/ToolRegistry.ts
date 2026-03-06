@@ -249,7 +249,9 @@ const STATIC_TOOLS: ToolSet = {
     description:
       'Search for a regex pattern within a file or directory using ripgrep. ' +
       'Returns matching lines with surrounding context. ' +
-      'Use this to find usages, imports, and call sites rather than reading file chunks.',
+      'Use this to find usages, imports, and call sites rather than reading file chunks. ' +
+      'WARNING: Results include line-number annotations and markers (e.g. "> 92:") that are NOT in the actual file. ' +
+      'Never use search result lines directly as old_str in string_replace — always call read_file on the relevant lines first to get the exact file content.',
     inputSchema: jsonSchema<{
       path: string;
       pattern: string;

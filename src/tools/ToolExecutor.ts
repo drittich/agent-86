@@ -428,7 +428,13 @@ export class ToolExecutor {
     if (matchCount === 0) {
       return `No matches found for pattern "${pattern}" in ${relPath || 'workspace'}`;
     }
-    return `${matchCount} match(es) for "${pattern}" in ${relPath || 'workspace'}:\n${lines.join('\n')}`;
+    const resultBody = `${matchCount} match(es) for "${pattern}" in ${relPath || 'workspace'}:\n${lines.join('\n')}`;
+    // Remind the model that context lines include formatting markers not in the file.
+    const isFilePath = !isGlob && !!relPath;
+    const editWarning = isFilePath
+      ? '\n\nNote: lines above include ">" markers and "N:" prefixes for display only — they are not in the file. Use read_file on the relevant line range to get exact content before calling string_replace.'
+      : '';
+    return resultBody + editWarning;
   }
 
   private async _resolveWithFallback(relPath: string): Promise<string | null> {
