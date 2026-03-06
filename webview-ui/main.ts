@@ -91,17 +91,24 @@ root.innerHTML = `
           </svg>
         </button>
       </div>
+      <div id="prompt-overlay-right" aria-hidden="false">
+        <button id="btn-send" class="icon-button" title="Send" aria-label="Send">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M2.2 2.7 14 8 2.2 13.3 3.3 9.2 9.2 8 3.3 6.8 2.2 2.7Z" fill="currentColor" />
+          </svg>
+        </button>
+        <button id="btn-stop" class="icon-button" title="Stop" aria-label="Stop" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" />
+          </svg>
+        </button>
+      </div>
     </div>
     <div id="thinking-row">
       <label><input type="checkbox" id="chk-thinking"> Thinking mode</label>
       <label id="lbl-agents-md" hidden><input type="checkbox" id="chk-agents-md"> Include AGENTS.md</label>
     </div>
-    <div id="composer-actions">
-      <div id="input-buttons">
-        <button id="btn-send">Send</button>
-        <button id="btn-stop" disabled>Stop</button>
-      </div>
-    </div>
+    <div id="composer-actions"></div>
   </div>
 </div>
 `;
@@ -110,6 +117,8 @@ root.innerHTML = `
 const style = document.createElement('style');
 style.textContent = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  [hidden] { display: none !important; }
 
   html, body {
     height: 100%;
@@ -399,6 +408,7 @@ style.textContent = `
     border: 1px solid var(--vscode-input-border, #555);
     padding: 6px;
     padding-left: 44px;
+    padding-right: 44px;
     padding-bottom: 28px;
     font-family: inherit;
     font-size: inherit;
@@ -414,6 +424,16 @@ style.textContent = `
   #prompt-overlay-left {
     position: absolute;
     left: 6px;
+    bottom: 6px;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    pointer-events: auto;
+  }
+
+  #prompt-overlay-right {
+    position: absolute;
+    right: 6px;
     bottom: 6px;
     display: flex;
     gap: 4px;
@@ -732,6 +752,9 @@ let providers: ProviderConfig[] = [];
 let activeProviderIndex = 0;
 let editingProviderIndex = -1; // -1 = adding new
 
+// Ensure initial composer button state is correct
+setGenerating(false);
+
 function renderProvidersList(): void {
   providersList.innerHTML = '';
   for (let i = 0; i < providers.length; i++) {
@@ -1011,6 +1034,8 @@ function clearOutput(): void {
 
 function setGenerating(active: boolean): void {
   isGenerating = active;
+  btnSend.hidden = active;
+  btnStop.hidden = !active;
   btnSend.disabled = active;
   btnStop.disabled = !active;
   promptInput.disabled = active;
