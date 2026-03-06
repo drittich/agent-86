@@ -54,9 +54,25 @@ root.innerHTML = `
   <ul id="attached-files"></ul>
 
   <div id="output-wrapper">
-    <div id="output-toolbar">
-      <button id="btn-copy-markdown" title="Copy rendered markdown">Copy Markdown</button>
-      <button id="btn-copy-raw" title="Copy raw text">Copy Raw</button>
+    <div id="output-toolbar" aria-label="Output actions">
+      <button id="btn-copy-markdown" class="icon-button" title="Copy rendered markdown" aria-label="Copy rendered markdown">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="3" y="2" width="10" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+          <line x1="6" y1="4.8" x2="6" y2="9.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          <line x1="8" y1="4.8" x2="8" y2="9.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          <line x1="5.2" y1="6.2" x2="8.8" y2="6.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          <line x1="5.2" y1="7.8" x2="8.8" y2="7.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          <line x1="5" y1="11" x2="11" y2="11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.9" />
+        </svg>
+      </button>
+      <button id="btn-copy-raw" class="icon-button" title="Copy raw text" aria-label="Copy raw text">
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <rect x="3" y="2" width="10" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+          <polyline points="6.6,5.8 5.2,8 6.6,10.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+          <polyline points="9.4,5.8 10.8,8 9.4,10.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+          <line x1="7.7" y1="10.5" x2="8.6" y2="5.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.9" />
+        </svg>
+      </button>
     </div>
     <div id="output" aria-live="polite"></div>
     <div id="typing-indicator" hidden>
@@ -211,18 +227,29 @@ style.textContent = `
     display: flex;
     flex-direction: column;
     min-height: 0;
+    position: relative;
   }
 
   #output-toolbar {
+    position: absolute;
+    top: 8px;
+    right: 8px;
     display: flex;
     gap: 4px;
-    margin-bottom: 4px;
     flex-shrink: 0;
+    z-index: 2;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #output-wrapper:hover #output-toolbar,
+  #output-wrapper:focus-within #output-toolbar {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   #output-toolbar button {
     font-size: 11px;
-    padding: 2px 8px;
   }
 
   #output {
