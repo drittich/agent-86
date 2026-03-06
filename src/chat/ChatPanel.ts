@@ -401,6 +401,42 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return `${singleLine.slice(0, maxLen)}...`;
   }
 
+  /**
+   * Compact oversized tool outputs before adding them to model history.
+   * This keeps iterative tool loops responsive and avoids ballooning context.
+   */
+  private _compactToolResultForHistory(toolName: string, result: string): string {
+    const strictTools = new Set(['find_files', 'list_directory', 'search_file_contents']);
+    const maxChars = strictTools.has(toolName) ? 6000 : 12000;
+    if (result.length <= maxChars) {
+      return result;
+    }
+
+    const lines = result.split(/\r?\n/);
+    const headLines = strictTools.has(toolName) ? 120 : 180;
+    const tailLines = strictTools.has(toolName) ? 24 : 36;
+    const head = lines.slice(0, headLines).join('\n');
+    const tail = lines.slice(-tailLines).join('\n');
+    const omittedLines = Math.max(0, lines.length - headLines - tailLines);
+    const omittedChars = Math.max(0, result.length - (head.length + tail.length));
+
+    const compacted =
+      `${head}\n` +
+      `[... truncated ${omittedLines} line(s), ${omittedChars} char(s) ...]\n` +
+      `${tail}`;
+
+    if (compacted.length <= maxChars) {
+      return compacted;
+    }
+
+    const half = Math.floor((maxChars - 120) / 2);
+    return (
+      `${result.slice(0, half)}\n` +
+      `[... truncated ${result.length - (half * 2)} char(s) ...]\n` +
+      `${result.slice(result.length - half)}`
+    );
+  }
+
   private async _handleSend(prompt: string): Promise<void> {
     if (this._abortController) {
       // Already generating — ignore duplicate sends
@@ -559,6 +595,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     // Cap native tool rounds to avoid runaway loops
     const MAX_TOOL_ROUNDS = 20;
     let toolRound = 0;
+    let toolLimitSummaryRequested = false;
     const MAX_EMPTY_RESPONSE_RETRIES = 1;
     let emptyResponseRetries = 0;
     const MAX_UNRECOGNIZED_JSON_RETRIES = 2;
@@ -669,6 +706,17 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           toolRound++;
           if (toolRound > MAX_TOOL_ROUNDS) {
             this._log.appendLine(`[tools] tool round limit (${MAX_TOOL_ROUNDS}) reached`);
+            if (!toolLimitSummaryRequested) {
+              toolLimitSummaryRequested = true;
+              toolsFallbackActive = true;
+              this._sessions.history.push({
+                role: 'user',
+                content:
+                  'Tool call limit reached. Do not call more tools. Using the gathered tool results already in this conversation, provide the best possible final answer in plain text.',
+              });
+              this._postMessage({ type: 'status', text: 'Tool call limit reached — generating final answer…' });
+              continue;
+            }
             this._postMessage({ type: 'status', text: 'Tool call limit reached.' });
             finalResponse = fullResponse;
             break;
@@ -690,10 +738,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
             this._postMessage({ type: 'status', text: `Tool: ${toolCall.toolName}…` });
             const toolResult = await toolExecutor.execute(toolCall);
+            const compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result);
+            if (compactResult.length !== toolResult.result.length) {
+              this._log.appendLine(
+                `[tools] compacted ${toolCall.toolName} result for history: ${toolResult.result.length} -> ${compactResult.length} chars`
+              );
+            }
             // Feed result back as a tool message
             this._sessions.history.push({
               role: 'tool',
-              content: toolResult.result,
+              content: compactResult,
               tool_call_id: toolResult.toolCallId,
             });
           }
