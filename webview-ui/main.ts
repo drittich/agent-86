@@ -162,7 +162,6 @@ style.textContent = `
     flex: 1;
     min-height: 0;
     padding: 6px;
-    gap: 6px;
   }
 
   button {
