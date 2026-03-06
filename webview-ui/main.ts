@@ -708,7 +708,7 @@ style.textContent = `
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 8px;
+    padding: 4px 0px;
     border-top: 1px solid var(--vscode-widget-border, #454545);
     font-size: 12px;
   }
