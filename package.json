@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.1.15",
+  "version": "0.1.18",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -18,30 +18,30 @@
     "commands": [
       {
         "command": "agent86.openPanel",
-        "title": "Agent 86: Open Panel"
+        "title": "Open Panel"
       },
       {
         "command": "agent86.newSession",
-        "title": "Agent 86: New Session",
+        "title": "New Session",
         "icon": "$(add)"
       },
       {
         "command": "agent86.openSettings",
-        "title": "Agent 86: Settings",
+        "title": "Settings",
         "icon": "$(gear)"
       },
       {
         "command": "agent86.attachFiles",
-        "title": "Agent 86: Attach Files"
+        "title": "Attach Files"
       },
       {
         "command": "agent86.selectSession",
-        "title": "Agent 86: Select Session",
+        "title": "Select Session",
         "icon": "$(history)"
       },
       {
         "command": "agent86.attachActiveEditor",
-        "title": "Agent 86: Attach Active Editor"
+        "title": "Attach Active Editor"
       }
     ],
     "menus": {

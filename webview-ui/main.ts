@@ -1382,10 +1382,10 @@ btnCopyRaw.addEventListener('click', async () => {
 function sendPrompt(): void {
   const prompt = promptInput.value.trim();
   if (!prompt || isGenerating) { return; }
-  clearOutput();
   setStatus('');
   setGenerating(true);
-  appendOutput('**You:** ' + prompt + '\n\n---\n\n');
+  const prefix = markdownBuffer ? '\n\n---\n\n' : '';
+  appendOutput(prefix + '**You:** ' + prompt + '\n\n---\n\n');
   vscode.postMessage({ type: 'send', prompt, thinkingMode: chkThinking.checked, includeAgentsMd: chkAgentsMd.checked });
   promptInput.value = '';
   promptInput.style.height = '';
