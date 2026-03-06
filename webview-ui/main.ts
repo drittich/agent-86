@@ -407,8 +407,6 @@ style.textContent = `
     color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, #555);
     padding: 6px;
-    padding-left: 44px;
-    padding-right: 44px;
     padding-bottom: 28px;
     font-family: inherit;
     font-size: inherit;
