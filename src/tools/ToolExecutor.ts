@@ -5,6 +5,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { ToolCallEvent } from '../providers/IProvider';
+import { runWebSearch, formatWebSearchOutput, HttpGetFn, SearchIntent } from './webSearch/index';
 import { runCommand } from './TerminalTool';
 import { resolveMoveBlockPath, moveFile } from './MoveFileTool';
 import { resolveDeleteBlockPath, deleteFile } from './DeleteFileTool';
@@ -521,52 +522,19 @@ export class ToolExecutor {
   // ── Web ───────────────────────────────────────────────────────────────────
 
   private async _webSearch(args: Record<string, unknown>): Promise<string> {
-    const query = String(args['query'] ?? '');
+    const query = String(args['query'] ?? '').trim();
     if (!query) { return 'Error: query must not be empty.'; }
 
-    const maxResults = Math.min(20, Math.max(1, Number(args['max_results'] ?? 5)));
+    const VALID_INTENTS: SearchIntent[] = ['reference', 'implementation', 'debugging', 'comparison', 'general'];
+    const intentArg = String(args['intent'] ?? '');
+    const intent = VALID_INTENTS.includes(intentArg as SearchIntent) ? intentArg as SearchIntent : undefined;
+    const max_results = Math.min(20, Math.max(1, Number(args['max_results'] ?? 8)));
 
-    // Get API key from VS Code setting or environment
-    const apiKey =
-      vscode.workspace.getConfiguration('agent86').get<string>('braveApiKey') ||
-      process.env['BRAVE_API_KEY'] ||
-      '';
-
-    if (!apiKey) {
-      return 'Error: Brave Search API key not configured. Set agent86.braveApiKey in VS Code settings or BRAVE_API_KEY environment variable.';
-    }
-
-    const encodedQuery = encodeURIComponent(query);
-    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodedQuery}&count=${maxResults}`;
+    const httpGet: HttpGetFn = (url, headers) => this._httpGet(url, headers);
 
     try {
-      const body = await this._httpGet(url, {
-        'Accept': 'application/json',
-        'Accept-Encoding': 'gzip',
-        'X-Subscription-Token': apiKey,
-      });
-
-      const data = JSON.parse(body) as {
-        web?: {
-          results?: Array<{
-            title?: string;
-            url?: string;
-            description?: string;
-          }>;
-        };
-      };
-
-      const results = data?.web?.results ?? [];
-      if (results.length === 0) { return `No results found for: ${query}`; }
-
-      const formatted = results.map((r, i) => {
-        const title = r.title ?? '(no title)';
-        const url = r.url ?? '';
-        const desc = r.description ?? '';
-        return `${i + 1}. **${title}**\n   ${url}\n   ${desc}`;
-      });
-
-      return `Web search results for "${query}":\n\n${formatted.join('\n\n')}`;
+      const output = await runWebSearch({ query, intent, max_results }, httpGet);
+      return formatWebSearchOutput(query, output);
     } catch (err) {
       return `Error performing web search: ${err instanceof Error ? err.message : String(err)}`;
     }

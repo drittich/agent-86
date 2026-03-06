@@ -299,21 +299,34 @@ const STATIC_TOOLS: ToolSet = {
 
   web_search: tool({
     description:
-      'Search the web using Brave Search. Returns titles, URLs, and snippets for the top results. ' +
-      'Requires BRAVE_API_KEY env var or agent86.braveApiKey VS Code setting.',
+      'Search the web using DuckDuckGo Lite (no API key required). ' +
+      'Rewrites the query into 2–3 targeted queries, searches in parallel, ranks and deduplicates results. ' +
+      'Returns a ranked list of candidate URLs. Use fetch_url to read page content from the suggested fetches.',
     inputSchema: jsonSchema<{
       query: string;
+      intent?: 'reference' | 'implementation' | 'debugging' | 'comparison' | 'general';
       max_results?: number;
     }>({
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'The search query.'
+          description: 'The search query. Be specific — include library/framework names, API names, and exact error strings.'
+        },
+        intent: {
+          type: 'string',
+          enum: ['reference', 'implementation', 'debugging', 'comparison', 'general'],
+          description:
+            'Optional intent hint. ' +
+            '"reference" for API/docs lookup, ' +
+            '"implementation" for how-to/build questions, ' +
+            '"debugging" for errors/failures, ' +
+            '"comparison" for vs/choose questions. ' +
+            'Auto-detected if omitted.'
         },
         max_results: {
           type: 'number',
-          description: 'Maximum number of results to return (1–20). Defaults to 5.'
+          description: 'Maximum number of candidates to return (1–20). Defaults to 8.'
         }
       },
       required: ['query']

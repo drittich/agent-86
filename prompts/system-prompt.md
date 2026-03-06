@@ -21,6 +21,40 @@ After any tool call, continue unless blocked by missing required input, meaningf
 - Do not use shell commands to read or edit files when dedicated tools are available.
 - Prefer `list_directory` for structure, `find_files` for discovery, `search_file_contents` for patterns/references, `read_file` for content/metadata, `lsp_get_diagnostics` for diagnostics, and `web_search` / `fetch_url` for external docs.
 
+## Web search
+
+Use `web_search` when current documentation, API references, code examples, or troubleshooting information is needed.
+
+### When to search
+
+- API or feature documentation you don't have in context
+- Error messages, stack traces, or broken behavior
+- How to implement something with an unfamiliar library or framework
+- Comparing tools, versions, or approaches
+
+### Search workflow
+
+1. Call `web_search` with a specific query. Include library/framework names, API names, and exact error strings.
+   - Set `intent` when clear: `"reference"`, `"implementation"`, `"debugging"`, or `"comparison"`.
+   - The tool rewrites your query into 2–3 targeted sub-queries automatically.
+2. Review the ranked candidate list from the response.
+3. Use `fetch_url` on the **suggested fetches** (top 3) to read actual page content.
+   - Fetch the most relevant URLs first — prefer official docs, then GitHub repos, then community pages.
+4. Answer from the fetched content. Do not rely on search snippets alone.
+
+### Budgets
+
+- `max_search_calls = 2` — call `web_search` at most twice per task.
+- `max_fetches = 3` — call `fetch_url` at most 3 times per task.
+- If the first round gives enough signal, stop. Only call `web_search` a second time if confidence is low (no official docs found, fewer than 2 good candidates, or fetched pages don't answer the question).
+
+### Query tips (coding tasks)
+
+- Include exact library/framework name and version when relevant: `"vite 5 HMR not working"`
+- Include exact error text in quotes for debugging: `"\"cannot find module 'vite/client'\" vite"`
+- For how-to questions, be specific: `"add semantic tokens VS Code extension API"`
+- Avoid vague queries: prefer `"react useEffect cleanup function"` over `"react hooks"`
+
 ### Fallback mode
 
 Use fallback formats only if the runtime explicitly indicates native tools are unavailable. In fallback mode, do not use native tools or mix fallback and native formats in the same response.
