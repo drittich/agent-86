@@ -493,6 +493,9 @@ style.textContent = `
     padding: 4px 0 2px 0;
     font-size: 0.85em;
     color: var(--vscode-foreground);
+    display: flex;
+    gap: 12px;
+    align-items: center;
   }
   #thinking-row input { margin-right: 4px; }
 
@@ -514,9 +517,11 @@ style.textContent = `
     border-radius: 4px;
     width: 320px;
     max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 40px);
     display: flex;
     flex-direction: column;
     gap: 0;
+    overflow: hidden;
   }
 
   #settings-header {
@@ -547,6 +552,7 @@ style.textContent = `
     display: flex;
     flex-direction: column;
     gap: 6px;
+    overflow-y: auto;
   }
   #settings-body label {
     font-size: 11px;
@@ -608,6 +614,7 @@ style.textContent = `
     padding: 4px 6px;
     border-radius: 3px;
     font-size: 12px;
+    transition: background 0.1s ease;
   }
 
   #providers-list li:hover {
@@ -701,6 +708,10 @@ style.textContent = `
     padding: 2px 4px;
     font-size: 12px;
     font-family: inherit;
+    transition: border-color 0.15s ease;
+  }
+  #model-select:hover {
+    border-color: var(--vscode-focusBorder, #007fd4);
   }
 
   .status-dot {
@@ -722,6 +733,16 @@ style.textContent = `
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
+  }
+
+  /* Focus-visible rings for keyboard navigation */
+  button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: 1px;
+  }
+  .icon-button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: 1px;
   }
 
   /* ── Delight ─────────────────────────────────────────────────── */
@@ -748,6 +769,21 @@ style.textContent = `
   }
   #settings-overlay:not([hidden]) #settings-panel {
     animation: panel-enter 0.2s cubic-bezier(0.25, 1, 0.5, 1) both;
+  }
+
+  /* Approval/warning card entrance */
+  @keyframes card-enter {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* Respect user's motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 `;
 document.head.appendChild(style);
@@ -931,6 +967,17 @@ function setStatus(text: string): void {
   statusBar.textContent = text;
 }
 
+function setStatusBadge(badgeClass: string, badgeText: string, detail?: string): void {
+  statusBar.innerHTML = '';
+  const badge = document.createElement('span');
+  badge.className = `status-badge ${badgeClass}`;
+  badge.textContent = badgeText;
+  statusBar.appendChild(badge);
+  if (detail) {
+    statusBar.appendChild(document.createTextNode(' ' + detail));
+  }
+}
+
 // Known tool keys and their display labels
 const TOOL_KEYS: Record<string, string> = {
   edits: 'edits',
@@ -1059,7 +1106,7 @@ function buildToolAccordionHtml(key: string, json: string): string {
 }
 
 const EMPTY_STATE_HTML = DOMPurify.sanitize(
-  '<p style="color:var(--vscode-descriptionForeground);margin:0;">Configure a provider in settings (⚙), then type a message below to get started.</p>'
+  '<p style="color:var(--vscode-descriptionForeground);margin:0;">Configure a provider in settings, then type a message to get started.</p>'
 );
 
 function flushMarkdown(): void {
@@ -1345,6 +1392,7 @@ warningStyle.textContent = `
     padding: 6px 10px;
     margin: 6px 0;
     font-size: 12px;
+    animation: card-enter 0.18s ease-out both;
   }
   .warning-notice .warning-icon {
     flex-shrink: 0;
@@ -1403,6 +1451,7 @@ const approvalStyle = `
     padding: 8px 10px;
     margin: 6px 0;
     font-size: 12px;
+    animation: card-enter 0.18s ease-out both;
   }
   .approval-card .approval-title {
     font-weight: bold;
@@ -1692,15 +1741,15 @@ window.addEventListener('message', (event: MessageEvent) => {
       // Dismiss any approval cards left over from a cancelled run
       if (msg.cancelled) {
         approvalsContainer.innerHTML = '';
-        setStatus('Cancelled.');
+        setStatusBadge('cancelled', 'Cancelled');
       } else if (msg.usage) {
         const u = msg.usage;
         const fr = msg.finishReason;
-        const frSuffix = fr ? ` • finish_reason=${fr}` : '';
-        setStatus(`Done. \u2022 ${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} prompt + ${u.completionTokens.toLocaleString()} completion)${frSuffix}`);
+        const frSuffix = fr ? ` · ${fr}` : '';
+        setStatusBadge('completed', 'Done', `${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} + ${u.completionTokens.toLocaleString()})${frSuffix}`);
       } else {
         const fr = msg.finishReason;
-        setStatus(fr ? `Done. • finish_reason=${fr}` : 'Done.');
+        setStatusBadge('completed', 'Done', fr || undefined);
       }
       break;
 
