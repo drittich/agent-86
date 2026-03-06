@@ -59,12 +59,6 @@ root.innerHTML = `
 
   <ul id="attached-files"></ul>
 
-  <div id="model-selector-row">
-    <label for="model-select">Model:</label>
-    <select id="model-select"></select>
-    <span id="provider-status-dot" class="status-dot status-unknown" title="Unknown"></span>
-  </div>
-
   <div id="output-wrapper">
     <div id="output-toolbar">
       <button id="btn-copy-markdown" title="Copy rendered markdown">Copy Markdown</button>
@@ -77,6 +71,12 @@ root.innerHTML = `
   </div>
 
   <div id="status-bar"></div>
+
+  <div id="model-selector-row">
+    <label for="model-select">Model:</label>
+    <select id="model-select"></select>
+    <span id="provider-status-dot" class="status-dot status-unknown" title="Unknown"></span>
+  </div>
 
   <div id="input-row">
     <textarea id="prompt-input" rows="4" placeholder="Ask the agent…"></textarea>
@@ -585,7 +585,7 @@ style.textContent = `
     align-items: center;
     gap: 6px;
     padding: 4px 8px;
-    border-bottom: 1px solid var(--vscode-widget-border, #454545);
+    border-top: 1px solid var(--vscode-widget-border, #454545);
     font-size: 12px;
   }
 
@@ -650,6 +650,7 @@ const chkAgentsMd  = document.getElementById('chk-agents-md') as HTMLInputElemen
 const lblAgentsMd  = document.getElementById('lbl-agents-md') as HTMLElement;
 const modelSelect        = document.getElementById('model-select') as HTMLSelectElement;
 const providerStatusDot  = document.getElementById('provider-status-dot')!;
+const modelSelectorRowEl  = document.getElementById('model-selector-row')!;
 const providersList      = document.getElementById('providers-list') as HTMLUListElement;
 const btnAddProvider     = document.getElementById('btn-add-provider') as HTMLButtonElement;
 const providerForm       = document.getElementById('provider-form')!;
@@ -1289,7 +1290,8 @@ const appEl = document.getElementById('app')!;
 const inputRowEl = document.getElementById('input-row')!;
 const approvalsContainer = document.createElement('div');
 approvalsContainer.id = 'approvals-container';
-appEl.insertBefore(approvalsContainer, inputRowEl);
+// Keep approvals above the model selector, which lives at the bottom near the composer.
+appEl.insertBefore(approvalsContainer, modelSelectorRowEl ?? inputRowEl);
 
 // Actions auto-approved for this session (populated by "Approve & Don't ask again")
 const sessionAutoApproved = new Set<string>();
