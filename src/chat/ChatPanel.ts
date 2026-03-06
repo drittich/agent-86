@@ -283,39 +283,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
   }
 
-  /** Trim the message list by dropping oldest turns (after system) until under budget. */
-  private _trimMessagesToBudget(messages: ChatMessage[], budgetChars: number): ChatMessage[] {
-    if (messages.length <= 2) {
-      return messages;
-    }
-
-    const KEEP_AT_LEAST = 3; // system + last user + last assistant (when present)
-    let total = this._estimateMessageChars(messages);
-
-    const trimmed = [...messages];
-    while (total > budgetChars && trimmed.length > KEEP_AT_LEAST) {
-      // Drop the oldest non-system message.
-      const removed = trimmed.splice(1, 1)[0];
-      total -= removed?.content?.length ?? 0;
-    }
-
-    if (total > budgetChars && trimmed.length === KEEP_AT_LEAST) {
-      // Still too big: hard-truncate the oldest remaining non-system message.
-      const idx = 1;
-      const sysLen = trimmed[0]?.content?.length ?? 0;
-      const tailLen = (trimmed[2]?.content?.length ?? 0) + (trimmed[1]?.content?.length ?? 0);
-      const remaining = Math.max(0, budgetChars - sysLen - (trimmed[2]?.content?.length ?? 0));
-      if (trimmed[idx]?.content && remaining > 0) {
-        trimmed[idx] = {
-          ...trimmed[idx],
-          content: trimmed[idx].content.slice(0, remaining) + '\n\n... [truncated to fit context budget] ...',
-        };
-      }
-    }
-
-    return trimmed;
-  }
-
   private _isEmptyAssistantMessage(message: ChatMessage): boolean {
     if (message.role !== 'assistant') {
       return false;
@@ -373,7 +340,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return sanitized;
   }
 
-  private _buildMessages(agentsMdContent?: string, useNativeTools = false): ChatMessage[] {
+  private _createSystemPrompt(agentsMdContent?: string, useNativeTools = false): string {
     const thinkingMode = this._sessions.thinkingMode;
     const behaviorInstructions = thinkingMode
       ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
@@ -403,55 +370,32 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         : getLegacyPrompt(agentsMdSection, behaviorInstructions);
     }
 
+    return systemContent;
+  }
+
+  private _buildMessages(agentsMdContent?: string, useNativeTools = false): ChatMessage[] {
+    const thinkingMode = this._sessions.thinkingMode;
     const systemPrompt: ChatMessage = {
       role: 'system',
-      content: systemContent,
+      content: this._sessions.getOrCreateSystemPrompt(() => this._createSystemPrompt(agentsMdContent, useNativeTools)),
     };
 
-    // Keep the sendable context small (models/servers often have hard 32KB-ish limits).
-    const CONTEXT_BUDGET_CHARS = 30_000;
-
-    // For send-only: summarize older tool payloads; keep the most recent few messages verbatim.
-    const KEEP_LAST_VERBOSE = 6;
     const baseHistory = useNativeTools
       ? this._sessions.history
       : this._sanitizeHistoryForLegacyMode(this._sessions.history);
-    const historyForSend = baseHistory.map((m, idx) => {
-      const fromEnd = baseHistory.length - idx;
-      if (fromEnd <= KEEP_LAST_VERBOSE) {
-        return m;
-      }
-      if (m.role === 'user' && m.content && m.content.length > 4500 && this._looksLikeToolPayload(m.content)) {
-        return { ...m, content: this._summarizeToolHeavyMessage(m.content) };
-      }
-      return m;
-    });
-
-    const rawMessages = [systemPrompt, ...historyForSend];
-    const messages = this._trimMessagesToBudget(rawMessages, CONTEXT_BUDGET_CHARS);
+    const messages = [systemPrompt, ...baseHistory];
 
     const strippedForLegacy = this._sessions.history.length - baseHistory.length;
     this._log.appendLine(
       `[buildMessages] ${messages.length} message(s), thinkingMode=${thinkingMode}, nativeTools=${useNativeTools}, strippedForLegacy=${Math.max(0, strippedForLegacy)}`
     );
-    this._log.appendLine(`[buildMessages] approxChars=${this._estimateMessageChars(messages)}/${CONTEXT_BUDGET_CHARS}`);
+    this._log.appendLine(`[buildMessages] approxChars=${this._estimateMessageChars(messages)}`);
     for (const m of messages) {
       const preview = m.content.slice(0, 120).replace(/\n/g, '↵');
       this._log.appendLine(`  [${m.role}] ${preview}${m.content.length > 120 ? `… (${m.content.length} chars)` : ''}`);
     }
 
     return messages;
-  }
-
-  private _looksLikeToolPayload(content: string): boolean {
-    return (
-      content.includes('<search_result') ||
-      content.includes('<file_list') ||
-      content.includes('<file_chunk') ||
-      content.includes('<RUN_RESULT') ||
-      content.includes('<MOVE_RESULT') ||
-      content.includes('<DELETE_RESULT')
-    );
   }
 
   /**
@@ -476,17 +420,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       trimmed.includes('<MOVE>') ||
       trimmed.includes('<DELETE>')
     );
-  }
-
-  private _summarizeToolHeavyMessage(content: string): string {
-    const HEAD = 3000;
-    const TAIL = 500;
-    if (content.length <= HEAD + TAIL + 200) {
-      return content;
-    }
-    const head = content.slice(0, HEAD);
-    const tail = content.slice(-TAIL);
-    return `${head}\n\n... [history truncated] ...\n\n${tail}`;
   }
 
   /** Compact single-line preview for debug logs. */
@@ -663,13 +596,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let toolsFallbackActive = false;
 
 
+    const provider = this._getProvider();
+
     try {
       while (true) {
         let fullResponse = '';
         const pendingToolCalls: ToolCallEvent[] = [];
         const nativeToolMode = useNativeTools && !toolsFallbackActive;
         this._abortController = new AbortController();
-        const provider = this._getProvider();
 
         this._log.appendLine(
           `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode})`
@@ -714,7 +648,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
         // If the provider rejected tool calling, switch to legacy mode and re-run the round.
         if (nativeToolMode && toolsFallbackActive && !this._userCancelled) {
-          this._sessions.history = this._sanitizeHistoryForLegacyMode(this._sessions.history);
           this._postMessage({ type: 'status', text: 'Model does not support tool calling — retrying with legacy format…' });
           continue;
         }
@@ -728,9 +661,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && nativeToolMode) {
           this._log.appendLine(`[tools] empty response after tool results — falling back to legacy prompt`);
           toolsFallbackActive = true;
-
-          // Strip tool-related messages from history that the legacy prompt can't understand.
-          this._sessions.history = this._sanitizeHistoryForLegacyMode(this._sessions.history);
 
           // Add explicit instruction to continue with JSON edit format
           this._sessions.history.push({

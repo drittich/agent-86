@@ -42,9 +42,6 @@ function getOSName(): string {
  * Generate system information string
  */
 function generateSystemInfo(): string {
-  const now = new Date();
-  const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
-  const timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   // Get workspace directory if available
@@ -56,8 +53,6 @@ Platform: ${process.platform}
 Default Shell: ${getDefaultShell()}
 Home Directory: ${os.homedir()}
 Current Working Directory: ${wsRoot}
-Current Date: ${dateStr}
-Current Time: ${timeStr}
 Time Zone: ${timeZone}`;
 }
 

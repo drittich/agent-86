@@ -26,6 +26,7 @@ export interface Session {
   attachments: AttachedFile[];
   thinkingMode?: boolean;
   includeAgentsMd?: boolean;
+  systemPrompt?: string;
 }
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
