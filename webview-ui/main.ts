@@ -945,10 +945,12 @@ function escapeHtml(str: string): string {
 function renderModelDropdown(): void {
   const prev = modelSelect.value;
   modelSelect.innerHTML = '';
-  for (let i = 0; i < providers.length; i++) {
+  // Create a mapping: sorted display index -> original provider index
+  const sortedIndices = [...providers].map((_, i) => i).sort((a, b) => providers[a].name.localeCompare(providers[b].name));
+  for (let i = 0; i < sortedIndices.length; i++) {
     const opt = document.createElement('option');
-    opt.value = String(i);
-    opt.textContent = providers[i].name;
+    opt.value = String(sortedIndices[i]); // Use original provider index as value
+    opt.textContent = providers[sortedIndices[i]].name;
     modelSelect.appendChild(opt);
   }
   // Restore selection or use activeProviderIndex
