@@ -656,10 +656,13 @@ style.textContent = `
   }
 
   #provider-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     background: var(--vscode-editor-background, #1e1e1e);
     border: 1px solid var(--vscode-widget-border, #454545);
     border-radius: 4px;
-    padding: 8px;
+    padding: 12px;
     margin-top: 6px;
   }
 
@@ -672,9 +675,21 @@ style.textContent = `
   #pf-checkbox-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin: 4px 0;
+  }
+  #pf-checkbox-row label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
+    color: var(--vscode-foreground);
+    text-transform: none;
+    letter-spacing: 0;
+    cursor: pointer;
+  }
+  #pf-checkbox-row input[type="checkbox"] {
+    width: auto;
+    flex-shrink: 0;
+    margin: 0;
   }
 
   #pf-buttons {
