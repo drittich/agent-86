@@ -132,9 +132,7 @@ export class AIProvider implements IProvider {
    * - orphaned tool messages that follow empty assistant messages
    */
   private sanitizeConversation(messages: ChatMessage[]): ChatMessage[] {
-    const sanitized: ChatMessage[] = [];
     const skipIndices = new Set<number>();
-
     for (let i = 0; i < messages.length; i++) {
       if (this.isEmptyAssistantMessage(messages[i])) {
         skipIndices.add(i);
@@ -145,34 +143,25 @@ export class AIProvider implements IProvider {
         }
       }
     }
-
-    for (let i = 0; i < messages.length; i++) {
-      if (!skipIndices.has(i)) {
-        sanitized.push(messages[i]);
-      }
-    }
-
-    return sanitized;
+    return messages.filter((_, i) => !skipIndices.has(i));
   }
 
   /**
    * Strip native tool-calling history artifacts for models running without native tools.
+   * Legacy/non-tool providers cannot process `role: 'tool'` messages or assistant `tool_calls`.
    */
   private stripNativeToolHistory(messages: ChatMessage[]): ChatMessage[] {
-    const stripped: ChatMessage[] = [];
-    for (const message of messages) {
+    return messages.flatMap(message => {
       if (message.role === 'tool') {
-        continue;
+        return [];
       }
       if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {
-        if (message.content.trim().length > 0) {
-          stripped.push({ role: 'assistant', content: message.content, displayContent: message.displayContent });
-        }
-        continue;
+        return message.content.trim().length > 0
+          ? [{ role: 'assistant' as const, content: message.content, displayContent: message.displayContent }]
+          : [];
       }
-      stripped.push(message);
-    }
-    return stripped;
+      return [message];
+    });
   }
 
   async stream(
@@ -213,6 +202,9 @@ export class AIProvider implements IProvider {
       // Use native tool calling only if enabled AND tools are provided
       const hasTools = !!options?.tools && Object.keys(options.tools).length > 0;
       const useNativeTools = this.toolUse && hasTools;
+      // Sanitize before sending: remove empty assistant messages and orphaned tool results.
+      // For legacy/non-tool mode, also strip tool role messages and tool_calls metadata
+      // so providers that don't support native tools don't reject the request.
       const sanitizedMessages = this.sanitizeConversation(messages);
       const preparedMessages = useNativeTools
         ? sanitizedMessages

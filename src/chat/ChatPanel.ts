@@ -283,63 +283,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
   }
 
-  private _isEmptyAssistantMessage(message: ChatMessage): boolean {
-    if (message.role !== 'assistant') {
-      return false;
-    }
-    const hasContent = typeof message.content === 'string' && message.content.trim().length > 0;
-    const hasToolCalls = !!message.tool_calls && message.tool_calls.length > 0;
-    return !hasContent && !hasToolCalls;
-  }
-
-  /**
-   * Remove native tool-calling artifacts from history for legacy fallback mode.
-   * Legacy format cannot consume `tool` role messages or assistant `tool_calls`.
-   */
-  private _sanitizeHistoryForLegacyMode(history: ChatMessage[]): ChatMessage[] {
-    const sanitized: ChatMessage[] = [];
-    const skipIndices = new Set<number>();
-
-    // First pass: mark empty assistant messages and orphan tool results to skip.
-    for (let i = 0; i < history.length; i++) {
-      if (this._isEmptyAssistantMessage(history[i])) {
-        skipIndices.add(i);
-        let j = i + 1;
-        while (j < history.length && history[j].role === 'tool') {
-          skipIndices.add(j);
-          j++;
-        }
-      }
-    }
-
-    for (let i = 0; i < history.length; i++) {
-      if (skipIndices.has(i)) {
-        continue;
-      }
-      const message = history[i];
-      if (message.role === 'tool') {
-        continue;
-      }
-      if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {
-        // Keep textual assistant content, but remove native tool_calls metadata.
-        if (message.content.trim().length > 0) {
-          sanitized.push({
-            role: 'assistant',
-            content: message.content,
-            displayContent: message.displayContent,
-          });
-        }
-        continue;
-      }
-      if (message.role === 'user' && message.content === 'Please continue.') {
-        continue;
-      }
-      sanitized.push(message);
-    }
-
-    return sanitized;
-  }
-
   private _createSystemPrompt(agentsMdContent?: string, useNativeTools = false): string {
     const thinkingMode = this._sessions.thinkingMode;
     const behaviorInstructions = thinkingMode
@@ -380,14 +323,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       content: this._sessions.getOrCreateSystemPrompt(() => this._createSystemPrompt(agentsMdContent, useNativeTools)),
     };
 
-    const baseHistory = useNativeTools
-      ? this._sessions.history
-      : this._sanitizeHistoryForLegacyMode(this._sessions.history);
-    const messages = [systemPrompt, ...baseHistory];
-
-    const strippedForLegacy = this._sessions.history.length - baseHistory.length;
+    // Strict append-only context: always resend the exact stored history in order.
+    // No per-request history sanitization/rewriting here.
+    const messages = [systemPrompt, ...this._sessions.history];
     this._log.appendLine(
-      `[buildMessages] ${messages.length} message(s), thinkingMode=${thinkingMode}, nativeTools=${useNativeTools}, strippedForLegacy=${Math.max(0, strippedForLegacy)}`
+      `[buildMessages] ${messages.length} message(s), thinkingMode=${thinkingMode}, nativeTools=${useNativeTools}, appendOnlyHistory=true`
     );
     this._log.appendLine(`[buildMessages] approxChars=${this._estimateMessageChars(messages)}`);
     for (const m of messages) {
@@ -396,6 +336,43 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     }
 
     return messages;
+  }
+
+  /**
+   * Build provider-specific extra body settings while keeping cross-provider safety.
+   * For local llama.cpp-style OpenAI endpoints, send cache hints so repeated turns
+   * can reuse KV state when prompts are append-only.
+   */
+  private _buildExtraBody(provider: ProviderConfig | undefined): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode }
+    };
+
+    if (!provider) {
+      return body;
+    }
+
+    try {
+      const url = new URL(provider.baseUrl);
+      const host = url.hostname.toLowerCase();
+      const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0';
+      if (!isLocalHost) {
+        return body;
+      }
+
+      // Stable slot per session maximizes prompt cache reuse on llama.cpp server.
+      const sessionId = this._sessions.currentSession.sessionId;
+      let hash = 0;
+      for (let i = 0; i < sessionId.length; i++) {
+        hash = ((hash * 31) + sessionId.charCodeAt(i)) >>> 0;
+      }
+      body.cache_prompt = true;
+      body.id_slot = Number(hash % 32);
+    } catch {
+      // Invalid URL or unsupported target — keep generic body only.
+    }
+
+    return body;
   }
 
   /**
@@ -548,7 +525,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     // Determine whether the active provider supports native tool calling
     const activeProviders = this._getProviders();
     const activeIdx = Math.min(this._activeProviderIndex, activeProviders.length - 1);
-    const useNativeTools = activeProviders[activeIdx]?.toolUse ?? true;
+    const activeProvider = activeProviders[activeIdx];
+    const useNativeTools = activeProvider?.toolUse ?? true;
 
     // Build ToolExecutor for native tool dispatch (used only when useNativeTools=true)
     const toolExecutor = useNativeTools
@@ -590,6 +568,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let toolRound = 0;
     const MAX_EMPTY_RESPONSE_RETRIES = 1;
     let emptyResponseRetries = 0;
+    const MAX_UNRECOGNIZED_JSON_RETRIES = 2;
+    let unrecognizedJsonRetries = 0;
 
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
@@ -640,7 +620,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           },
           {
             tools: nativeToolMode ? buildAgentTools() : undefined,
-            extraBody: { chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode } }
+            extraBody: this._buildExtraBody(activeProvider)
           }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
@@ -662,10 +642,12 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           this._log.appendLine(`[tools] empty response after tool results — falling back to legacy prompt`);
           toolsFallbackActive = true;
 
-          // Add explicit instruction to continue with JSON edit format
+          // Prompt the model to summarise findings in plain text — tool results have been
+          // stripped from history by stripNativeToolHistory(), so asking for JSON would
+          // confuse the model into outputting wrong formats.
           this._sessions.history.push({
             role: 'user',
-            content: 'Please continue and complete the file edit using the JSON format described in the system prompt.'
+            content: 'The search has completed. Based on the information gathered so far, please respond in plain text with your findings and answer the original question directly. Do not output JSON.'
           });
 
           this._postMessage({ type: 'status', text: 'Model cannot continue tool loop — retrying with legacy format…' });
@@ -813,15 +795,19 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
           if (fullResponse.trimStart().startsWith('{')) {
             this._log.appendLine(`[stream] unrecognized JSON response: ${fullResponse.slice(0, 300)}`);
-            this._sessions.history.push({
-              role: 'user',
-              content:
-                '<tool_guidance>Return either plain text OR exactly one of these JSON objects: ' +
-                '{"search_file":[{"uri":"path/or/glob","pattern":"...","case_sensitive":false}]}, ' +
-                '{"request_files":[{"glob":"**/*.ts","reason":"..."}]}, ' +
-                '{"request_chunks":[{"uri":"path","preferred":{"near_line":1,"max_chunks":1}}]}. ' +
-                'Do not output other JSON keys.</tool_guidance>',
-            });
+            if (unrecognizedJsonRetries < MAX_UNRECOGNIZED_JSON_RETRIES) {
+              unrecognizedJsonRetries++;
+              this._sessions.history.push({
+                role: 'user',
+                content:
+                  '<tool_guidance>Return either plain text OR exactly one of these JSON objects: ' +
+                  '{"search_file":[{"uri":"path/or/glob","pattern":"...","case_sensitive":false}]}, ' +
+                  '{"request_files":[{"glob":"**/*.ts","reason":"..."}]}, ' +
+                  '{"request_chunks":[{"uri":"path","preferred":{"near_line":1,"max_chunks":1}}]}. ' +
+                  'Do not output other JSON keys.</tool_guidance>',
+              });
+            }
+            // If retry limit exceeded, fall through to break with current response
           }
           else if (fullResponse.trim().length > 0) {
             this._log.appendLine(
