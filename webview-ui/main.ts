@@ -347,6 +347,18 @@ style.textContent = `
     color: var(--vscode-textLink-foreground, #4e9fde);
   }
 
+  /* User prompt bubbles */
+  .user-bubble {
+    background: var(--vscode-input-background, #2d2d2d);
+    border: 1px solid var(--vscode-input-border, #555);
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin: 12px 0 6px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   /* Tool call accordions (edits, search_file, request_chunks, etc.) */
   #output details.edit-accordion {
     margin: 0 0 0.6em;
@@ -971,7 +983,11 @@ let hasActiveEditor = false;
 const editOutcomes = new Map<string, 'applied' | 'cancelled'>();
 
 // Markdown rendering — buffer incoming deltas and flush on a timer
-let markdownBuffer = '';
+type OutputSegment = { type: 'md'; content: string } | { type: 'user'; content: string };
+let segments: OutputSegment[] = [];
+function getMdBuffer(): string {
+  return segments.filter((s): s is { type: 'md'; content: string } => s.type === 'md').map(s => s.content).join('');
+}
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
 const RENDER_INTERVAL_MS = 100;
 
@@ -1126,19 +1142,33 @@ const EMPTY_STATE_HTML = DOMPurify.sanitize(
 function flushMarkdown(): void {
   const wasAtBottom =
     outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 8;
-  if (!markdownBuffer) {
+  const hasContent = segments.some(s => s.type === 'user' || (s.type === 'md' && s.content));
+  if (!hasContent) {
     outputEl.innerHTML = EMPTY_STATE_HTML;
     return;
   }
-  const processedMd = replaceEditJsonWithAccordions(markdownBuffer);
-  outputEl.innerHTML = DOMPurify.sanitize(marked.parse(processedMd) as string);
+  let html = '';
+  for (const seg of segments) {
+    if (seg.type === 'user') {
+      html += `<div class="user-bubble">${escapeHtml(seg.content)}</div>`;
+    } else if (seg.content) {
+      const processedMd = replaceEditJsonWithAccordions(seg.content);
+      html += DOMPurify.sanitize(marked.parse(processedMd) as string);
+    }
+  }
+  outputEl.innerHTML = html || EMPTY_STATE_HTML;
   if (wasAtBottom) {
     outputEl.scrollTop = outputEl.scrollHeight;
   }
 }
 
 function appendOutput(text: string): void {
-  markdownBuffer += text;
+  const last = segments[segments.length - 1];
+  if (last && last.type === 'md') {
+    last.content += text;
+  } else {
+    segments.push({ type: 'md', content: text });
+  }
   if (renderTimer === null) {
     renderTimer = setTimeout(() => {
       renderTimer = null;
@@ -1147,8 +1177,13 @@ function appendOutput(text: string): void {
   }
 }
 
+function insertUserPrompt(text: string): void {
+  segments.push({ type: 'user', content: text });
+  flushMarkdown();
+}
+
 function clearOutput(): void {
-  markdownBuffer = '';
+  segments = [];
   editOutcomes.clear();
   if (renderTimer !== null) {
     clearTimeout(renderTimer);
@@ -1345,12 +1380,13 @@ modelSelect.addEventListener('change', () => {
  * This gives the user the markdown source that was rendered.
  */
 btnCopyMd.addEventListener('click', async () => {
-  if (!markdownBuffer) {
+  const mdContent = getMdBuffer();
+  if (!mdContent) {
     setStatus('Nothing to copy.');
     return;
   }
   try {
-    await navigator.clipboard.writeText(markdownBuffer);
+    await navigator.clipboard.writeText(mdContent);
     setStatus('Markdown copied to clipboard.');
     btnCopyMd.classList.add('flash-success');
     setTimeout(() => btnCopyMd.classList.remove('flash-success'), 500);
@@ -1384,8 +1420,7 @@ function sendPrompt(): void {
   if (!prompt || isGenerating) { return; }
   setStatus('');
   setGenerating(true);
-  const prefix = markdownBuffer ? '\n\n---\n\n' : '';
-  appendOutput(prefix + '**You:** ' + prompt + '\n\n---\n\n');
+  insertUserPrompt(prompt);
   vscode.postMessage({ type: 'send', prompt, thinkingMode: chkThinking.checked, includeAgentsMd: chkAgentsMd.checked });
   promptInput.value = '';
   promptInput.style.height = '';
@@ -1739,6 +1774,11 @@ window.addEventListener('message', (event: MessageEvent) => {
   };
 
   switch (msg.type) {
+    case 'userPrompt':
+      typingIndicator.hidden = true;
+      insertUserPrompt(msg.content ?? '');
+      break;
+
     case 'delta':
       typingIndicator.hidden = true;
       appendOutput(msg.content ?? '');
@@ -1750,7 +1790,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         clearTimeout(renderTimer);
         renderTimer = null;
       }
-      if (markdownBuffer) { flushMarkdown(); }
+      if (segments.length > 0) { flushMarkdown(); }
       setGenerating(false);
       // Dismiss any approval cards left over from a cancelled run
       if (msg.cancelled) {

@@ -22,6 +22,7 @@ export type ExtensionToWebview =
   | { type: 'openSettings'; providers: ProviderConfig[]; activeProviderIndex: number }
   | { type: 'providerStatus'; providerName: string; status: 'online' | 'offline' | 'checking' }
   | { type: 'providers'; providers: ProviderConfig[]; activeProviderIndex: number }
+  | { type: 'userPrompt'; content: string }
   | { type: 'newSession' };
 
 // Messages sent from the webview to the extension host

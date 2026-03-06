@@ -1109,7 +1109,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       for (const msg of this._sessions.history) {
         if (msg.role === 'user') {
           const display = msg.displayContent ?? msg.content;
-          this._postMessage({ type: 'delta', content: `\n\n**You:** ${display}\n\n---\n\n` });
+          this._postMessage({ type: 'userPrompt', content: display });
         } else if (msg.role === 'assistant') {
           this._postMessage({ type: 'delta', content: msg.content });
         }
