@@ -42,9 +42,11 @@ function getOSName(): string {
  * Generate system information string
  */
 function generateSystemInfo(): string {
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const now = new Date();
+  const dateStr = now.toISOString().split('T')[0];
+  const timeStr = now.toTimeString().split(' ')[0];
 
-  // Get workspace directory if available
+  // Use the workspace root when available so the prompt reflects the active project.
   const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
 
   return `Operating System: ${getOSName()}
@@ -53,7 +55,8 @@ Platform: ${process.platform}
 Default Shell: ${getDefaultShell()}
 Home Directory: ${os.homedir()}
 Current Working Directory: ${wsRoot}
-Time Zone: ${timeZone}`;
+Current Date: ${dateStr}
+Current Time: ${timeStr}`;
 }
 
 /**

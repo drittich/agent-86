@@ -67,5 +67,7 @@ Use `ask_user` only for meaningful ambiguity, missing required decisions, or gen
 ## System information
 
 <!-- DYNAMIC_SYSTEM_INFO_START -->
+
 System information will be dynamically inserted here.
+
 <!-- DYNAMIC_SYSTEM_INFO_END -->
