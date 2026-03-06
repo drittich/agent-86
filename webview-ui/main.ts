@@ -51,11 +51,6 @@ root.innerHTML = `
 </div>
 
 <div id="app">
-  <div id="toolbar">
-    <button id="btn-attach" title="Attach files">Attach Files</button>
-    <button id="btn-attach-editor" title="Attach active editor or selection">Attach Editor</button>
-  </div>
-
   <ul id="attached-files"></ul>
 
   <div id="output-wrapper">
@@ -78,14 +73,34 @@ root.innerHTML = `
   </div>
 
   <div id="input-row">
-    <textarea id="prompt-input" rows="4" placeholder="Ask the agent…"></textarea>
+    <div id="prompt-wrap">
+      <textarea id="prompt-input" rows="4" placeholder="Ask the agent…"></textarea>
+      <div id="prompt-overlay-left" aria-hidden="false">
+        <button id="btn-attach" class="icon-button" title="Attach files" aria-label="Attach files">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="3" y="4" width="9" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <rect x="5" y="2" width="8" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.9" />
+          </svg>
+        </button>
+        <button id="btn-attach-editor" class="icon-button" title="Attach active editor or selection" aria-label="Attach active editor or selection">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="3" y="2" width="10" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+            <line x1="5" y1="7.5" x2="11" y2="7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.9" />
+            <line x1="5" y1="10" x2="9" y2="10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.85" />
+          </svg>
+        </button>
+      </div>
+    </div>
     <div id="thinking-row">
       <label><input type="checkbox" id="chk-thinking"> Thinking mode</label>
       <label id="lbl-agents-md" hidden><input type="checkbox" id="chk-agents-md"> Include AGENTS.md</label>
     </div>
-    <div id="input-buttons">
-      <button id="btn-send">Send</button>
-      <button id="btn-stop" disabled>Stop</button>
+    <div id="composer-actions">
+      <div id="input-buttons">
+        <button id="btn-send">Send</button>
+        <button id="btn-stop" disabled>Stop</button>
+      </div>
     </div>
   </div>
 </div>
@@ -126,11 +141,6 @@ style.textContent = `
     gap: 6px;
   }
 
-  #toolbar {
-    display: flex;
-    gap: 4px;
-  }
-
   button {
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
@@ -142,6 +152,21 @@ style.textContent = `
   }
   button:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
   button:disabled { opacity: 0.45; cursor: default; }
+
+  .icon-button {
+    background: transparent;
+    color: var(--vscode-icon-foreground, var(--vscode-foreground));
+    border: 1px solid transparent;
+    padding: 3px 6px;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-button svg { width: 16px; height: 16px; display: block; }
+  .icon-button:hover:not(:disabled) {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.18));
+  }
 
   #attached-files {
     list-style: none;
@@ -373,16 +398,40 @@ style.textContent = `
     color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, #555);
     padding: 6px;
+    padding-left: 44px;
+    padding-bottom: 28px;
     font-family: inherit;
     font-size: inherit;
     border-radius: 2px;
   }
   #prompt-input:focus { outline: 1px solid var(--vscode-focusBorder); }
 
+  #prompt-wrap {
+    position: relative;
+    width: 100%;
+  }
+
+  #prompt-overlay-left {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    pointer-events: auto;
+  }
+
   #input-buttons {
     display: flex;
     gap: 4px;
     justify-content: flex-end;
+  }
+
+  #composer-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   #thinking-row {
