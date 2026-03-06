@@ -52,7 +52,6 @@ root.innerHTML = `
 
 <div id="app">
   <div id="toolbar">
-    <button id="btn-select-session" title="Select session">Select Session</button>
     <button id="btn-attach" title="Attach files">Attach Files</button>
     <button id="btn-attach-editor" title="Attach active editor or selection">Attach Editor</button>
   </div>
@@ -637,7 +636,6 @@ const btnSend      = document.getElementById('btn-send') as HTMLButtonElement;
 const btnStop      = document.getElementById('btn-stop') as HTMLButtonElement;
 const btnAttach    = document.getElementById('btn-attach') as HTMLButtonElement;
   const btnAttachEditor = document.getElementById('btn-attach-editor') as HTMLButtonElement;
-const btnSelectSess = document.getElementById('btn-select-session') as HTMLButtonElement;
 const settingsOverlay   = document.getElementById('settings-overlay')!;
 const btnSettingsClose  = document.getElementById('btn-settings-close') as HTMLButtonElement;
 const btnSettingsCancel = document.getElementById('btn-settings-cancel') as HTMLButtonElement;
@@ -1040,10 +1038,6 @@ btnAttach.addEventListener('click', () => {
 
 btnAttachEditor.addEventListener('click', () => {
   vscode.postMessage({ type: 'attachActiveEditor' });
-});
-
-btnSelectSess.addEventListener('click', () => {
-  vscode.postMessage({ type: 'selectSession' });
 });
 
 function closeSettings(): void {

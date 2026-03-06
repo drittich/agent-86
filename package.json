@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -36,7 +36,8 @@
       },
       {
         "command": "agent86.selectSession",
-        "title": "Agent 86: Select Session"
+        "title": "Agent 86: Select Session",
+        "icon": "$(history)"
       },
       {
         "command": "agent86.attachActiveEditor",
@@ -51,9 +52,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "agent86.openSettings",
+          "command": "agent86.selectSession",
           "when": "view == agent86.panel",
           "group": "navigation@2"
+        },
+        {
+          "command": "agent86.openSettings",
+          "when": "view == agent86.panel",
+          "group": "navigation@3"
         }
       ]
     },

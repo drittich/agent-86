@@ -116,6 +116,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('agentic.selectSession', () => {
       showSessionQuickPick(chatPanel);
     }),
+    vscode.commands.registerCommand('agent86.selectSession', () => {
+      showSessionQuickPick(chatPanel);
+    }),
     vscode.commands.registerCommand('agentic.attachActiveEditor', async () => {
       chatPanel.reveal();
       const existing = chatPanel.getAttachedFiles();
