@@ -295,26 +295,28 @@ style.textContent = `
   }
 
   /* Markdown prose styles */
-  #output p { margin: 0 0 0.6em; }
+  #output p { margin: 0 0 8px; }
   #output p:last-child { margin-bottom: 0; }
   #output h1, #output h2, #output h3,
   #output h4, #output h5, #output h6 {
-    margin: 0.8em 0 0.3em;
+    margin: 10px 0 4px;
     line-height: 1.3;
+    font-weight: 600;
   }
-  #output h1 { font-size: 1.4em; }
-  #output h2 { font-size: 1.2em; }
-  #output h3 { font-size: 1.05em; }
+  #output h1 { font-size: 16px; }
+  #output h2 { font-size: 14px; }
+  #output h3 { font-size: 13px; }
+  #output h4, #output h5, #output h6 { font-size: 12px; }
   #output ul, #output ol {
-    margin: 0 0 0.6em 1.4em;
+    margin: 0 0 8px 16px;
     padding: 0;
   }
-  #output li { margin-bottom: 0.2em; }
+  #output li { margin-bottom: 2px; }
   #output code {
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 0.9em;
+    font-size: 12px;
     background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15));
-    padding: 0.1em 0.3em;
+    padding: 1px 4px;
     border-radius: 3px;
   }
   #output pre {
@@ -323,45 +325,52 @@ style.textContent = `
     border-radius: 3px;
     padding: 8px;
     overflow-x: auto;
-    margin: 0 0 0.6em;
+    margin: 0 0 8px;
   }
   #output pre code {
     background: none;
     padding: 0;
     border-radius: 0;
-    font-size: 0.88em;
+    font-size: 11px;
     white-space: pre;
   }
   #output blockquote {
     border-left: 3px solid var(--vscode-widget-border, #555);
-    margin: 0 0 0.6em 0;
+    margin: 0 0 8px 0;
     padding: 0 0 0 10px;
     color: var(--vscode-descriptionForeground);
   }
   #output hr {
     border: none;
     border-top: 1px solid var(--vscode-widget-border, #444);
-    margin: 0.8em 0;
+    margin: 10px 0;
   }
   #output a {
     color: var(--vscode-textLink-foreground, #4e9fde);
+  }
+
+  .empty-state {
+    color: var(--vscode-descriptionForeground);
+    margin: 0;
+    font-size: 12px;
   }
 
   /* User prompt bubbles */
   .user-bubble {
     background: var(--vscode-input-background, #2d2d2d);
     border: 1px solid var(--vscode-input-border, #555);
-    border-radius: 10px;
-    padding: 8px 12px;
-    margin: 12px 0 6px;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+    padding: 8px 10px;
+    margin: 10px 0 6px;
     white-space: pre-wrap;
     word-break: break-word;
+    font-size: 13px;
+    line-height: 1.5;
   }
 
   /* Tool call accordions (edits, search_file, request_chunks, etc.) */
   #output details.edit-accordion {
-    margin: 0 0 0.6em;
+    margin: 0 0 8px;
     border: 1px solid var(--vscode-panel-border, #444);
     border-radius: 3px;
     background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.1));
@@ -369,7 +378,7 @@ style.textContent = `
   #output details.edit-accordion summary {
     cursor: pointer;
     padding: 4px 8px;
-    font-size: 0.9em;
+    font-size: 11px;
     font-family: var(--vscode-editor-font-family, monospace);
     color: var(--vscode-descriptionForeground);
     user-select: none;
@@ -377,7 +386,7 @@ style.textContent = `
   }
   #output details.edit-accordion summary::before {
     content: '▶ ';
-    font-size: 0.75em;
+    font-size: 10px;
   }
   #output details.edit-accordion[open] summary::before {
     content: '▼ ';
@@ -390,8 +399,8 @@ style.textContent = `
   }
   #output table {
     border-collapse: collapse;
-    margin: 0 0 0.6em;
-    font-size: 0.9em;
+    margin: 0 0 8px;
+    font-size: 12px;
   }
   #output th, #output td {
     border: 1px solid var(--vscode-panel-border, #444);
@@ -502,8 +511,8 @@ style.textContent = `
 
   #thinking-row {
     padding: 4px 0 2px 0;
-    font-size: 0.85em;
-    color: var(--vscode-foreground);
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
     display: flex;
     gap: 12px;
     align-items: center;
@@ -1138,7 +1147,7 @@ function buildToolAccordionHtml(key: string, json: string): string {
 }
 
 const EMPTY_STATE_HTML = DOMPurify.sanitize(
-  '<p style="color:var(--vscode-descriptionForeground);margin:0;">Configure a provider in settings, then type a message to get started.</p>'
+  '<p class="empty-state">Configure a provider in settings, then type a message to get started.</p>'
 );
 
 function flushMarkdown(): void {
