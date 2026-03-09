@@ -18,6 +18,7 @@ export interface ToolExecutorDeps {
   log: vscode.OutputChannel;
   postMessage: (message: unknown) => void;
   requestApproval: (action: string, payload: unknown, reason?: string) => Promise<boolean>;
+  requestQuestion: (question: string) => Promise<string>;
 }
 
 export interface ToolResult {
@@ -742,16 +743,7 @@ export class ToolExecutor {
 
   private async _askQuestion(args: Record<string, unknown>): Promise<string> {
     const question = String(args['question'] ?? '');
-    // Show the question as an approval card — the user's answer comes from the
-    // free-text "Deny" path isn't meaningful here, so we use a VS Code input box.
-    const answer = await vscode.window.showInputBox({
-      prompt: question,
-      ignoreFocusOut: true,
-    });
-    if (answer === undefined) {
-      return 'User dismissed the question without answering.';
-    }
-    return answer;
+    return this.deps.requestQuestion(question);
   }
 
   // ── Git ───────────────────────────────────────────────────────────────────

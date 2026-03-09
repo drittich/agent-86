@@ -1608,6 +1608,43 @@ const approvalStyle = `
     border-color: var(--vscode-panel-border, #555);
     background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.12));
   }
+
+  .question-card {
+    border: 1px solid var(--vscode-panel-border, #444);
+    border-left: 3px solid var(--vscode-focusBorder, #007fd4);
+    background: var(--vscode-editor-background, #1e1e1e);
+    border-radius: 3px;
+    padding: 10px 12px;
+    margin: 4px 0;
+    font-size: 12px;
+    animation: card-enter 0.18s ease-out both;
+  }
+  .question-card .question-text {
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--vscode-foreground);
+    line-height: 1.4;
+  }
+  .question-card .question-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, #3c3c3c);
+    border-radius: 2px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+    margin-bottom: 8px;
+  }
+  .question-card .question-input:focus {
+    border-color: var(--vscode-focusBorder, #007fd4);
+  }
+  .question-card .question-hint {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+  }
 `;
 const approvalStyleEl = document.createElement('style');
 approvalStyleEl.textContent = approvalStyle;
@@ -1785,6 +1822,45 @@ function showApprovalCard(
   denyBtn.focus();
 }
 
+function showQuestionCard(questionId: string, question: string): void {
+  const card = document.createElement('div');
+  card.className = 'question-card';
+  card.dataset.questionId = questionId;
+
+  const questionEl = document.createElement('div');
+  questionEl.className = 'question-text';
+  questionEl.textContent = question;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'question-input';
+  input.placeholder = 'Type your answer…';
+
+  const hint = document.createElement('div');
+  hint.className = 'question-hint';
+  hint.textContent = 'Press Enter to submit';
+
+  const submit = (): void => {
+    const answer = input.value.trim();
+    if (!answer) { return; }
+    vscode.postMessage({ type: 'question/response', questionId, answer });
+    card.remove();
+  };
+
+  input.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
+  });
+
+  card.appendChild(questionEl);
+  card.appendChild(input);
+  card.appendChild(hint);
+  approvalsContainer.appendChild(card);
+  input.focus();
+}
+
 // ── Message handler (extension → webview) ────────────────────────────────────
 
 interface TokenUsage {
@@ -1804,6 +1880,8 @@ window.addEventListener('message', (event: MessageEvent) => {
     action?: string;
     payload?: unknown;
     reason?: string;
+    questionId?: string;
+    question?: string;
     usage?: TokenUsage;
     cancelled?: boolean;
     finishReason?: string;
@@ -1879,6 +1957,11 @@ window.addEventListener('message', (event: MessageEvent) => {
     case 'approval/request': {
       const payload = msg.payload as ApprovalPayload | undefined;
       showApprovalCard(msg.approvalId ?? '', msg.action ?? '', payload, msg.reason ?? '');
+      break;
+    }
+
+    case 'question/request': {
+      showQuestionCard(msg.questionId ?? '', msg.question ?? '');
       break;
     }
 

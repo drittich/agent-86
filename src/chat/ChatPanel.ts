@@ -37,6 +37,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   /** Pending approval resolvers keyed by approvalId. */
   private readonly _approvalResolvers = new Map<string, (approved: boolean) => void>();
   private _approvalCounter = 0;
+  /** Pending question resolvers keyed by questionId. */
+  private readonly _questionResolvers = new Map<string, (answer: string) => void>();
+  private _questionCounter = 0;
   private readonly _configManager: ConfigManager;
   private readonly _tokenCounter: TokenCounter;
 
@@ -564,6 +567,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             log: this._log,
             postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
             requestApproval: (action, payload, reason) => this._requestApproval(action, payload, reason),
+            requestQuestion: (question) => this._requestQuestion(question),
           },
           vscode.workspace.workspaceFolders ?? []
         )
@@ -926,6 +930,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     });
   }
 
+  private _requestQuestion(question: string): Promise<string> {
+    return new Promise<string>((resolve) => {
+      const questionId = `question-${++this._questionCounter}`;
+      this._questionResolvers.set(questionId, resolve);
+      this._postMessage({ type: 'question/request', questionId, question });
+    });
+  }
+
   private _handleMessage(message: WebviewToExtension): void {
     switch (message.type) {
       case 'send':
@@ -944,6 +956,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         for (const [id, resolve] of this._approvalResolvers) {
           this._approvalResolvers.delete(id);
           resolve(false);
+        }
+        // Cancel any pending questions
+        for (const [id, resolve] of this._questionResolvers) {
+          this._questionResolvers.delete(id);
+          resolve('User cancelled.');
         }
         this._postMessage({ type: 'done', cancelled: true });
         break;
@@ -970,6 +987,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         if (resolver) {
           this._approvalResolvers.delete(message.approvalId);
           resolver(message.approved);
+        }
+        break;
+      }
+      case 'question/response': {
+        const resolver = this._questionResolvers.get(message.questionId);
+        if (resolver) {
+          this._questionResolvers.delete(message.questionId);
+          resolver(message.answer);
         }
         break;
       }
