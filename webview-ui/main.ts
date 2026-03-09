@@ -83,8 +83,8 @@ root.innerHTML = `
   <div id="status-bar" aria-live="polite"></div>
 
   <div id="model-selector-row">
-    <select id="model-select"></select>
     <span id="provider-status-dot" class="status-dot status-unknown" title="Unknown"></span>
+    <select id="model-select"></select>
   </div>
 
   <div id="input-row">
@@ -730,21 +730,20 @@ style.textContent = `
 
   /* Model selector row */
   #model-selector-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+    position: relative;
     padding: 4px 0px;
     border-top: 1px solid var(--vscode-widget-border, #454545);
     font-size: 12px;
   }
 
   #model-select {
-    flex: 1;
+    width: 100%;
+    box-sizing: border-box;
     background: var(--vscode-dropdown-background, #3c3c3c);
     color: var(--vscode-dropdown-foreground, #ccc);
     border: 1px solid var(--vscode-dropdown-border, #454545);
     border-radius: 2px;
-    padding: 2px 4px;
+    padding: 2px 4px 2px 18px;
     font-size: 12px;
     font-family: inherit;
     transition: border-color 0.15s ease;
@@ -754,10 +753,14 @@ style.textContent = `
   }
 
   .status-dot {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    flex-shrink: 0;
+    pointer-events: none;
   }
 
   .status-dot.status-online { background: var(--vscode-testing-passedForeground, #4ec94e); }
