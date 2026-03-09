@@ -362,6 +362,10 @@ style.textContent = `
     border-radius: 3px;
     padding: 8px 10px;
     margin: 10px 0 6px;
+  }
+
+  .user-bubble:first-child {
+    margin-top: 0;
     white-space: pre-wrap;
     word-break: break-word;
     font-size: 13px;
