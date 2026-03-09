@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "engines": {
     "vscode": "^1.85.0"
   },
