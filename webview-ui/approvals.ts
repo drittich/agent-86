@@ -20,8 +20,12 @@ let vscodeApi: { postMessage(msg: unknown): void };
 // Actions auto-approved for this session (populated by "Approve & Don't ask again")
 const sessionAutoApproved = new Set<string>();
 
-// Actions that are non-destructive enough to offer "Don't ask again"
+// Actions that are non-destructive enough to offer "Don't ask again this session"
 const NON_DESTRUCTIVE_ACTIONS = new Set(['moveFile', 'applyEdit']);
+
+// Actions that support persistent "Always allow in project" — tracked separately per category
+// createFile, overwriteFile, deleteFile each get their own persistent toggle
+const PROJECT_ALLOWABLE_ACTIONS = new Set(['createFile', 'overwriteFile', 'applyEdit', 'deleteFile']);
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
@@ -71,6 +75,22 @@ function buildPreviewEl(action: string, payload: ApprovalPayload | undefined): H
     val.textContent = payload?.path ?? '';
     preview.appendChild(label);
     preview.appendChild(val);
+  } else if (action === 'createFile') {
+    const label = document.createElement('div');
+    label.className = 'preview-label';
+    label.textContent = 'New file';
+    const val = document.createElement('div');
+    val.textContent = payload?.path ?? '';
+    preview.appendChild(label);
+    preview.appendChild(val);
+  } else if (action === 'overwriteFile') {
+    const label = document.createElement('div');
+    label.className = 'preview-label';
+    label.textContent = 'File';
+    const val = document.createElement('div');
+    val.textContent = payload?.path ?? '';
+    preview.appendChild(label);
+    preview.appendChild(val);
   } else {
     // applyEdit or unknown
     const label = document.createElement('div');
@@ -87,20 +107,24 @@ function buildPreviewEl(action: string, payload: ApprovalPayload | undefined): H
 
 function getActionTitle(action: string): string {
   switch (action) {
-    case 'runCommand': return 'Run terminal command?';
-    case 'moveFile':   return 'Move file?';
-    case 'deleteFile': return 'Delete file?';
-    case 'applyEdit':  return 'Apply edit?';
-    default:           return `Approve: ${action}?`;
+    case 'runCommand':    return 'Run terminal command?';
+    case 'moveFile':      return 'Move file?';
+    case 'deleteFile':    return 'Delete file?';
+    case 'applyEdit':     return 'Apply edit?';
+    case 'createFile':    return 'Create file?';
+    case 'overwriteFile': return 'Overwrite file?';
+    default:              return `Approve: ${action}?`;
   }
 }
 
 function getApproveLabel(action: string): string {
   switch (action) {
-    case 'runCommand': return 'Run';
-    case 'deleteFile': return 'Delete';
-    case 'applyEdit':  return 'Apply';
-    default:           return 'Approve';
+    case 'runCommand':    return 'Run';
+    case 'deleteFile':    return 'Delete';
+    case 'applyEdit':     return 'Apply';
+    case 'createFile':    return 'Create';
+    case 'overwriteFile': return 'Overwrite';
+    default:              return 'Approve';
   }
 }
 
@@ -120,7 +144,7 @@ export function showApprovalCard(
 
   const card = document.createElement('div');
   const riskClass = (action === 'deleteFile' || action === 'runCommand') ? 'risk-danger'
-    : (action === 'moveFile') ? 'risk-warn'
+    : (action === 'moveFile' || action === 'overwriteFile') ? 'risk-warn'
     : '';
   card.className = riskClass ? `approval-card ${riskClass}` : 'approval-card';
   card.dataset.approvalId = approvalId;
@@ -176,6 +200,19 @@ export function showApprovalCard(
       card.remove();
     });
     buttons.appendChild(alwaysBtn);
+  }
+
+  // "Always allow in project" — persistent per action category (create / edit / delete)
+  if (PROJECT_ALLOWABLE_ACTIONS.has(action)) {
+    const projectBtn = document.createElement('button');
+    projectBtn.className = 'btn-approve-always';
+    projectBtn.textContent = 'Always allow in project';
+    projectBtn.addEventListener('click', () => {
+      vscodeApi.postMessage({ type: 'approval/alwaysAllow', action });
+      vscodeApi.postMessage({ type: 'approval/response', approvalId, approved: true });
+      card.remove();
+    });
+    buttons.appendChild(projectBtn);
   }
 
   card.appendChild(buttons);

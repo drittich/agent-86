@@ -36,6 +36,7 @@ export type WebviewToExtension =
   | { type: 'attachActiveEditor' }
   | { type: 'selectSession' }
   | { type: 'approval/response'; approvalId: string; approved: boolean }
+  | { type: 'approval/alwaysAllow'; action: string }
   | { type: 'question/response'; questionId: string; answer: string }
   | { type: 'pick/response'; pickId: string; indices: number[] }
   | { type: 'checkboxChange'; includeAgentsMd?: boolean }

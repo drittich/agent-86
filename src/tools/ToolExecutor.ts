@@ -173,11 +173,11 @@ export class ToolExecutor {
     let fileExists = true;
     try { await vscode.workspace.fs.stat(fileUri); } catch { fileExists = false; }
 
-    const action = fileExists ? 'overwrite file' : 'create file';
+    const actionKey = fileExists ? 'overwriteFile' : 'createFile';
     const approved = await this.deps.requestApproval(
-      'writeFile',
+      actionKey,
       { path: relPath, lines: content.split('\n').length },
-      `The assistant wants to ${action}.`
+      `The assistant wants to ${fileExists ? 'overwrite' : 'create'} this file.`
     );
     if (!approved) { return `Cancelled by user.`; }
 

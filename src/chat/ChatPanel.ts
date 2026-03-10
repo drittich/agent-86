@@ -928,13 +928,25 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   /**
    * Send an `approval/request` to the webview and wait for the user's
    * `approval/response`. Returns `true` if approved, `false` if cancelled.
+   * If the action has been persistently allowed for this workspace, returns `true` immediately.
    */
   private _requestApproval(action: string, payload: unknown, reason = ''): Promise<boolean> {
+    const alwaysAllowed = this.context.workspaceState.get<string[]>('agentic.alwaysAllowedActions') ?? [];
+    if (alwaysAllowed.includes(action)) {
+      return Promise.resolve(true);
+    }
     return new Promise<boolean>((resolve) => {
       const approvalId = `approval-${++this._approvalCounter}`;
       this._approvalResolvers.set(approvalId, resolve);
       this._postMessage({ type: 'approval/request', approvalId, action, payload, reason });
     });
+  }
+
+  private _persistAlwaysAllow(action: string): void {
+    const current = this.context.workspaceState.get<string[]>('agentic.alwaysAllowedActions') ?? [];
+    if (!current.includes(action)) {
+      this.context.workspaceState.update('agentic.alwaysAllowedActions', [...current, action]);
+    }
   }
 
   private _requestQuestion(question: string): Promise<string> {
@@ -1008,6 +1020,10 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           this._approvalResolvers.delete(message.approvalId);
           resolver(message.approved);
         }
+        break;
+      }
+      case 'approval/alwaysAllow': {
+        this._persistAlwaysAllow(message.action);
         break;
       }
       case 'question/response': {
