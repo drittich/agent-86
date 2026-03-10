@@ -188,7 +188,10 @@ export class ToolExecutor {
         const doc = await vscode.workspace.openTextDocument(fileUri);
         const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
         wsEdit.replace(fileUri, fullRange, lfContent);
-        await vscode.workspace.applyEdit(wsEdit);
+        const applied = await vscode.workspace.applyEdit(wsEdit);
+        if (!applied) {
+          return `Error writing file: applyEdit returned false (VS Code rejected the edit)`;
+        }
         await doc.save();
       } else {
         // Ensure parent directory exists
@@ -249,7 +252,10 @@ export class ToolExecutor {
       const doc = await vscode.workspace.openTextDocument(fileUri);
       const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
       wsEdit.replace(fileUri, fullRange, newContent);
-      await vscode.workspace.applyEdit(wsEdit);
+      const applied = await vscode.workspace.applyEdit(wsEdit);
+      if (!applied) {
+        return `Error applying edit: applyEdit returned false (VS Code rejected the edit)`;
+      }
       await doc.save();
       this._activity(`Edited: ${relPath}`);
       return `Successfully edited ${relPath}`;
