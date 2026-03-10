@@ -1105,21 +1105,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       return;
     }
 
-    // Use VS Code's quick pick
-    const vscode = await import('vscode');
-    const items = sessions.map(s => ({
-      label: s.title,
-      description: new Date(s.createdAt).toLocaleString(),
-      session: s
-    }));
+    const labels = sessions.map(s =>
+      `${s.title}  (${new Date(s.createdAt).toLocaleString()})`
+    );
+    const indices = await this._requestPick('Select a session to restore:', labels);
 
-    const selected = await vscode.window.showQuickPick(items, {
-      placeHolder: 'Select a session to restore',
-      matchOnDescription: true
-    });
-
-    if (selected) {
-      this.restoreSession(selected.session);
+    if (indices.length > 0) {
+      const session = sessions[indices[0]];
+      if (session) { this.restoreSession(session); }
     }
   }
 
