@@ -480,7 +480,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       break;
 
     case 'tool-activity':
-      insertActivity(msg.text ?? '');
+      insertActivity(msg.label ?? msg.text ?? '', msg.detail);
       break;
 
     case 'attachments':

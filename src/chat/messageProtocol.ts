@@ -24,6 +24,7 @@ export type ExtensionToWebview =
   | { type: 'openSettings'; providers: ProviderConfig[]; activeProviderIndex: number }
   | { type: 'providerStatus'; providerName: string; status: 'online' | 'offline' | 'checking' }
   | { type: 'providers'; providers: ProviderConfig[]; activeProviderIndex: number }
+  | { type: 'tool-activity'; text?: string; label?: string; detail?: string }
   | { type: 'userPrompt'; content: string }
   | { type: 'newSession' };
 

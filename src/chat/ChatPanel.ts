@@ -208,9 +208,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * Update the attached files list (used by the file tree picker).
    */
   public updateAttachedFiles(files: AttachedFile[]): void {
+    const previousUris = new Set(this._sessions.attachedFiles.map(f => f.uri));
+    const added = files.filter(f => !previousUris.has(f.uri));
+
     this._sessions.attachedFiles = files;
     this._postMessage({ type: 'attachments', files });
     this._sessions.saveCurrentSession();
+
+    for (const f of added) {
+      this._postMessage({ type: 'tool-activity', label: 'Attached:', detail: f.relativePath });
+    }
   }
 
   /**

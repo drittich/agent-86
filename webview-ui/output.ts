@@ -14,7 +14,7 @@ let outputEl: HTMLElement;
 export type OutputSegment =
   | { type: 'md'; content: string }
   | { type: 'user'; content: string }
-  | { type: 'activity'; text: string };
+  | { type: 'activity'; label: string; detail?: string };
 export let segments: OutputSegment[] = [];
 
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -185,7 +185,8 @@ export function flushMarkdown(): void {
     if (seg.type === 'user') {
       html += `<div class="user-bubble">${escapeHtml(seg.content)}</div>`;
     } else if (seg.type === 'activity') {
-      html += `<div class="tool-activity">${escapeHtml(seg.text)}</div>`;
+      const detail = seg.detail ? ` ${escapeHtml(seg.detail)}` : '';
+      html += `<div class="tool-activity"><strong>${escapeHtml(seg.label)}</strong>${detail}</div>`;
     } else if (seg.content) {
       const processedMd = replaceEditJsonWithAccordions(seg.content);
       html += DOMPurify.sanitize(marked.parse(processedMd) as string);
@@ -217,8 +218,8 @@ export function insertUserPrompt(text: string): void {
   flushMarkdown();
 }
 
-export function insertActivity(text: string): void {
-  segments.push({ type: 'activity', text });
+export function insertActivity(label: string, detail?: string): void {
+  segments.push({ type: 'activity', label, detail });
   flushMarkdown();
 }
 
