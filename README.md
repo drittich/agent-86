@@ -157,19 +157,20 @@ code --install-extension vscode-agent-extension-0.0.1.vsix
 
 ### Updating the Version Number
 
-When releasing a new version, update the `version` field in [`package.json`](package.json:5):
-
-```json
-{
-  "version": "0.0.2"
-}
-```
+When releasing a new version, update the `version` field in [`package.json`](package.json:5) and the `.vsix` filename will be updated automatically.
 
 Then rebuild and repackage.
 
 ## Configuration
 
 Configure the extension in VS Code settings:
+
+### Recommended LLM Servers
+
+- **Ollama**: `http://localhost:11434/v1`
+- **llama.cpp (cpp-server)**: `http://localhost:8080/v1`
+- **LM Studio**: `http://localhost:1234/v1`
+- **vLLM**: `http://localhost:8000/v1`
 
 1. Open Settings (`Ctrl+,` or `Cmd+,`)
 2. Search for "Agent 86"
@@ -226,6 +227,8 @@ When the assistant proposes actions, you will be prompted to approve:
 - **File Moves**: Confirm file move operations.
 - **File Deletions**: Confirm file deletions (files are moved to trash, not permanently deleted).
 
+> **Security Note**: All actions require explicit user approval before execution.
+
 ### Special Commands in Assistant Responses
 
 The assistant can use special block syntax to perform actions:
@@ -236,6 +239,12 @@ The assistant can use special block syntax to perform actions:
 | `@@RUN` | `@@RUN <command>\n...\n@@END_RUN` | Execute terminal commands |
 | `@@MOVE` | `@@MOVE from: <src> to: <dst>\n@@END_MOVE` | Move files |
 | `@@DELETE` | `@@DELETE path: <file>\n@@END_DELETE` | Delete files |
+
+## Screenshots
+
+| Chat Panel | Approval Workflow |
+|------------|-------------------|
+| ![Chat Panel](./assets/chat-panel.png) | ![Approval](./assets/approval.png) |
 
 ## Troubleshooting
 
@@ -297,8 +306,14 @@ This creates minified bundles without source maps, suitable for distribution.
 
 ## License
 
-[Add your license here]
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
-[Add contributing guidelines here]
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
