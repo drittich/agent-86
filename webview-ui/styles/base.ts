@@ -284,6 +284,13 @@ export const BASE_CSS: string = `
   }
   #output th { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); }
 
+  .tool-activity {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    padding: 2px 0;
+    opacity: 0.8;
+  }
+
   #status-bar {
     font-size: 11px;
     color: var(--vscode-descriptionForeground);

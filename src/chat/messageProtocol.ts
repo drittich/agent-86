@@ -16,6 +16,7 @@ export type ExtensionToWebview =
   | { type: 'attachments'; files: AttachedFile[] }
   | { type: 'approval/request'; approvalId: string; action: string; payload: unknown; reason: string }
   | { type: 'question/request'; questionId: string; question: string }
+  | { type: 'pick/request'; pickId: string; prompt: string; options: string[] }
   | { type: 'editorState'; hasActiveEditor: boolean }
   | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' }
   | { type: 'agentsMdAvailable'; available: boolean }
@@ -36,6 +37,7 @@ export type WebviewToExtension =
   | { type: 'selectSession' }
   | { type: 'approval/response'; approvalId: string; approved: boolean }
   | { type: 'question/response'; questionId: string; answer: string }
+  | { type: 'pick/response'; pickId: string; indices: number[] }
   | { type: 'checkboxChange'; includeAgentsMd?: boolean }
   | { type: 'saveSettings'; providers?: ProviderConfig[] }
   | { type: 'selectModel'; providerIndex: number };

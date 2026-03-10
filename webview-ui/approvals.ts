@@ -247,3 +247,57 @@ export function showQuestionCard(questionId: string, question: string): void {
   approvalsContainer.appendChild(card);
   input.focus();
 }
+
+export function showPickCard(pickId: string, prompt: string, options: string[]): void {
+  const card = document.createElement('div');
+  card.className = 'question-card';
+  card.dataset.pickId = pickId;
+
+  const promptEl = document.createElement('div');
+  promptEl.className = 'question-text';
+  promptEl.textContent = prompt;
+
+  const list = document.createElement('ol');
+  list.className = 'pick-list';
+  for (const opt of options) {
+    const li = document.createElement('li');
+    li.textContent = opt;
+    list.appendChild(li);
+  }
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'question-input';
+  input.placeholder = `1–${options.length}, comma-separated, or Enter to skip`;
+
+  const hint = document.createElement('div');
+  hint.className = 'question-hint';
+  hint.textContent = 'Enter numbers to select, or press Enter to skip';
+
+  const submit = (): void => {
+    const raw = input.value.trim();
+    let indices: number[] = [];
+    if (raw) {
+      indices = raw
+        .split(/[\s,]+/)
+        .map(s => parseInt(s, 10) - 1)          // convert 1-based to 0-based
+        .filter(n => !isNaN(n) && n >= 0 && n < options.length);
+    }
+    vscodeApi.postMessage({ type: 'pick/response', pickId, indices });
+    card.remove();
+  };
+
+  input.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
+  });
+
+  card.appendChild(promptEl);
+  card.appendChild(list);
+  card.appendChild(input);
+  card.appendChild(hint);
+  approvalsContainer.appendChild(card);
+  input.focus();
+}

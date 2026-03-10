@@ -8,6 +8,7 @@ import {
   initOutput,
   appendOutput,
   insertUserPrompt,
+  insertActivity,
   clearOutput,
   flushMarkdown,
   getMdBuffer,
@@ -34,6 +35,7 @@ import {
   showApprovalCard,
   showWarningNotice,
   showQuestionCard,
+  showPickCard,
   type ApprovalPayload,
 } from './approvals';
 
@@ -412,6 +414,9 @@ window.addEventListener('message', (event: MessageEvent) => {
     reason?: string;
     questionId?: string;
     question?: string;
+    pickId?: string;
+    prompt?: string;
+    options?: string[];
     usage?: TokenUsage;
     cancelled?: boolean;
     finishReason?: string;
@@ -474,6 +479,10 @@ window.addEventListener('message', (event: MessageEvent) => {
       setStatus(msg.text ?? '');
       break;
 
+    case 'tool-activity':
+      insertActivity(msg.text ?? '');
+      break;
+
     case 'attachments':
       if (msg.files) {
         attachedFiles = msg.files.map(f => ({ uri: f.uri, relativePath: f.relativePath }));
@@ -489,6 +498,11 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     case 'question/request': {
       showQuestionCard(msg.questionId ?? '', msg.question ?? '');
+      break;
+    }
+
+    case 'pick/request': {
+      showPickCard(msg.pickId ?? '', msg.prompt ?? '', msg.options ?? []);
       break;
     }
 

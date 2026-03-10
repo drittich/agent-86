@@ -138,4 +138,15 @@ export const APPROVAL_CSS: string = `
     font-size: 10px;
     color: var(--vscode-descriptionForeground);
   }
+  .question-card .pick-list {
+    margin: 0 0 8px 0;
+    padding-left: 20px;
+    font-size: 12px;
+    color: var(--vscode-foreground);
+    line-height: 1.6;
+  }
+  .question-card .pick-list li {
+    font-family: var(--vscode-editor-font-family, monospace);
+    word-break: break-all;
+  }
 `;

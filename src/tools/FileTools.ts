@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import { AttachedFile } from '../chat/messageProtocol';
+import { GitIgnoreFilter } from '../utils/GitIgnoreFilter';
 
 export const FILE_EXCLUDE_GLOB =
   '{**/node_modules/**,**/.git/**,**/dist/**,**/build/**,**/.vscode/**,**/*.log,**/.DS_Store}';
@@ -526,41 +527,46 @@ function extractMentions(prompt: string): string[] {
 }
 
 /**
- * Given a single mention string, find matching workspace files.
+ * Given a single mention string, find matching workspace files, excluding gitignored paths.
  * Returns an array of matching URIs (may be empty or contain multiple entries).
  */
-async function findFilesForMention(mention: string): Promise<vscode.Uri[]> {
+async function findFilesForMention(mention: string, gitFilter: GitIgnoreFilter, wsRoots: string[]): Promise<vscode.Uri[]> {
   // Resolve alias first
   const normalized = ALIAS_MAP[mention.toLowerCase()] ?? mention;
 
   // Exclude common non-source directories
   const exclude = '{**/node_modules/**,**/.git/**,**/dist/**,**/build/**}';
 
+  const filterIgnored = (uris: vscode.Uri[]): vscode.Uri[] =>
+    uris.filter(u => {
+      for (const root of wsRoots) {
+        if (u.fsPath.startsWith(root + path.sep) || u.fsPath === root) {
+          const rel = u.fsPath.slice(root.length + 1).replace(/\\/g, '/');
+          return !gitFilter.isIgnored(rel);
+        }
+      }
+      return true;
+    });
+
   const basename = path.posix.basename(normalized);
   const hasPathSeparator = normalized.includes('/');
 
   if (hasPathSeparator) {
-    // User mentioned a path like "src/foo.ts" — try exact match first,
-    // then fall back to basename-only search.
     const exact = await vscode.workspace.findFiles(normalized, exclude, 10);
-    if (exact.length > 0) {
-      return exact;
-    }
+    const filtered = filterIgnored(exact);
+    if (filtered.length > 0) { return filtered; }
   }
 
-  // Always search by basename with **/ prefix so VS Code finds the file
-  // regardless of depth (findFiles needs **/ to match non-root files).
-  if (!basename) {
-    return [];
-  }
+  if (!basename) { return []; }
+
   const exact = await vscode.workspace.findFiles(`**/${basename}`, exclude, 10);
-  if (exact.length > 0) {
-    return exact;
-  }
-  // Case-insensitive fallback: list all files and match basename case-insensitively.
+  const filtered = filterIgnored(exact);
+  if (filtered.length > 0) { return filtered; }
+
+  // Case-insensitive fallback
   const basenameLower = basename.toLowerCase();
   const all = await vscode.workspace.findFiles('**/*', exclude, 500);
-  return all.filter(u => path.posix.basename(u.fsPath).toLowerCase() === basenameLower);
+  return filterIgnored(all).filter(u => path.posix.basename(u.fsPath).toLowerCase() === basenameLower);
 }
 
 /**
@@ -580,7 +586,8 @@ export interface AutoAttachReport {
 
 export async function autoDetectAndAttachFiles(
   prompt: string,
-  existing: AttachedFile[]
+  existing: AttachedFile[],
+  pickFn: (prompt: string, options: string[]) => Promise<number[]>
 ): Promise<{ files: AttachedFile[]; report: AutoAttachReport }> {
   const report: AutoAttachReport = { attached: [], skipped: [] };
 
@@ -590,6 +597,7 @@ export async function autoDetectAndAttachFiles(
   }
 
   const wsRoots = workspaceFolders.map(f => f.uri.fsPath);
+  const gitFilter = new GitIgnoreFilter(wsRoots);
   const existingUris = new Set(existing.map(f => f.uri));
 
   const mentions = extractMentions(prompt);
@@ -601,7 +609,7 @@ export async function autoDetectAndAttachFiles(
   const toAttach = new Map<string, vscode.Uri>();
 
   for (const mention of mentions) {
-    const found = await findFilesForMention(mention);
+    const found = await findFilesForMention(mention, gitFilter, wsRoots);
 
     // Filter out already-attached files
     const novel = found.filter(u => !existingUris.has(u.toString()) && !toAttach.has(u.toString()));
@@ -612,19 +620,12 @@ export async function autoDetectAndAttachFiles(
     if (novel.length === 1) {
       toAttach.set(novel[0].toString(), novel[0]);
     } else {
-      // Multiple matches — ask the user to pick
-      const items = novel.map(u => ({
-        label: bestRelativePath(wsRoots, u.fsPath),
-        uri: u,
-      }));
-      const picked = await vscode.window.showQuickPick(items, {
-        placeHolder: `Multiple files match "${mention}" — select files to attach`,
-        canPickMany: true,
-        matchOnDescription: true,
-      });
-      if (picked && picked.length > 0) {
-        for (const p of picked) {
-          toAttach.set(p.uri.toString(), p.uri);
+      // Multiple matches — ask the user to pick via the in-panel picker
+      const labels = novel.map(u => bestRelativePath(wsRoots, u.fsPath));
+      const indices = await pickFn(`Multiple files match "${mention}" — pick files to attach:`, labels);
+      for (const i of indices) {
+        if (i >= 0 && i < novel.length) {
+          toAttach.set(novel[i].toString(), novel[i]);
         }
       }
     }

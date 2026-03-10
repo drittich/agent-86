@@ -40,6 +40,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   /** Pending question resolvers keyed by questionId. */
   private readonly _questionResolvers = new Map<string, (answer: string) => void>();
   private _questionCounter = 0;
+  /** Pending pick resolvers keyed by pickId. */
+  private readonly _pickResolvers = new Map<string, (indices: number[]) => void>();
+  private _pickCounter = 0;
   private readonly _configManager: ConfigManager;
   private readonly _tokenCounter: TokenCounter;
 
@@ -449,7 +452,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     // Auto-detect file references in the prompt and attach them before sending
     const previouslyAttachedUris = new Set(this._sessions.attachedFiles.map(f => f.uri));
-    const autoAttachResult = await autoDetectAndAttachFiles(prompt, this._sessions.attachedFiles);
+    const autoAttachResult = await autoDetectAndAttachFiles(
+      prompt,
+      this._sessions.attachedFiles,
+      (p, opts) => this._requestPick(p, opts)
+    );
     const autoAttached = autoAttachResult.files;
     const autoAttachReport = autoAttachResult.report;
 
@@ -938,6 +945,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     });
   }
 
+  private _requestPick(prompt: string, options: string[]): Promise<number[]> {
+    return new Promise<number[]>((resolve) => {
+      const pickId = `pick-${++this._pickCounter}`;
+      this._pickResolvers.set(pickId, resolve);
+      this._postMessage({ type: 'pick/request', pickId, prompt, options });
+    });
+  }
+
   private _handleMessage(message: WebviewToExtension): void {
     switch (message.type) {
       case 'send':
@@ -961,6 +976,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         for (const [id, resolve] of this._questionResolvers) {
           this._questionResolvers.delete(id);
           resolve('User cancelled.');
+        }
+        // Cancel any pending picks
+        for (const [id, resolve] of this._pickResolvers) {
+          this._pickResolvers.delete(id);
+          resolve([]);
         }
         this._postMessage({ type: 'done', cancelled: true });
         break;
@@ -995,6 +1015,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         if (resolver) {
           this._questionResolvers.delete(message.questionId);
           resolver(message.answer);
+        }
+        break;
+      }
+      case 'pick/response': {
+        const resolver = this._pickResolvers.get(message.pickId);
+        if (resolver) {
+          this._pickResolvers.delete(message.pickId);
+          resolver(message.indices);
         }
         break;
       }

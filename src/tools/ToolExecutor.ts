@@ -61,6 +61,10 @@ export class ToolExecutor {
     this.gitIgnoreFilter = new GitIgnoreFilter(this.wsRoots);
   }
 
+  private _activity(text: string): void {
+    this.deps.postMessage({ type: 'tool-activity', text });
+  }
+
   async execute(call: ToolCallEvent): Promise<ToolResult> {
     const { toolCallId, toolName, args } = call;
     this.deps.log.appendLine(`[tool] ${toolName} ${JSON.stringify(args).slice(0, 200)}`);
@@ -146,6 +150,8 @@ export class ToolExecutor {
     );
 
     const actualStart = Math.max(1, startLine + 1);
+    const rangeStr = slice.length === lines.length ? '' : ` lines ${actualStart}–${actualStart + slice.length - 1}`;
+    this._activity(`Read: ${relPath}${rangeStr}`);
     const header = `File: ${relPath} (lines ${actualStart}-${actualStart + slice.length - 1} of ${lines.length})`;
     return `${header}\n\`\`\`\n${slice.join('\n')}\n\`\`\``;
   }
@@ -153,6 +159,10 @@ export class ToolExecutor {
   private async _writeFile(args: Record<string, unknown>): Promise<string> {
     const relPath = String(args['path'] ?? '');
     const content = String(args['content'] ?? '');
+
+    if (this.gitIgnoreFilter.isIgnored(relPath)) {
+      return `Error: "${relPath}" is excluded by .gitignore.`;
+    }
 
     const resolved = resolveEditPath(relPath, this.wsRoots);
     if (resolved.error) { return `Error: ${resolved.error}`; }
@@ -186,7 +196,7 @@ export class ToolExecutor {
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
         await vscode.workspace.fs.writeFile(fileUri, Buffer.from(lfContent, 'utf8'));
       }
-      this.deps.postMessage({ type: 'status', text: `${fileExists ? 'Updated' : 'Created'}: ${relPath}` });
+      this._activity(`${fileExists ? 'Updated' : 'Created'}: ${relPath}`);
       return `Successfully ${fileExists ? 'updated' : 'created'} ${relPath}`;
     } catch (err) {
       return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
@@ -199,6 +209,10 @@ export class ToolExecutor {
     const newStr = String(args['new_str'] ?? '');
 
     if (!oldStr) { return 'Error: old_str must not be empty.'; }
+
+    if (this.gitIgnoreFilter.isIgnored(relPath)) {
+      return `Error: "${relPath}" is excluded by .gitignore.`;
+    }
 
     const resolved = resolveEditPath(relPath, this.wsRoots);
     if (resolved.error) { return `Error: ${resolved.error}`; }
@@ -237,7 +251,7 @@ export class ToolExecutor {
       wsEdit.replace(fileUri, fullRange, newContent);
       await vscode.workspace.applyEdit(wsEdit);
       await doc.save();
-      this.deps.postMessage({ type: 'status', text: `Edited: ${relPath}` });
+      this._activity(`Edited: ${relPath}`);
       return `Successfully edited ${relPath}`;
     } catch (err) {
       return `Error applying edit: ${err instanceof Error ? err.message : String(err)}`;
@@ -247,6 +261,13 @@ export class ToolExecutor {
   private async _copyFile(args: Record<string, unknown>): Promise<string> {
     const srcRel = String(args['source'] ?? '');
     const dstRel = String(args['destination'] ?? '');
+
+    if (this.gitIgnoreFilter.isIgnored(srcRel)) {
+      return `Error: source "${srcRel}" is excluded by .gitignore.`;
+    }
+    if (this.gitIgnoreFilter.isIgnored(dstRel)) {
+      return `Error: destination "${dstRel}" is excluded by .gitignore.`;
+    }
 
     const srcResolved = resolveEditPath(srcRel, this.wsRoots);
     const dstResolved = resolveEditPath(dstRel, this.wsRoots);
@@ -268,7 +289,7 @@ export class ToolExecutor {
         vscode.Uri.file(dstResolved.resolvedPath!),
         { overwrite: false }
       );
-      this.deps.postMessage({ type: 'status', text: `Copied: ${srcRel} → ${dstRel}` });
+      this._activity(`Copied: ${srcRel} → ${dstRel}`);
       return `Successfully copied ${srcRel} to ${dstRel}`;
     } catch (err) {
       return `Error copying file: ${err instanceof Error ? err.message : String(err)}`;
@@ -278,6 +299,13 @@ export class ToolExecutor {
   private async _moveFile(args: Record<string, unknown>): Promise<string> {
     const srcRel = String(args['source'] ?? '');
     const dstRel = String(args['destination'] ?? '');
+
+    if (this.gitIgnoreFilter.isIgnored(srcRel)) {
+      return `Error: source "${srcRel}" is excluded by .gitignore.`;
+    }
+    if (this.gitIgnoreFilter.isIgnored(dstRel)) {
+      return `Error: destination "${dstRel}" is excluded by .gitignore.`;
+    }
 
     const fromAbsolute = resolveMoveBlockPath(srcRel, this.wsRoots);
     const toAbsolute = resolveMoveBlockPath(dstRel, this.wsRoots);
@@ -292,10 +320,9 @@ export class ToolExecutor {
     );
     if (!approved) { return 'Cancelled by user.'; }
 
-    this.deps.postMessage({ type: 'status', text: `Moving: ${srcRel} → ${dstRel}` });
     const result = await moveFile(fromAbsolute, toAbsolute);
     if (result.success) {
-      this.deps.postMessage({ type: 'status', text: `Moved: ${srcRel} → ${dstRel}` });
+      this._activity(`Moved: ${srcRel} → ${dstRel}`);
       return `Successfully moved ${srcRel} to ${dstRel}`;
     }
     return `Error moving file: ${result.error}`;
@@ -314,10 +341,9 @@ export class ToolExecutor {
     );
     if (!approved) { return 'Cancelled by user.'; }
 
-    this.deps.postMessage({ type: 'status', text: `Deleting: ${relPath}` });
     const result = await deleteFile(fileAbsolute);
     if (result.success) {
-      this.deps.postMessage({ type: 'status', text: `Deleted (trashed): ${relPath}` });
+      this._activity(`Deleted: ${relPath}`);
       return `Successfully deleted ${relPath} (moved to trash)`;
     }
     return `Error deleting file: ${result.error}`;
@@ -330,7 +356,7 @@ export class ToolExecutor {
 
     try {
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(resolved.resolvedPath!));
-      this.deps.postMessage({ type: 'status', text: `Created directory: ${relPath}` });
+      this._activity(`Created directory: ${relPath}`);
       return `Successfully created directory ${relPath}`;
     } catch (err) {
       return `Error creating directory: ${err instanceof Error ? err.message : String(err)}`;
@@ -383,12 +409,11 @@ export class ToolExecutor {
       ? 'timed out (killed after 30s)'
       : `exit_code=${result.exitCode ?? 'null'}`;
 
-    this.deps.postMessage({
-      type: 'status',
-      text: result.timedOut
-        ? `Timed out: ${command}`
-        : `Done (exit ${result.exitCode ?? '?'}): ${command}`
-    });
+    const activityText = result.timedOut
+      ? `Timed out: ${command}`
+      : `Run: ${command} (exit ${result.exitCode ?? '?'})`;
+    this._activity(activityText);
+    this.deps.postMessage({ type: 'status', text: activityText });
 
     const parts: string[] = [`status: ${status}`];
     if (result.stdout) { parts.push(`stdout:\n${result.stdout}`); }
@@ -412,6 +437,9 @@ export class ToolExecutor {
     if (isGlob || !relPath) {
       absolutePath = this.wsRoot;
     } else {
+      if (this.gitIgnoreFilter.isIgnored(relPath)) {
+        return `Error: "${relPath}" is excluded by .gitignore.`;
+      }
       const resolved = await this._resolveWithFallback(relPath);
       absolutePath = resolved ?? path.join(this.wsRoot, relPath);
     }
