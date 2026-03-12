@@ -514,7 +514,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     mentionUncertainty?: boolean;
     strictDirectAnswer?: boolean;
     reason?: string;
+    compact?: boolean;
   }): string {
+    // Compact mode: short prompt for small models recovering from empty responses.
+    if (options?.compact) {
+      const evidence = this._summarizeToolEvidence();
+      return evidence
+        ? `${evidence} Answer the original question now using the tool results above. Be direct and specific. Do not call any tools.`
+        : 'Answer the original question now using the tool results above. Be direct and specific. Do not call any tools.';
+    }
+
     const noMoreTools = options?.noMoreTools ?? true;
     const mentionUncertainty = options?.mentionUncertainty ?? true;
     const strictDirectAnswer = options?.strictDirectAnswer ?? false;
@@ -592,21 +601,36 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     ].join(' ');
   }
 
-  private _buildContinueReadingPrompt(): string {
+  private _buildConcreteReadRefocusPrompt(): string {
     return [
-      'You read a file and then paused. Do not answer yet — continue using tools.',
-      'Read the next relevant file or run a targeted search to gather more evidence.',
-      'Only answer when you have enough concrete evidence to make a specific recommendation.'
+      'Discovery is complete. You must now call read_file on a specific file — not list_directory or find_files.',
+      'Choose the single most relevant file for the task from the directory structure already seen and read it.',
+      'Prefer small, focused files (config files, entry scripts, specific modules) over large __init__.py or framework files.',
+      'If unsure which file is most relevant, use search_file_contents to find terms related to the task.',
+      'Do NOT call list_directory, find_files, or execute_bash.'
     ].join(' ');
   }
 
-  private _buildConcreteReadRefocusPrompt(): string {
-    return [
-      'Discovery is complete. Continue with tools; do not answer yet.',
-      'Using the directory structure already seen in the results, identify the application-owned source directory and read its entry point or most relevant file.',
-      'If the entry point is unclear, run one targeted content search inside the application-owned directory for terms relevant to the task.',
-      'Do not broaden discovery again. Do not call execute_bash for file discovery.'
-    ].join(' ');
+  /** Summarise tool evidence gathered so far for the final-answer prompt. */
+  private _summarizeToolEvidence(): string {
+    const reads: string[] = [];
+    const searches: string[] = [];
+    for (const msg of this._sessions.history) {
+      if (msg.role !== 'assistant' || !msg.tool_calls) { continue; }
+      for (const tc of msg.tool_calls) {
+        const target = String(tc.input?.['path'] ?? '').replace(/\\/g, '/');
+        if (tc.toolName === 'read_file' && target) {
+          reads.push(target);
+        } else if (tc.toolName === 'search_file_contents') {
+          const pattern = String(tc.input?.['pattern'] ?? '');
+          if (pattern) { searches.push(pattern); }
+        }
+      }
+    }
+    const parts: string[] = [];
+    if (reads.length > 0) { parts.push(`You have read: ${reads.join(', ')}.`); }
+    if (searches.length > 0) { parts.push(`You searched for: ${searches.map(s => `"${s}"`).join(', ')}.`); }
+    return parts.join(' ');
   }
 
   /** Compact single-line preview for debug logs. */
@@ -624,14 +648,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    */
   private _compactToolResultForHistory(toolName: string, result: string): string {
     const strictTools = new Set(['find_files', 'list_directory', 'search_file_contents']);
-    const maxChars = strictTools.has(toolName) ? 6000 : 12000;
+    const maxChars = strictTools.has(toolName) ? 4000 : 6000;
     if (result.length <= maxChars) {
       return result;
     }
 
     const lines = result.split(/\r?\n/);
-    const headLines = strictTools.has(toolName) ? 120 : 180;
-    const tailLines = strictTools.has(toolName) ? 24 : 36;
+    const headLines = strictTools.has(toolName) ? 80 : 120;
+    const tailLines = strictTools.has(toolName) ? 16 : 24;
     const head = lines.slice(0, headLines).join('\n');
     const tail = lines.slice(-tailLines).join('\n');
     const omittedLines = Math.max(0, lines.length - headLines - tailLines);
@@ -826,7 +850,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let toolLimitSummaryRequested = false;
     const MAX_EMPTY_RESPONSE_RETRIES = 1;
     let emptyResponseRetries = 0;
-    const MAX_NATIVE_FINAL_ANSWER_RETRIES = 2;
+    const MAX_SILENT_RETRIES = 1;
+    let silentRetries = 0;
+    const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     let nativeFinalAnswerRetries = 0;
     let forcePlainTextAnswer = false;
     const MAX_UNRECOGNIZED_JSON_RETRIES = 2;
@@ -839,8 +865,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const MAX_DISCOVERY_REFOCUS = 1;
     let discoveryRefocuses = 0;
     let concreteReadRefocuses = 0;
-    let continueReadingRefocuses = 0;
     let appOwnedFileReadRounds = 0;
+    let lastToolResultWasError = false;
 
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
@@ -915,55 +941,66 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           break;
         }
 
-        // If the model returned empty with no tool calls after we just fed it tool results,
-        // first retry in native mode with tool calls disabled and an explicit request
-        // for a final plain-text answer. Local models often handle this better than
-        // switching formats mid-turn.
+        // If the model returned empty with no tool calls after tool results,
+        // use a 3-level recovery: silent retry → context-aware nudge → final answer.
+        // Minimises injected messages to preserve llama.cpp SWA cache.
         if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && nativeToolMode) {
-          if (appOwnedSubstantiveRounds === 0 && concreteReadRefocuses < 1) {
+
+          // Level 1: Silent retry — re-send the exact same prompt (no history change).
+          // Preserves the SWA cache and handles sampling artifacts cheaply.
+          if (silentRetries < MAX_SILENT_RETRIES) {
+            silentRetries++;
+            this._log.appendLine(
+              `[tools] empty response after tool results — silent retry (${silentRetries}/${MAX_SILENT_RETRIES})`
+            );
+            this._postMessage({ type: 'status', text: 'Retrying…' });
+            continue;
+          }
+
+          // Level 2: Context-aware nudge — one recovery message chosen by state.
+          // Record a placeholder assistant turn first to maintain alternation.
+          if (concreteReadRefocuses < 1) {
             concreteReadRefocuses++;
-            this._log.appendLine('[tools] empty response after discovery-only results — refocusing to a concrete app-owned read/search');
-            this._sessions.history.push({
-              role: 'user',
-              content: this._buildConcreteReadRefocusPrompt()
-            });
-            this._postMessage({ type: 'status', text: 'Model paused after discovery — choosing a concrete app file…' });
-            continue;
+            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
+
+            if (lastToolResultWasError) {
+              this._log.appendLine('[tools] empty response after failed tool result — prompting model to try a different file');
+              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
+              this._postMessage({ type: 'status', text: 'File not found — trying a different approach…' });
+            } else if (appOwnedFileReadRounds === 0) {
+              this._log.appendLine('[tools] empty response before any file read — refocusing to a concrete read_file call');
+              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
+              this._postMessage({ type: 'status', text: 'Model paused after discovery — choosing a concrete app file…' });
+            } else {
+              // Already has evidence — skip nudge, fall through to final answer
+              concreteReadRefocuses--; // undo increment so Level 3 fires
+              this._sessions.history.pop(); // remove placeholder
+            }
+
+            if (concreteReadRefocuses > 0) {
+              continue;
+            }
           }
 
-          if (appOwnedFileReadRounds > 0 && continueReadingRefocuses < 1) {
-            continueReadingRefocuses++;
-            this._log.appendLine('[tools] empty response after app-owned read — prompting model to continue reading');
-            this._sessions.history.push({
-              role: 'user',
-              content: this._buildContinueReadingPrompt()
-            });
-            this._postMessage({ type: 'status', text: 'Model paused mid-investigation — continuing…' });
-            continue;
-          }
-
+          // Level 3: Final answer mode — compact prompt with tool evidence summary.
           if (nativeFinalAnswerRetries < MAX_NATIVE_FINAL_ANSWER_RETRIES) {
             nativeFinalAnswerRetries++;
             forcePlainTextAnswer = true;
             this._log.appendLine(
-              `[tools] empty response after tool results — retrying final answer in native mode (${nativeFinalAnswerRetries}/${MAX_NATIVE_FINAL_ANSWER_RETRIES})`
+              `[tools] empty response after tool results — retrying final answer (${nativeFinalAnswerRetries}/${MAX_NATIVE_FINAL_ANSWER_RETRIES})`
             );
+            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
             this._sessions.history.push({
               role: 'user',
-              content: this._buildFinalAnswerPrompt({
-                noMoreTools: true,
-                mentionUncertainty: true,
-                strictDirectAnswer: false,
-                reason: 'the model paused after tool results'
-              })
+              content: this._buildFinalAnswerPrompt({ compact: true })
             });
-
-            this._postMessage({ type: 'status', text: 'Model paused after tool results — retrying final answer in native mode…' });
+            this._postMessage({ type: 'status', text: 'Requesting final answer…' });
             continue;
           }
 
+          // All levels exhausted — give up.
           this._log.appendLine(
-            `[tools] empty response after tool results — final-answer retries exhausted (${MAX_NATIVE_FINAL_ANSWER_RETRIES})`
+            `[tools] empty response after tool results — all recovery exhausted`
           );
           const emptyAfterToolsMsg =
             '(Model stopped after tool results without producing a final answer. The gathered tool results remain in the conversation history.)';
@@ -1020,6 +1057,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         }
 
         emptyResponseRetries = 0;
+        silentRetries = 0;
+        concreteReadRefocuses = 0;
         forcePlainTextAnswer = false;
         nativeFinalAnswerRetries = 0;
 
@@ -1144,10 +1183,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
           // Execute each tool call and collect results
           const successfulReadTargets = new Set<string>();
+          lastToolResultWasError = false;
           for (const toolCall of pendingToolCalls) {
             this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
             this._postMessage({ type: 'status', text: `Tool: ${toolCall.toolName}…` });
             const toolResult = await toolExecutor.execute(toolCall);
+            if (toolResult.result.startsWith('Error') || toolResult.result.startsWith('No files matched')) {
+              lastToolResultWasError = true;
+            }
             if (toolCall.toolName === 'read_file' && !toolResult.result.startsWith('Error')) {
               successfulReadTargets.add(this._extractToolTarget(toolCall));
             }

@@ -425,8 +425,6 @@ export class ToolExecutor {
       .map(([ext, count]) => `- ${ext}: ${count}`)
       .join('\n');
 
-    const samplePaths = paths.slice(0, 60).map(relPath => `- ${relPath}`).join('\n');
-
     const prioritizedCandidates = paths.filter(relPath => {
       const normalized = relPath.toLowerCase();
       return normalized === 'web/pgadmin4.py' ||
@@ -453,8 +451,6 @@ export class ToolExecutor {
       'Most common extensions:',
       extensionSummary || '- (none)',
       candidateSection,
-      'Sample paths:',
-      samplePaths || '- (none)',
       nextStep
     ].filter(Boolean).join('\n');
   }
