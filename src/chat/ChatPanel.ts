@@ -736,8 +736,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
               this._postMessage({ type: 'status', text: 'Tool call limit reached — generating final answer…' });
               continue;
             }
+            const limitMsg = '(Tool call limit reached — insufficient context gathered to provide a complete answer.)';
             this._postMessage({ type: 'status', text: 'Tool call limit reached.' });
-            finalResponse = fullResponse;
+            if (!fullResponse) {
+              this._postMessage({ type: 'delta', content: limitMsg });
+              finalResponse = limitMsg;
+            } else {
+              finalResponse = fullResponse;
+            }
             break;
           }
 
