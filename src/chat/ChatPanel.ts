@@ -1137,6 +1137,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     let nativeFinalAnswerRetries = 0;
     let forcePlainTextAnswer = false;
+    const MAX_TOOL_CONTINUATION_RETRIES = 1;
+    let toolContinuationRetries = 0;
     const MAX_UNRECOGNIZED_JSON_RETRIES = 2;
     let unrecognizedJsonRetries = 0;
     let repetitiveDiscoveryRounds = 0;
@@ -1267,7 +1269,27 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             continue;
           }
 
-          // Level 2: Final answer mode — collapse transcript + compact prompt, tools disabled.
+          // Level 2: Tool-continuation mode — retry with tools still enabled + steering prompt.
+          // Fires when we're early in the conversation (toolRound < 3) and haven't exhausted
+          // the continuation budget. This lets the model call one more tool rather than forcing
+          // it to answer with potentially incomplete evidence.
+          if (toolContinuationRetries < MAX_TOOL_CONTINUATION_RETRIES && toolRound < 3) {
+            toolContinuationRetries++;
+            this._log.appendLine(
+              `[tools] empty response after tool results — retrying in tool-continuation mode (${toolContinuationRetries}/${MAX_TOOL_CONTINUATION_RETRIES})`
+            );
+            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
+            this._sessions.history.push({
+              role: 'user',
+              content:
+                'You have search results. Continue the investigation. If needed, call one tool to inspect the most relevant file. Do not summarize yet.'
+            });
+            this._postMessage({ type: 'status', text: 'Continuing investigation…' });
+            continue;
+          }
+
+          // Level 3: Final answer mode — collapse transcript + compact prompt, tools disabled.
+          // Fires after tool-continuation was tried (or skipped because toolRound >= 3).
           if (nativeFinalAnswerRetries < MAX_NATIVE_FINAL_ANSWER_RETRIES) {
             nativeFinalAnswerRetries++;
             forcePlainTextAnswer = true;
@@ -1292,7 +1314,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             continue;
           }
 
-          // All levels exhausted — give up.
+          // All levels exhausted (1: context nudge → 2: tool-continuation → 3: answer-only) — give up.
           this._log.appendLine(
             `[tools] empty response after tool results — all recovery exhausted`
           );
