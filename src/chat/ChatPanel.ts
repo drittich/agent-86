@@ -666,6 +666,52 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return '';
   }
 
+  /**
+   * Builds a map of files already read in this session's history.
+   * Key: normalized path. Value: array of covered ranges [{start, end}].
+   * A missing start_line/end_line is treated as full-file (0 → Infinity).
+   */
+  private _buildReadFileCache(): Map<string, Array<{ start: number; end: number }>> {
+    const cache = new Map<string, Array<{ start: number; end: number }>>();
+    for (const msg of this._sessions.history) {
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          if (tc.toolName === 'read_file') {
+            const p = String(tc.input['path'] ?? '').replace(/\\/g, '/').toLowerCase();
+            if (!p) { continue; }
+            const start = typeof tc.input['start_line'] === 'number' ? tc.input['start_line'] : 0;
+            const end   = typeof tc.input['end_line']   === 'number' ? tc.input['end_line']   : Infinity;
+            if (!cache.has(p)) { cache.set(p, []); }
+            cache.get(p)!.push({ start, end });
+          }
+        }
+      }
+    }
+    return cache;
+  }
+
+  /**
+   * Returns true if the requested read is fully covered by a prior read in the cache.
+   * A full-file read (no range) is only blocked by another full-file read.
+   * A ranged read is blocked if a prior read covers its range or is a full-file read.
+   */
+  private _isDuplicateRead(
+    path: string,
+    reqStart: number,
+    reqEnd: number,
+    cache: Map<string, Array<{ start: number; end: number }>>
+  ): boolean {
+    const normalized = path.replace(/\\/g, '/').toLowerCase();
+    const ranges = cache.get(normalized);
+    if (!ranges || ranges.length === 0) { return false; }
+    for (const r of ranges) {
+      if (r.start <= reqStart && r.end >= reqEnd) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private _isLikelyVendorOrRuntimePath(target: string): boolean {
     if (!target) {
       return false;
@@ -1650,9 +1696,37 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           const successfulReadTargets = new Set<string>();
           let anySuccessfulSearch = false;
           lastToolResultWasError = false;
+          // Snapshot of files already read before this round (used for duplicate-read guard)
+          const readCache = this._buildReadFileCache();
           for (const toolCall of pendingToolCalls) {
             this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
             this._postMessage({ type: 'status', text: `Tool: ${toolCall.toolName}…` });
+
+            // Duplicate-read guard: skip re-reading a file that is already fully in history
+            // unless the request narrows to a range not previously fetched.
+            let compactResult: string;
+            if (toolCall.toolName === 'read_file') {
+              const reqPath  = String(toolCall.args['path'] ?? '');
+              const reqStart = typeof toolCall.args['start_line'] === 'number' ? toolCall.args['start_line'] : 0;
+              const reqEnd   = typeof toolCall.args['end_line']   === 'number' ? toolCall.args['end_line']   : Infinity;
+              if (this._isDuplicateRead(reqPath, reqStart, reqEnd, readCache)) {
+                const rangeNote = reqStart === 0 && reqEnd === Infinity
+                  ? 'in full'
+                  : `lines ${reqStart}–${reqEnd === Infinity ? 'end' : reqEnd}`;
+                const steerMsg = `[guardrail] ${reqPath} was already read ${rangeNote} earlier in this session. ` +
+                  `Use the content already in context. If you need a specific line range that hasn't been read, ` +
+                  `call read_file with explicit start_line and end_line that do not overlap the prior read.`;
+                this._log.appendLine(`[tools] duplicate-read blocked: ${reqPath} (${rangeNote})`);
+                compactResult = steerMsg;
+                this._sessions.history.push({
+                  role: 'tool',
+                  content: compactResult,
+                  tool_call_id: toolCall.toolCallId,
+                });
+                continue;
+              }
+            }
+
             const toolResult = await toolExecutor.execute(toolCall);
             if (toolResult.result.startsWith('Error') || toolResult.result.startsWith('No files matched')) {
               lastToolResultWasError = true;
@@ -1663,7 +1737,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             if (toolCall.toolName === 'search_file_contents' && !toolResult.result.startsWith('Error') && !toolResult.result.startsWith('No matches')) {
               anySuccessfulSearch = true;
             }
-            const compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result, prompt);
+            compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result, prompt);
             if (compactResult.length !== toolResult.result.length) {
               this._log.appendLine(
                 `[tools] compacted ${toolCall.toolName} result for history: ${toolResult.result.length} -> ${compactResult.length} chars`
