@@ -624,6 +624,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     ].join(' ');
   }
 
+  private _buildSearchStallRefocusPrompt(): string {
+    return [
+      'The search results are in. Continue from the gathered results.',
+      'If you need more information, call exactly one tool next — prefer read_file on the most relevant file from the results.',
+      'Do not repeat the same search. Do not call find_files or list_directory.',
+      'If the results are sufficient, produce your final answer now.'
+    ].join(' ');
+  }
+
   /** Summarise tool evidence gathered so far for the final-answer prompt. */
   private _summarizeToolEvidence(): string {
     const reads: string[] = [];
@@ -1140,6 +1149,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     const MAX_CONCRETE_READ_REFOCUSES = 2;
     let totalConcreteReadRefocuses = 0;
     let lastToolResultWasError = false;
+    let lastRoundWasSearchOnly = false;
     // After this many tool rounds, collapse the messy transcript into a compact
     // scratch summary before requesting the final answer. This improves context
     // shape for models that stall on long tool transcripts.
@@ -1230,8 +1240,13 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
           // Level 1: Context-aware nudge — one recovery message chosen by state.
           // Record a placeholder assistant turn first to maintain alternation.
-          // Only fires if no file has been read yet AND session-wide cap not exceeded.
-          if (concreteReadRefocuses < 1 && totalConcreteReadRefocuses < MAX_CONCRETE_READ_REFOCUSES && totalFileReadRounds === 0) {
+          // Fires when:
+          //   (a) no file has been read yet (pre-read stall), OR
+          //   (b) the last round was search-only and the model returned empty
+          //       (broad search → stall pattern — nudge it to read a specific file)
+          // Session-wide cap prevents infinite refocus loops.
+          const searchStall = lastRoundWasSearchOnly && concreteReadRefocuses < 1;
+          if (totalConcreteReadRefocuses < MAX_CONCRETE_READ_REFOCUSES && (totalFileReadRounds === 0 || searchStall)) {
             concreteReadRefocuses++;
             totalConcreteReadRefocuses++;
             this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
@@ -1240,6 +1255,10 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
               this._log.appendLine('[tools] empty response after failed tool result — prompting model to try a different file');
               this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
               this._postMessage({ type: 'status', text: 'File not found — trying a different approach…' });
+            } else if (searchStall) {
+              this._log.appendLine('[tools] empty response after broad search — nudging model to read a specific file');
+              this._sessions.history.push({ role: 'user', content: this._buildSearchStallRefocusPrompt() });
+              this._postMessage({ type: 'status', text: 'Model paused after search — choosing a concrete file to read…' });
             } else {
               this._log.appendLine('[tools] empty response before any file read — refocusing to a concrete read_file call');
               this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
@@ -1498,6 +1517,15 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           if (successfulReadTargets.size > 0 || anySuccessfulSearch) {
             totalFileReadRounds++;
           }
+
+          // True when this round was all search/discovery (find_files, list_directory,
+          // search_file_contents) with no file reads or writes. Used to detect the
+          // "broad search → empty response" stall pattern.
+          lastRoundWasSearchOnly = pendingToolCalls.every(tc =>
+            tc.toolName === 'find_files' ||
+            tc.toolName === 'list_directory' ||
+            tc.toolName === 'search_file_contents'
+          );
 
           forcePlainTextAnswer = false;
           nativeFinalAnswerRetries = 0;
