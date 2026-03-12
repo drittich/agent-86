@@ -580,14 +580,31 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       return true;
     }
 
-    if (/(:\s*$|\bcheck the version file\b|\bunderstand the module structure\b)/im.test(trimmed)) {
+    if (/\bneed to\b.{0,40}\b(more|additional)\b/i.test(trimmed)) {
       return true;
     }
 
+    if (/\b(please provide|can you share)\b/i.test(trimmed)) {
+      return true;
+    }
+
+    // A trailing colon on the *last line* strongly suggests the response is a setup for
+    // content that was supposed to follow (e.g. "I'll now read the file:"). But many
+    // legitimate final answers use colons in headings mid-response — only flag when the
+    // very last non-empty line ends with a bare colon and the response is short.
     const nonEmptyLines = trimmed
       .split(/\r?\n/)
       .map(line => line.trim())
       .filter(Boolean);
+    const lastLine = nonEmptyLines[nonEmptyLines.length - 1] ?? '';
+    if (nonEmptyLines.length <= 3 && /:\s*$/.test(lastLine)) {
+      return true;
+    }
+
+    if (/\b(check the version file|understand the module structure)\b/i.test(trimmed)) {
+      return true;
+    }
+
     if (nonEmptyLines.length > 0 && nonEmptyLines.every(line => /^[\w./-]+\.[\w]+$/.test(line))) {
       return true;
     }
