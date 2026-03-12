@@ -63,6 +63,9 @@ document.head.appendChild(approvalStyleEl);
 
 // ── Element refs ─────────────────────────────────────────────────────────────
 
+const historyOverlay   = document.getElementById('history-overlay')!;
+const btnHistoryClose  = document.getElementById('btn-history-close') as HTMLButtonElement;
+const historyList      = document.getElementById('history-list') as HTMLUListElement;
 const outputEl         = document.getElementById('output')!;
 const typingIndicator  = document.getElementById('typing-indicator')!;
 const promptInput  = document.getElementById('prompt-input') as HTMLTextAreaElement;
@@ -243,6 +246,66 @@ function closeSettings(): void {
   _settingsReturnFocus?.focus();
   _settingsReturnFocus = null;
 }
+
+// ── History panel ─────────────────────────────────────────────────────────────
+
+interface SessionSummary { sessionId: string; title: string; createdAt: number; messageCount: number; }
+
+let _historySessions: SessionSummary[] = [];
+
+function openHistoryPanel(): void {
+  historyOverlay.hidden = false;
+  renderHistoryList();
+  requestAnimationFrame(() => btnHistoryClose.focus());
+}
+
+function closeHistoryPanel(): void {
+  historyOverlay.hidden = true;
+}
+
+function renderHistoryList(): void {
+  historyList.innerHTML = '';
+  if (_historySessions.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = 'No sessions yet.';
+    historyList.appendChild(empty);
+    return;
+  }
+  for (const s of _historySessions) {
+    const li = document.createElement('li');
+    li.setAttribute('role', 'button');
+    li.tabIndex = 0;
+    const title = document.createElement('div');
+    title.className = 'history-item-title';
+    title.textContent = s.title;
+    const meta = document.createElement('div');
+    meta.className = 'history-item-meta';
+    const date = new Date(s.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    meta.textContent = `${date}`;
+    li.appendChild(title);
+    li.appendChild(meta);
+    const restore = () => {
+      closeHistoryPanel();
+      vscode.postMessage({ type: 'restoreSession', sessionId: s.sessionId });
+    };
+    li.addEventListener('click', restore);
+    li.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); restore(); }
+    });
+    historyList.appendChild(li);
+  }
+}
+
+btnHistoryClose.addEventListener('click', closeHistoryPanel);
+
+historyOverlay.addEventListener('click', (e) => {
+  if (e.target === historyOverlay) { closeHistoryPanel(); }
+});
+
+historyOverlay.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'Escape') { e.preventDefault(); closeHistoryPanel(); }
+});
 
 // ── Event handlers ───────────────────────────────────────────────────────────
 
@@ -579,6 +642,12 @@ window.addEventListener('message', (event: MessageEvent) => {
       if (msg.status) {
         setProviderStatus(msg.status);
       }
+      break;
+    }
+
+    case 'sessions': {
+      _historySessions = (msg as unknown as { sessions: SessionSummary[] }).sessions ?? [];
+      openHistoryPanel();
       break;
     }
   }

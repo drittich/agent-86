@@ -1028,6 +1028,12 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           this._postMessage({ type: 'error', message: String(err) });
         });
         break;
+      case 'restoreSession': {
+        const all = this._sessions.loadAllSessions();
+        const target = all.find(s => s.sessionId === message.sessionId);
+        if (target) { this.restoreSession(target); }
+        break;
+      }
       case 'approval/response': {
         const resolver = this._approvalResolvers.get(message.approvalId);
         if (resolver) {
@@ -1122,21 +1128,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private async _handleSelectSession(): Promise<void> {
-    const sessions = this._sessions.loadAllSessions();
-    if (!sessions || sessions.length === 0) {
-      this._postMessage({ type: 'status', text: 'No sessions found.' });
-      return;
-    }
-
-    const labels = sessions.map(s =>
-      `${s.title}  (${new Date(s.createdAt).toLocaleString()})`
-    );
-    const indices = await this._requestPick('Select a session to restore:', labels);
-
-    if (indices.length > 0) {
-      const session = sessions[indices[0]];
-      if (session) { this.restoreSession(session); }
-    }
+    this._postSessionsToWebview();
   }
 
   /**
@@ -1185,7 +1177,21 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       }
       this._postMessage({ type: 'done' });
       this._postMessage({ type: 'status', text: 'Session restored.' });
+    } else {
+      // No conversation yet — show the history panel so the user can pick a session
+      this._postSessionsToWebview();
     }
+  }
+
+  private _postSessionsToWebview(): void {
+    const all = this._sessions.loadAllSessions();
+    const summaries = all.map(s => ({
+      sessionId: s.sessionId,
+      title: s.title,
+      createdAt: s.createdAt,
+      messageCount: s.messages.length,
+    }));
+    this._postMessage({ type: 'sessions', sessions: summaries });
   }
 
   private _postMessage(message: ExtensionToWebview): void {

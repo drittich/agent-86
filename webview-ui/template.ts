@@ -3,6 +3,18 @@
  */
 
 export const TEMPLATE_HTML: string = `
+<div id="history-overlay" hidden>
+  <div id="history-panel" role="dialog" aria-modal="true" aria-labelledby="history-title">
+    <div id="history-header">
+      <span id="history-title">Recent Tasks</span>
+      <button id="btn-history-close" title="Close">×</button>
+    </div>
+    <div id="history-body">
+      <ul id="history-list"></ul>
+    </div>
+  </div>
+</div>
+
 <div id="settings-overlay" hidden>
   <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div id="settings-header">

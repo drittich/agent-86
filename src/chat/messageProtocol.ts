@@ -26,7 +26,15 @@ export type ExtensionToWebview =
   | { type: 'providers'; providers: ProviderConfig[]; activeProviderIndex: number }
   | { type: 'tool-activity'; text?: string; label?: string; detail?: string }
   | { type: 'userPrompt'; content: string }
-  | { type: 'newSession' };
+  | { type: 'newSession' }
+  | { type: 'sessions'; sessions: SessionSummary[] };
+
+export interface SessionSummary {
+  sessionId: string;
+  title: string;
+  createdAt: number;
+  messageCount: number;
+}
 
 // Messages sent from the webview to the extension host
 export type WebviewToExtension =
@@ -36,6 +44,7 @@ export type WebviewToExtension =
   | { type: 'attachFiles' }
   | { type: 'attachActiveEditor' }
   | { type: 'selectSession' }
+  | { type: 'restoreSession'; sessionId: string }
   | { type: 'approval/response'; approvalId: string; approved: boolean }
   | { type: 'approval/alwaysAllow'; action: string }
   | { type: 'question/response'; questionId: string; answer: string }

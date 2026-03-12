@@ -730,6 +730,106 @@ export const BASE_CSS: string = `
     to   { opacity: 1; transform: none; }
   }
 
+  /* History overlay */
+  #history-overlay {
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, var(--vscode-sideBar-background, #000) 50%, transparent);
+    z-index: 100;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 8px;
+  }
+  #history-overlay[hidden] { display: none; }
+
+  #history-panel {
+    background: var(--vscode-sideBar-background, #252526);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    border-radius: 3px;
+    width: 100%;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 24px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border, #454545);
+    flex-shrink: 0;
+  }
+  #history-title {
+    font-weight: 600;
+    font-size: 13px;
+  }
+  #btn-history-close {
+    background: none;
+    border: none;
+    color: var(--vscode-foreground);
+    opacity: 0.7;
+    font-size: 16px;
+    padding: 0 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  #btn-history-close:hover { opacity: 1; background: none; }
+
+  #history-body {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
+  #history-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  #history-list li {
+    border-bottom: 1px solid var(--vscode-widget-border, #454545);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 0.1s ease;
+  }
+  #history-list li:last-child { border-bottom: none; }
+  #history-list li:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+  #history-list li:active { background: var(--vscode-list-activeSelectionBackground, #094771); }
+
+  .history-item-title {
+    font-size: 13px;
+    color: var(--vscode-foreground);
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .history-item-meta {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .history-empty {
+    padding: 16px 12px;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    text-align: center;
+  }
+
+  @keyframes history-panel-enter {
+    from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    to   { opacity: 1; transform: none; }
+  }
+  #history-overlay:not([hidden]) #history-panel {
+    animation: history-panel-enter 0.18s cubic-bezier(0.25, 1, 0.5, 1) both;
+  }
+
   /* Respect user's motion preference */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
