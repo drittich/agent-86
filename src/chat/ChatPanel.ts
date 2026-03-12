@@ -418,9 +418,10 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * For local llama.cpp-style OpenAI endpoints, send cache hints so repeated turns
    * can reuse KV state when prompts are append-only.
    */
-  private _buildExtraBody(provider: ProviderConfig | undefined): Record<string, unknown> {
+  private _buildExtraBody(provider: ProviderConfig | undefined, overrideThinking?: boolean): Record<string, unknown> {
+    const enableThinking = overrideThinking !== undefined ? overrideThinking : this._sessions.thinkingMode;
     const body: Record<string, unknown> = {
-      chat_template_kwargs: { enable_thinking: this._sessions.thinkingMode }
+      chat_template_kwargs: { enable_thinking: enableThinking }
     };
 
     if (!provider) {
@@ -522,8 +523,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     if (options?.compact) {
       const evidence = this._summarizeToolEvidence();
       return evidence
-        ? `${evidence} Answer the original question now using the tool results above. Be direct and specific. Do not call any tools.`
-        : 'Answer the original question now using the tool results above. Be direct and specific. Do not call any tools.';
+        ? `${evidence} Do not call tools. Using only the gathered results, write the final answer now. Be direct and specific.`
+        : 'Do not call tools. Using only the gathered results, write the final answer now. Be direct and specific.';
     }
 
     const noMoreTools = options?.noMoreTools ?? true;
@@ -1054,7 +1055,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           },
           {
             tools: toolsEnabledThisRound ? buildAgentTools() : undefined,
-            extraBody: this._buildExtraBody(activeProvider)
+            extraBody: this._buildExtraBody(activeProvider, forcePlainTextAnswer ? false : undefined)
           }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
