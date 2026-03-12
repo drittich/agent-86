@@ -482,12 +482,44 @@ export const BASE_CSS: string = `
     padding: 8px 12px;
     border-top: 1px solid var(--vscode-widget-border, #454545);
   }
-  #btn-settings-cancel {
+  #settings-global {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--vscode-widget-border, #454545);
+  }
+  #settings-global label {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  #settings-global input {
+    width: 72px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, #555);
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: inherit;
+    border-radius: 2px;
+  }
+  #settings-global input:focus { outline: 1px solid var(--vscode-focusBorder); }
+  #btn-settings-save {
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
   }
-  #btn-settings-cancel:hover:not(:disabled) {
+  #btn-settings-save:hover:not(:disabled) {
     background: var(--vscode-button-hoverBackground);
+  }
+  #btn-settings-cancel {
+    background: transparent;
+    color: var(--vscode-foreground);
+    border: 1px solid var(--vscode-widget-border, #555);
+  }
+  #btn-settings-cancel:hover:not(:disabled) {
+    background: var(--vscode-list-hoverBackground);
   }
 
   #settings-divider {

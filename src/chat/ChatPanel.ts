@@ -190,7 +190,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   public openSettings(): void {
     const providers = this._getProviders();
-    this._postMessage({ type: 'openSettings', providers, activeProviderIndex: this._activeProviderIndex });
+    const maxToolRounds = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRounds') ?? 40;
+    this._postMessage({ type: 'openSettings', providers, activeProviderIndex: this._activeProviderIndex, maxToolRounds });
   }
 
   public attachFiles(): void {
@@ -611,7 +612,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let lastFinishReason: string | undefined;
 
     // Cap native tool rounds to avoid runaway loops
-    const MAX_TOOL_ROUNDS = 20;
+    const MAX_TOOL_ROUNDS = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRounds') ?? 40;
     let toolRound = 0;
     let toolLimitSummaryRequested = false;
     const MAX_EMPTY_RESPONSE_RETRIES = 1;
@@ -1050,7 +1051,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         break;
       }
       case 'saveSettings': {
-        this._handleSaveSettings(message.providers).catch((err: unknown) => {
+        this._handleSaveSettings(message.providers, message.maxToolRounds).catch((err: unknown) => {
           this._log.appendLine(`[saveSettings] handler error: ${err}`);
         });
         break;
@@ -1078,26 +1079,19 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _handleSaveSettings(providers: ProviderConfig[] | undefined): Promise<void> {
+  private async _handleSaveSettings(providers: ProviderConfig[] | undefined, maxToolRounds: number | undefined): Promise<void> {
     this._log.appendLine(`[_handleSaveSettings] received providers: ${JSON.stringify(providers, null, 2)}`);
-    if (!providers || providers.length === 0) {
-      this._log.appendLine(`[_handleSaveSettings] no providers to save`);
-      return;
-    }
-    
     const cfg = vscode.workspace.getConfiguration('agent86');
-    this._log.appendLine(`[_handleSaveSettings] calling cfg.update with target: Global`);
-    
+
     try {
-      const result = await cfg.update('providers', providers, vscode.ConfigurationTarget.Global);
-      this._log.appendLine(`[_handleSaveSettings] update completed, result: ${JSON.stringify(result)}`);
-      
-      // Verify the save by reading back
-      const verifyCfg = vscode.workspace.getConfiguration('agent86');
-      const verifyInspect = verifyCfg.inspect<ProviderConfig[]>('providers');
-      this._log.appendLine(`[_handleSaveSettings] verify - workspaceValue: ${JSON.stringify(verifyInspect?.workspaceValue)}`);
-      this._log.appendLine(`[_handleSaveSettings] verify - globalValue: ${JSON.stringify(verifyInspect?.globalValue)}`);
-      this._log.appendLine(`[_handleSaveSettings] verify - defaultValue: ${JSON.stringify(verifyInspect?.defaultValue)}`);
+      if (providers && providers.length > 0) {
+        await cfg.update('providers', providers, vscode.ConfigurationTarget.Global);
+        this._log.appendLine(`[_handleSaveSettings] providers saved`);
+      }
+      if (maxToolRounds !== undefined && maxToolRounds >= 1) {
+        await cfg.update('maxToolRounds', maxToolRounds, vscode.ConfigurationTarget.Global);
+        this._log.appendLine(`[_handleSaveSettings] maxToolRounds saved: ${maxToolRounds}`);
+      }
     } catch (err) {
       this._log.appendLine(`[_handleSaveSettings] update FAILED`);
       this._log.appendLine(`[_handleSaveSettings] error name: ${err instanceof Error ? err.name : 'unknown'}`);

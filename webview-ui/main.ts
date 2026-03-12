@@ -95,6 +95,8 @@ const pfToolUse          = document.getElementById('pf-tool-use') as HTMLInputEl
 const pfContext          = document.getElementById('pf-context') as HTMLInputElement;
 const btnPfSave          = document.getElementById('btn-pf-save') as HTMLButtonElement;
 const btnPfCancel        = document.getElementById('btn-pf-cancel') as HTMLButtonElement;
+const globalMaxToolRounds = document.getElementById('global-max-tool-rounds') as HTMLInputElement;
+const btnSettingsSave    = document.getElementById('btn-settings-save') as HTMLButtonElement;
 
 // ── Module init ───────────────────────────────────────────────────────────────
 
@@ -275,6 +277,12 @@ btnAttachEditor.addEventListener('click', () => {
 
 btnSettingsClose.addEventListener('click', closeSettings);
 btnSettingsCancel.addEventListener('click', closeSettings);
+
+btnSettingsSave.addEventListener('click', () => {
+  const rounds = parseInt(globalMaxToolRounds.value, 10);
+  vscode.postMessage({ type: 'saveSettings', maxToolRounds: isNaN(rounds) ? undefined : rounds });
+  closeSettings();
+});
 
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) { closeSettings(); }
@@ -549,6 +557,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         renderProvidersList();
         renderModelDropdown();
       }
+      globalMaxToolRounds.value = String(msg.maxToolRounds ?? 40);
       openSettingsPanel();
       break;
     }

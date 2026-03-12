@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.1.35",
+  "version": "0.1.37",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -119,6 +119,12 @@
           "type": "string",
           "default": "",
           "description": "Brave Search API key for the web_search tool. Can also be set via the BRAVE_API_KEY environment variable."
+        },
+        "agent86.maxToolRounds": {
+          "type": "number",
+          "default": 40,
+          "minimum": 1,
+          "description": "Maximum number of tool-calling rounds per inference cycle before the model is asked to produce a final answer."
         },
         "agent86.providers": {
           "type": "array",

@@ -36,7 +36,12 @@ export const TEMPLATE_HTML: string = `
         </div>
       </div>
     </div>
+    <div id="settings-global">
+      <label for="global-max-tool-rounds">Max Tool Rounds</label>
+      <input id="global-max-tool-rounds" type="number" min="1" placeholder="40" value="40" />
+    </div>
     <div id="settings-footer">
+      <button id="btn-settings-save">Save</button>
       <button id="btn-settings-cancel">Close</button>
     </div>
   </div>

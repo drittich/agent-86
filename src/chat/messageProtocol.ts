@@ -21,7 +21,7 @@ export type ExtensionToWebview =
   | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' }
   | { type: 'agentsMdAvailable'; available: boolean }
   | { type: 'checkboxState'; thinkingMode: boolean; includeAgentsMd: boolean }
-  | { type: 'openSettings'; providers: ProviderConfig[]; activeProviderIndex: number }
+  | { type: 'openSettings'; providers: ProviderConfig[]; activeProviderIndex: number; maxToolRounds: number }
   | { type: 'providerStatus'; providerName: string; status: 'online' | 'offline' | 'checking' }
   | { type: 'providers'; providers: ProviderConfig[]; activeProviderIndex: number }
   | { type: 'tool-activity'; text?: string; label?: string; detail?: string }
@@ -41,7 +41,7 @@ export type WebviewToExtension =
   | { type: 'question/response'; questionId: string; answer: string }
   | { type: 'pick/response'; pickId: string; indices: number[] }
   | { type: 'checkboxChange'; includeAgentsMd?: boolean }
-  | { type: 'saveSettings'; providers?: ProviderConfig[] }
+  | { type: 'saveSettings'; providers?: ProviderConfig[]; maxToolRounds?: number }
   | { type: 'selectModel'; providerIndex: number };
 
 export interface AttachedFile {
