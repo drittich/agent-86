@@ -90,9 +90,10 @@ export class AIProvider implements IProvider {
    * so fallback mode keeps full conversational context.
    */
   private toModelMessages(messages: ChatMessage[], preserveToolCalls: boolean): Array<any> {
-    return messages.map(msg => {
+    const result: Array<any> = [];
+    for (const msg of messages) {
       if (msg.role === 'tool') {
-        return {
+        result.push({
           role: 'tool',
           content: [
             {
@@ -105,7 +106,8 @@ export class AIProvider implements IProvider {
               }
             }
           ]
-        };
+        });
+        continue;
       }
 
       if (msg.role === 'assistant') {
@@ -128,24 +130,24 @@ export class AIProvider implements IProvider {
           }
         }
 
+        // Skip assistant messages with no serializable content — don't emit a blank turn.
         if (contentParts.length === 0) {
-          contentParts.push({
-            type: 'text',
-            text: ''
-          });
+          continue;
         }
 
-        return {
+        result.push({
           role: 'assistant',
           content: contentParts
-        };
+        });
+        continue;
       }
 
-      return {
+      result.push({
         role: msg.role,
         content: msg.content ?? ''
-      };
-    });
+      });
+    }
+    return result;
   }
 
   private isEmptyAssistantMessage(message: ChatMessage): boolean {
