@@ -1248,7 +1248,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         }
 
         // ── Tentatively record assistant turn (no tool calls) ────────────────
-        this._sessions.history.push({ role: 'assistant', content: fullResponse });
+        if (fullResponse.trim().length > 0) {
+            this._sessions.history.push({ role: 'assistant', content: fullResponse });
+        }
 
         if (!nativeToolMode) {
           // ── Legacy: JSON/XML data-request loop ──────────────────────────────
