@@ -1356,7 +1356,6 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             this._log.appendLine(
               `[tools] soft stall detected (toolRound=${toolRound}) — injecting tool-repair nudge`
             );
-            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
             this._sessions.history.push({
               role: 'user',
               content:
@@ -1371,7 +1370,6 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           );
 
           // Level 1: Context-aware nudge — one recovery message chosen by state.
-          // Record a placeholder assistant turn first to maintain alternation.
           // Fires when:
           //   (a) no file has been read yet (pre-read stall), OR
           //   (b) the last round was search-only and the model returned empty
@@ -1381,7 +1379,6 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           if (totalConcreteReadRefocuses < MAX_CONCRETE_READ_REFOCUSES && (totalFileReadRounds === 0 || searchStall)) {
             concreteReadRefocuses++;
             totalConcreteReadRefocuses++;
-            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
 
             if (lastToolResultWasError) {
               this._log.appendLine('[tools] empty response after failed tool result — prompting model to try a different file');
@@ -1408,7 +1405,6 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             this._log.appendLine(
               `[tools] empty response after tool results — retrying in tool-continuation mode (${toolContinuationRetries}/${MAX_TOOL_CONTINUATION_RETRIES})`
             );
-            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
             this._sessions.history.push({
               role: 'user',
               content:
@@ -1433,8 +1429,6 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
               this._log.appendLine(`[tools] collapsing tool history into scratch summary (toolRound=${toolRound})`);
               this._collapseToolHistory(prompt);
               this._postMessage({ type: 'status', text: 'Summarising research…' });
-            } else {
-              this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
             }
             this._sessions.history.push({
               role: 'user',
