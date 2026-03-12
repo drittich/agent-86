@@ -1235,6 +1235,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     let totalConcreteReadRefocuses = 0;
     let lastToolResultWasError = false;
     let lastRoundWasSearchOnly = false;
+    let consecutiveEmptyRounds = 0;
     // After this many tool rounds, collapse the messy transcript into a compact
     // scratch summary before requesting the final answer. This improves context
     // shape for models that stall on long tool transcripts.
@@ -1332,13 +1333,41 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           }
         }
 
+        // Track consecutive empty turns so we can distinguish soft stalls (first empty after
+        // a search round — model is likely mid-reasoning) from hard stalls (repeated empties,
+        // or enough context already gathered).
+        if (!fullResponse && pendingToolCalls.length === 0) {
+          consecutiveEmptyRounds++;
+        } else {
+          consecutiveEmptyRounds = 0;
+        }
+
         // If the model returned empty with no tool calls after tool results, reroute immediately.
         // A silent retry is low-value here: the model has evidence and already decided to produce
         // nothing — re-sending the same context rarely changes the outcome. Instead synthesize a
         // state summary and re-ask in answer-only mode (no tools passed to the provider).
         if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && nativeToolMode) {
+          // Soft stall: first empty output after a search-only round, early in the loop.
+          // The model likely needs to pick a tool but got confused by a large result payload.
+          // Inject a lightweight tool-repair nudge (tools still enabled) rather than escalating.
+          const isSoftStall =
+            consecutiveEmptyRounds === 1 && lastRoundWasSearchOnly && toolRound <= 2;
+          if (isSoftStall) {
+            this._log.appendLine(
+              `[tools] soft stall detected (toolRound=${toolRound}) — injecting tool-repair nudge`
+            );
+            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
+            this._sessions.history.push({
+              role: 'user',
+              content:
+                'You have search results above. Pick the single most relevant file and call read_file on it now. Do not summarize yet.'
+            });
+            this._postMessage({ type: 'status', text: 'Nudging model to select a file…' });
+            continue;
+          }
+
           this._log.appendLine(
-            `[metrics] stall_event, toolRound=${toolRound}, taskType=${taskClassification.taskType}, tier=${modelTier}`
+            `[metrics] stall_event, toolRound=${toolRound}, consecutiveEmpty=${consecutiveEmptyRounds}, taskType=${taskClassification.taskType}, tier=${modelTier}`
           );
 
           // Level 1: Context-aware nudge — one recovery message chosen by state.
@@ -1652,6 +1681,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
           forcePlainTextAnswer = false;
           nativeFinalAnswerRetries = 0;
+          consecutiveEmptyRounds = 0;
 
           continue; // Re-stream with tool results injected
         }
