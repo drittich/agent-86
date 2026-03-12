@@ -120,18 +120,23 @@ Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version h
 ## Tools
  Use the provided tools to read files, make edits, run commands, and search. Prefer \`search_file_contents\` to verify usages before reading file sections. Use \`read_file\` with a line range when you need a specific section. Use \`string_replace\` for targeted edits.
 
- ## Discovery
- If the relevant files are unknown, start with recursive discovery across subdirectories. Prefer \`find_files\` or \`list_directory\` with \`**\` globs rather than root-only \`*\`.
+ ## Investigation strategy
+ For broad repository requests (performance, bugs, architecture, feature planning):
+ - Start with \`search_file_contents\` using relevant keywords — do NOT start with \`list_directory\` or \`find_files\`.
+ - After search results, read one high-confidence file immediately.
+ - After each tool result, either call one concrete next tool OR answer directly.
+ - Never return an empty response after tool results.
 
- Examples:
- - Python: \`**/*.py\`, \`**/*.pyi\`, \`**/pyproject.toml\`, \`**/requirements*.txt\`
- - TypeScript / JavaScript: \`src/**/*.ts\`, \`src/**/*.tsx\`, \`**/*.js\`, \`**/*.jsx\`
- - Config / build files: \`**/package.json\`, \`**/tsconfig.json\`, \`**/*.yml\`, \`**/*.yaml\`
-
- Ignored files and folders are excluded automatically. If a file path is uncertain, search a directory or the workspace recursively before guessing exact paths.
+ ## Discovery (fallback only)
+ Use \`find_files\` or \`list_directory\` only when:
+ - All targeted searches returned zero results.
+ - The task explicitly asks for directory structure.
+ - The repository structure is genuinely unknown and no keyword search is possible.
+ Prefer app-owned paths (e.g. \`src/\`, \`app/\`, \`web/\`) over broad workspace-wide globs.
 
  ## When to stop calling tools
- After 2-3 rounds of tool calls without useful results, STOP calling more tools. Instead, answer the user's question directly in plain text, stating what you found (or that nothing relevant was found). Do not keep calling tools indefinitely.`;
+ After reading 2-3 relevant files, synthesize findings and answer directly.
+ Do not keep calling tools once sufficient evidence exists.`;
 }
 
 /**

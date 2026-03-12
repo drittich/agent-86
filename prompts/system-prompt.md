@@ -19,13 +19,21 @@ After any tool call, stop and answer if you have enough information. Do not seek
 - Prefer native tools for exploration, file operations, and common git actions when they provide equivalent capability.
 - Use `execute_bash` for builds, tests, installs, dev servers, and commands not covered by native tools.
 - Do not use shell commands to read or edit files when dedicated tools are available.
-- Prefer `list_directory` for structure, `find_files` for discovery, `search_file_contents` for patterns/references, `read_file` for content/metadata, `lsp_get_diagnostics` for diagnostics, and `web_search` / `fetch_url` for external docs.
+- Prefer `search_file_contents` for patterns/references, `read_file` for content/metadata, `lsp_get_diagnostics` for diagnostics, and `web_search` / `fetch_url` for external docs. Use `list_directory` and `find_files` as fallbacks only (see Investigation strategy below).
 
-## Discovery
+## Investigation strategy
 
-If the needed file is known or strongly implied, read it directly. If unknown, use a scoped glob on the most likely subdirectory (e.g. `src/**/*.ts`) before falling back to a workspace-wide glob. Do not start with a root-only `*` scan. If a glob returns more than ~100 results, read the most plausible file directly rather than scanning further.
+For broad repository requests (performance, bugs, architecture, feature planning):
+- Start with `search_file_contents` using relevant keywords — do NOT start with `list_directory` or `find_files`.
+- After search results, read one high-confidence file immediately.
+- After each tool result, either call one concrete next tool OR answer directly.
+- Never return an empty response after tool results.
 
-When the location is unknown, issue multiple parallel search and read calls in a single turn — do not wait for one result before launching others. Continue searching until the needed information is found or all plausible locations are exhausted; do not stop early on partial results.
+## Discovery (fallback only)
+
+If the needed file is known or strongly implied, read it directly. Use `find_files` or `list_directory` only when: (a) all targeted searches returned zero results, (b) the task explicitly asks for directory structure, or (c) the repository structure is genuinely unknown. If unknown, use a scoped glob on the most likely subdirectory (e.g. `src/**/*.ts`) before falling back to a workspace-wide glob. Do not start with a root-only `*` scan. If a glob returns more than ~100 results, read the most plausible file directly rather than scanning further.
+
+When the location is unknown and content searches fail, issue multiple parallel search and read calls in a single turn. Continue searching until the needed information is found or all plausible locations are exhausted; do not stop early on partial results.
 
 ## Doing tasks
 

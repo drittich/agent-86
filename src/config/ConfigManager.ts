@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ChatMessage } from '../providers/IProvider';
 import { AttachedFile } from '../chat/messageProtocol';
+import { ModelTier } from '../agent/ModelProfile';
 
 // Session storage key prefix
 const SESSION_STORAGE_PREFIX = 'agentic.session.';
@@ -157,6 +158,15 @@ export class ConfigManager {
     
     // Sort by creation date, newest first
     return sessions.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /** Return the configured model tier for tool selection policy. */
+  getModelTier(): ModelTier {
+    const tier = vscode.workspace.getConfiguration('agent86').get<string>('modelTier') ?? 'balanced';
+    if (tier === 'small' || tier === 'balanced' || tier === 'high') {
+      return tier;
+    }
+    return 'balanced';
   }
 
   private _persist(session: Session): void {

@@ -189,8 +189,9 @@ const STATIC_TOOLS: ToolSet = {
   list_directory: tool({
     description:
       'List files matching a glob pattern within the workspace. ' +
-      'Use recursive globs when the exact path is unknown (for example: **/*.py, src/**/*.ts). ' +
-      'Useful for an initial directory-tree scan before reading code. ' +
+      'FALLBACK TOOL: prefer search_file_contents for targeted content search. ' +
+      'Use list_directory only when: (a) the task explicitly asks for directory structure, ' +
+      '(b) all targeted searches returned zero results, or (c) the repo is very small. ' +
       'Excludes node_modules, .git, dist, build, and gitignored paths.',
     inputSchema: jsonSchema<{
       glob: string;
@@ -235,7 +236,9 @@ const STATIC_TOOLS: ToolSet = {
   find_files: tool({
     description:
       'Find files by glob pattern. Returns matching workspace-relative paths. ' +
-      'Prefer recursive globs when exploring unknown codebases (for example: **/*.py, src/**/*.ts, **/package.json). ' +
+      'FALLBACK TOOL: prefer search_file_contents when looking for specific patterns. ' +
+      'Use find_files only when: (a) you need directory structure, ' +
+      '(b) targeted content search returned no results, or (c) the repo structure is genuinely unknown. ' +
       'Ignored folders and gitignored files are excluded.',
     inputSchema: jsonSchema<{
       glob: string;
@@ -253,12 +256,14 @@ const STATIC_TOOLS: ToolSet = {
 
   search_file_contents: tool({
     description:
+      'PREFERRED FIRST TOOL for repository investigation. ' +
       'Search for a regex pattern within a file or directory using ripgrep. ' +
       'Returns matching lines with surrounding context. ' +
-      'Use this to find usages, imports, and call sites rather than reading file chunks. ' +
-      'If the exact file is unknown, search a directory or the workspace recursively before guessing a path. ' +
-      'WARNING: Results include line-number annotations and markers (e.g. "> 92:") that are NOT in the actual file. ' +
-      'Never use search result lines directly as old_str in string_replace — always call read_file on the relevant lines first to get the exact file content.',
+      'Use this as the first tool for most repository tasks — searching for relevant ' +
+      'patterns (function names, imports, keywords) is more efficient than listing files first. ' +
+      'If the exact file is unknown, search the workspace root "." or a subdirectory. ' +
+      'WARNING: Results include line-number annotations (e.g. "> 92:") that are NOT in the actual file. ' +
+      'Never use search result lines directly as old_str in string_replace — call read_file first.',
     inputSchema: jsonSchema<{
       path: string;
       pattern: string;

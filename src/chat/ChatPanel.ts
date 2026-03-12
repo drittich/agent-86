@@ -15,6 +15,8 @@ import { ToolExecutor } from '../tools/ToolExecutor';
 import { buildAgentTools } from '../tools/ToolRegistry';
 import { ToolCallEvent } from '../providers/IProvider';
 import { getSystemPrompt, getNativeToolsPrompt } from '../utils/PromptProcessor';
+import { classifyTask, TaskClassification } from '../agent/TaskClassifier';
+import { getModelProfile, ModelProfile } from '../agent/ModelProfile';
 
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -577,6 +579,28 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return String(toolCall.args['glob'] ?? '').trim().toLowerCase();
   }
 
+  private _buildClassifierHint(classification: TaskClassification): string | undefined {
+    if (classification.domainHints.length === 0) {
+      return undefined;
+    }
+
+    const lines = [
+      '<task_hint>',
+      `Task type: ${classification.taskType.replace(/_/g, ' ')}.`,
+    ];
+
+    if (classification.isStartupTask || classification.isModuleLoadTask) {
+      lines.push('For startup/module-loading tasks, search for these patterns first:');
+      const terms = classification.domainHints.slice(0, 6);
+      lines.push(...terms.map(t => `- ${t}`));
+      lines.push('Prefer app-owned paths: src/, app/, web/, plugins/, utils/');
+      lines.push('Do NOT start with list_directory. Use search_file_contents with these terms first.');
+    }
+
+    lines.push('</task_hint>');
+    return lines.join('\n');
+  }
+
   private _buildDiscoveryRefocusPrompt(): string {
     return [
       'Broad file discovery is complete. Do not keep expanding generic discovery globs.',
@@ -672,6 +696,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       return;
     }
     this._userCancelled = false;
+
+    // Classify task and load model profile for this turn
+    const taskClassification = classifyTask(prompt);
+    const modelTier = this._configManager.getModelTier();
+    const modelProfile = getModelProfile(modelTier);
+    this._log.appendLine(
+      `[classify] taskType=${taskClassification.taskType}, tier=${modelTier}, ` +
+      `domainHints=[${taskClassification.domainHints.join(', ')}], ` +
+      `isStartupTask=${taskClassification.isStartupTask}`
+    );
 
     // Auto-detect file references in the prompt and attach them before sending
     const previouslyAttachedUris = new Set(this._sessions.attachedFiles.map(f => f.uri));
@@ -770,8 +804,12 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     }
 
     const discoveryHint = this._buildDiscoveryHint(prompt);
+    const classifierHint = this._buildClassifierHint(taskClassification);
     if (discoveryHint) {
       userContent = `${userContent}\n\n${discoveryHint}`;
+    }
+    if (classifierHint) {
+      userContent = `${userContent}\n\n${classifierHint}`;
     }
 
     this._sessions.history.push({ role: 'user', content: userContent, displayContent: prompt });
@@ -833,7 +871,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     // Cap native tool rounds to avoid runaway loops
     const MAX_TOOL_ROUNDS = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRounds') ?? 40;
-    const MAX_EXPLORATION_TOOL_ROUNDS = 6;
+    // Profile drives exploration depth — small models get tighter limits
+    const MAX_EXPLORATION_TOOL_ROUNDS = modelProfile.maxDiscoveryStepsBeforeRead + modelProfile.maxFileReadsBeforeSummary + 1;
     let toolRound = 0;
     let toolLimitSummaryRequested = false;
     const MAX_EMPTY_RESPONSE_RETRIES = 1;
@@ -940,6 +979,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             silentRetries++;
             this._log.appendLine(
               `[tools] empty response after tool results — silent retry (${silentRetries}/${MAX_SILENT_RETRIES})`
+            );
+            this._log.appendLine(
+              `[metrics] stall_event, toolRound=${toolRound}, taskType=${taskClassification.taskType}, tier=${modelTier}`
             );
             this._postMessage({ type: 'status', text: 'Retrying…' });
             continue;
@@ -1076,7 +1118,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           const tooManyDiscoveryGlobs = seenDiscoveryGlobs.size >= 4;
           const excessiveDiscoveryLoop = repetitiveDiscoveryRounds >= 1 && seenDiscoveryGlobs.size >= 3;
           const discoveryLoopWithoutEvidence = substantiveToolRounds === 0 && (tooManyDiscoveryGlobs || excessiveDiscoveryLoop || (upcomingToolRound >= 3 && discoveryCalls.length > 0));
-          if (!forcePlainTextAnswer && discoveryLoopWithoutEvidence && discoveryRefocuses < MAX_DISCOVERY_REFOCUS) {
+          // Small-model profile: block broad listing as first action regardless of other conditions
+          const profileBlocksBroadListing = !modelProfile.allowBroadListingFirst && substantiveToolRounds === 0 && toolRound === 0 && discoveryCalls.length > 0;
+          if (!forcePlainTextAnswer && (discoveryLoopWithoutEvidence || profileBlocksBroadListing) && discoveryRefocuses < MAX_DISCOVERY_REFOCUS) {
             discoveryRefocuses++;
             this._log.appendLine(
               `[tools] broad discovery loop detected before substantive evidence — refocusing ` +
@@ -1150,6 +1194,17 @@ export class ChatPanel implements vscode.WebviewViewProvider {
               input: tc.args,
             })),
           });
+
+          // Log first-tool quality for observability
+          if (toolRound === 1 && pendingToolCalls.length > 0) {
+            const firstTool = pendingToolCalls[0];
+            const isTargeted = firstTool.toolName === 'search_file_contents';
+            const isBroad = firstTool.toolName === 'find_files' || firstTool.toolName === 'list_directory';
+            this._log.appendLine(
+              `[metrics] first_tool=${firstTool.toolName}, targeted=${isTargeted}, broad=${isBroad}, ` +
+              `taskType=${taskClassification.taskType}, tier=${modelTier}`
+            );
+          }
 
           // Execute each tool call and collect results
           const successfulReadTargets = new Set<string>();
