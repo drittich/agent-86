@@ -657,12 +657,26 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   /**
    * Compact oversized tool outputs before adding them to model history.
    * This keeps iterative tool loops responsive and avoids ballooning context.
+   *
+   * For code files (read_file), uses structural compaction:
+   *   - always keeps imports and top-level signatures
+   *   - keeps lines matching user prompt tokens + surrounding context
+   * For listing/search tools, uses head/tail truncation (content is already line-oriented).
    */
-  private _compactToolResultForHistory(toolName: string, result: string): string {
+  private _compactToolResultForHistory(toolName: string, result: string, userPrompt = ''): string {
     const strictTools = new Set(['find_files', 'list_directory', 'search_file_contents']);
     const maxChars = strictTools.has(toolName) ? 4000 : 6000;
     if (result.length <= maxChars) {
       return result;
+    }
+
+    // Structural compaction for code files
+    if (toolName === 'read_file') {
+      const structural = this._structuralCompactCode(result, userPrompt, maxChars);
+      if (structural.length <= maxChars) {
+        return structural;
+      }
+      // If still too large, fall through to head/tail below
     }
 
     const lines = result.split(/\r?\n/);
@@ -688,6 +702,94 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       `[... truncated ${result.length - (half * 2)} char(s) ...]\n` +
       `${result.slice(result.length - half)}`
     );
+  }
+
+  /**
+   * Structural compaction for code file content.
+   *
+   * Keeps:
+   *   1. All import/require/use/include lines (language agnostic)
+   *   2. Top-level structural lines: class, function, def, const/let/var exports,
+   *      type/interface/enum declarations, method signatures
+   *   3. Lines matching user prompt tokens (identifiers > 3 chars) + CONTEXT_LINES around them
+   *
+   * Omitted spans are replaced with a single `[... N lines omitted ...]` marker.
+   */
+  private _structuralCompactCode(content: string, userPrompt: string, maxChars: number): string {
+    const CONTEXT_LINES = 3;
+
+    const lines = content.split(/\r?\n/);
+    const total = lines.length;
+
+    // Regex patterns for "structural" lines worth always keeping
+    const IMPORT_RE = /^\s*(import\b|from\s+\S+\s+import|require\s*\(|#include|use\s+\w|using\s+\w)/;
+    const SIGNATURE_RE = /^\s*(export\s+)?(default\s+)?(async\s+)?(function\b|class\b|interface\b|type\b|enum\b|const\b|let\b|var\b|def\b|fn\b|pub\s+(fn|struct|enum|trait|impl)\b|struct\b|impl\b|trait\b|abstract\b|override\b|static\b|public\b|private\b|protected\b)[\s<(]/;
+    const METHOD_RE = /^\s{2,}(async\s+)?[\w$#][\w$]*\s*[(<]/;
+    const DECORATOR_RE = /^\s*@[\w]/;
+
+    // Extract meaningful tokens from the user prompt
+    const promptTokens: string[] = [];
+    const seen = new Set<string>();
+    for (const w of (userPrompt.match(/[A-Za-z_$][\w$]*/g) ?? [])) {
+      const lw = w.toLowerCase();
+      if (lw.length > 3 && !seen.has(lw)) {
+        seen.add(lw);
+        promptTokens.push(lw);
+      }
+    }
+
+    const isStructural = (line: string): boolean =>
+      IMPORT_RE.test(line) || SIGNATURE_RE.test(line) || METHOD_RE.test(line) || DECORATOR_RE.test(line);
+
+    const matchesPrompt = (line: string): boolean => {
+      if (promptTokens.length === 0) { return false; }
+      const lower = line.toLowerCase();
+      return promptTokens.some(t => lower.includes(t));
+    };
+
+    // Build a set of line indices to keep
+    const keep = new Set<number>();
+
+    for (let i = 0; i < total; i++) {
+      const line = lines[i];
+      if (isStructural(line)) {
+        keep.add(i);
+      } else if (matchesPrompt(line)) {
+        // Keep the matching line plus surrounding context
+        for (let j = Math.max(0, i - CONTEXT_LINES); j <= Math.min(total - 1, i + CONTEXT_LINES); j++) {
+          keep.add(j);
+        }
+      }
+    }
+
+    // Always keep first few lines (file header / shebang / module doc)
+    for (let i = 0; i < Math.min(5, total); i++) { keep.add(i); }
+
+    // Reconstruct, collapsing omitted spans into markers
+    const output: string[] = [];
+    let omitStart = -1;
+    let omitCount = 0;
+
+    const flushOmit = () => {
+      if (omitCount > 0) {
+        output.push(`[... ${omitCount} line(s) omitted ...]`);
+        omitCount = 0;
+        omitStart = -1;
+      }
+    };
+
+    for (let i = 0; i < total; i++) {
+      if (keep.has(i)) {
+        flushOmit();
+        output.push(lines[i]);
+      } else {
+        omitCount++;
+        if (omitStart === -1) { omitStart = i; }
+      }
+    }
+    flushOmit();
+
+    return output.join('\n');
   }
 
   private async _handleSend(prompt: string): Promise<void> {
@@ -1223,7 +1325,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             if (toolCall.toolName === 'search_file_contents' && !toolResult.result.startsWith('Error') && !toolResult.result.startsWith('No matches')) {
               anySuccessfulSearch = true;
             }
-            const compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result);
+            const compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result, prompt);
             if (compactResult.length !== toolResult.result.length) {
               this._log.appendLine(
                 `[tools] compacted ${toolCall.toolName} result for history: ${toolResult.result.length} -> ${compactResult.length} chars`
