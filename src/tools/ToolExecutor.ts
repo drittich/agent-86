@@ -441,6 +441,10 @@ export class ToolExecutor {
       ? ['Recommended next files:', ...prioritizedCandidates.map(relPath => `- ${relPath}`)].join('\n')
       : '';
 
+    const nextStep = prioritizedCandidates.length > 0
+      ? `Next step: call read_file on the recommended files above — do NOT call list_directory or find_files again.`
+      : `Next step: narrow to the app-owned subdirectory (e.g. web/, src/) with read_file on the entry point.`;
+
     return [
       `${paths.length} file(s) matching "${glob}".`,
       'Broad discovery summary:',
@@ -451,7 +455,7 @@ export class ToolExecutor {
       candidateSection,
       'Sample paths:',
       samplePaths || '- (none)',
-      'Use a narrower recursive glob next (for example: **/*.py, src/**/*.ts, **/package.json) before reading files.'
+      nextStep
     ].filter(Boolean).join('\n');
   }
 

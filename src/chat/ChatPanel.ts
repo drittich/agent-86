@@ -583,24 +583,29 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private _buildDiscoveryRefocusPrompt(): string {
     return [
       'Broad file discovery is complete. Do not keep expanding generic discovery globs.',
-      'Do not search vendor or runtime folders unless there is direct evidence they own the startup path.',
-      'Prioritize application-owned source directories already seen in the workspace, such as web, web/pgadmin, src, app, or server.',
+      'Skip vendor, runtime, and package manager directories (node_modules, site-packages, dist, build, .venv, etc.).',
+      'Using the directory structure already seen in the discovery results, identify the application-owned source directory.',
       'Choose one of these next actions only:',
-      '1. Read 1-2 likely entry-point or initialization files in the application-owned directory, such as web/pgAdmin4.py, web/setup.py, web/version.py, or web/pgadmin/__init__.py.',
-      '2. Run one targeted content search inside that directory for startup, module loading, import scanning, plugin registration, app creation, find_submodules, find_modules, or import_module.',
-      'Do not use broad patterns like **, **/*.py, **/__init__.py, or **/__main__.py again unless there is no application-owned directory available.',
-      'Do not use execute_bash for simple directory discovery when native file tools can answer the question.'
+      '1. Read the most likely entry-point or initialization file in the application-owned directory (e.g. main.py, app.py, index.ts, __init__.py, or a similarly named top-level file).',
+      '2. Run one targeted content search inside the application-owned directory for terms relevant to the task.',
+      'Do not use broad recursive patterns again. Do not use execute_bash for file discovery.'
+    ].join(' ');
+  }
+
+  private _buildContinueReadingPrompt(): string {
+    return [
+      'You read a file and then paused. Do not answer yet — continue using tools.',
+      'Read the next relevant file or run a targeted search to gather more evidence.',
+      'Only answer when you have enough concrete evidence to make a specific recommendation.'
     ].join(' ');
   }
 
   private _buildConcreteReadRefocusPrompt(): string {
     return [
-      'The last result already identified the application-owned area. Continue with tools; do not answer yet.',
-      'Do not call execute_bash.',
-      'Choose one concrete next step only:',
-      '1. Read one likely startup file such as web/pgAdmin4.py, web/setup.py, web/version.py, or web/pgadmin/__init__.py.',
-      '2. Run one targeted search inside web/ or web/pgadmin/ for find_submodules, find_modules, import_module, create_app, blueprint, module, startup, or cache.',
-      'Do not broaden discovery again unless these files are missing.'
+      'Discovery is complete. Continue with tools; do not answer yet.',
+      'Using the directory structure already seen in the results, identify the application-owned source directory and read its entry point or most relevant file.',
+      'If the entry point is unclear, run one targeted content search inside the application-owned directory for terms relevant to the task.',
+      'Do not broaden discovery again. Do not call execute_bash for file discovery.'
     ].join(' ');
   }
 
@@ -834,6 +839,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const MAX_DISCOVERY_REFOCUS = 1;
     let discoveryRefocuses = 0;
     let concreteReadRefocuses = 0;
+    let continueReadingRefocuses = 0;
+    let appOwnedFileReadRounds = 0;
 
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
@@ -921,6 +928,17 @@ export class ChatPanel implements vscode.WebviewViewProvider {
               content: this._buildConcreteReadRefocusPrompt()
             });
             this._postMessage({ type: 'status', text: 'Model paused after discovery — choosing a concrete app file…' });
+            continue;
+          }
+
+          if (appOwnedFileReadRounds > 0 && continueReadingRefocuses < 1) {
+            continueReadingRefocuses++;
+            this._log.appendLine('[tools] empty response after app-owned read — prompting model to continue reading');
+            this._sessions.history.push({
+              role: 'user',
+              content: this._buildContinueReadingPrompt()
+            });
+            this._postMessage({ type: 'status', text: 'Model paused mid-investigation — continuing…' });
             continue;
           }
 
@@ -1125,10 +1143,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           });
 
           // Execute each tool call and collect results
+          const successfulReadTargets = new Set<string>();
           for (const toolCall of pendingToolCalls) {
             this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
             this._postMessage({ type: 'status', text: `Tool: ${toolCall.toolName}…` });
             const toolResult = await toolExecutor.execute(toolCall);
+            if (toolCall.toolName === 'read_file' && !toolResult.result.startsWith('Error')) {
+              successfulReadTargets.add(this._extractToolTarget(toolCall));
+            }
             const compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result);
             if (compactResult.length !== toolResult.result.length) {
               this._log.appendLine(
@@ -1141,6 +1163,13 @@ export class ChatPanel implements vscode.WebviewViewProvider {
               content: compactResult,
               tool_call_id: toolResult.toolCallId,
             });
+          }
+
+          const hadSuccessfulAppOwnedRead = [...successfulReadTargets].some(target =>
+            this._isLikelyAppOwnedPath(target) && !this._isLikelyVendorOrRuntimePath(target)
+          );
+          if (hadSuccessfulAppOwnedRead) {
+            appOwnedFileReadRounds++;
           }
 
           forcePlainTextAnswer = false;

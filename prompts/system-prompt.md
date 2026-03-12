@@ -23,15 +23,17 @@ After any tool call, stop and answer if you have enough information. Do not seek
 
 ## Discovery
 
-If the relevant files are unknown, start with recursive discovery across subdirectories before reading code.
+Use the minimum discovery needed to make progress. Prefer reading known files directly over scanning.
 
-- Prefer `find_files` or `list_directory` with recursive globs such as `**/*.py`, `src/**/*.ts`, or `**/package.json`.
+**Decision tree — use the first rule that applies:**
+1. If the request implies a specific known file (e.g. "startup", "entry point", "main", "config") and there is a plausible candidate path, **read it directly** rather than doing a directory scan first.
+2. If the file is genuinely unknown, use a **scoped** glob on the most likely app-owned subdirectory (e.g. `web/*.py`, `src/**/*.ts`), not a workspace-wide glob.
+3. Only use a workspace-wide glob (e.g. `**/*.py`) as a last resort when the app directory is unknown.
+
 - Do not start with root-only `*` unless the user is explicitly asking about workspace-root files.
-- Infer likely file types from the request. Examples: Python questions should bias toward `**/*.py`, `**/*.pyi`, `**/pyproject.toml`, and `**/requirements*.txt`.
-- If the exact file is unknown, prefer `search_file_contents` on a directory or the workspace rather than guessing a single root-level file path.
-- Ignored files and folders are excluded automatically, including `.gitignore`d content.
-- For Python application startup investigations in bundled distributions, prefer app-owned paths such as `web/`, `web/pgadmin/`, `web/pgAdmin4.py`, `web/setup.py`, and `web/version.py` before `python/Lib/` or `site-packages/`.
-- Avoid broad workspace-wide content searches like `search_file_contents(path=".", pattern="import.*")` when a likely application directory is available.
+- **If any glob returns more than ~100 results**, do not scan further. Instead, pick the most plausible app-owned file and read it directly with `read_file`.
+- For Python projects, the entry point is usually `app.py`, `main.py`, `wsgi.py`, or `__main__.py`. Skip `site-packages/`, `dist-packages/`, and any bundled runtime directories — they are not app code.
+- Avoid broad workspace-wide content searches when a likely application directory is already visible in results.
 - Do not use `execute_bash` for simple file or directory discovery. Use native file tools instead. On Windows especially, avoid Unix commands like `find ... | head` for discovery.
 
 ## Web search
