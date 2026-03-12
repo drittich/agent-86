@@ -455,6 +455,89 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * Detect legacy action syntax in assistant text responses (JSON edits/XML tags).
    * Used as a compatibility fallback when a native-tool model emits legacy format.
    */
+  /**
+   * Parses textual <tool_call> blocks that some local models (e.g. Qwen) emit
+   * instead of using the native tool-calling API.
+   *
+   * Supported format:
+   *   <tool_call>
+   *   <function=tool_name>
+   *   <parameter=key>value</parameter>
+   *   </function>
+   *   </tool_call>
+   *
+   * Also handles compact JSON-in-tool_call:
+   *   <tool_call>
+   *   {"name": "tool_name", "arguments": {...}}
+   *   </tool_call>
+   *
+   * Returns an array of ToolCallEvent (with synthetic toolCallIds) if any are found,
+   * otherwise returns an empty array.
+   */
+  private _parseTextualToolCalls(content: string): ToolCallEvent[] {
+    const results: ToolCallEvent[] = [];
+    // Match each <tool_call>...</tool_call> block
+    const blockRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+    let blockMatch: RegExpExecArray | null;
+    let idCounter = 0;
+
+    while ((blockMatch = blockRe.exec(content)) !== null) {
+      const inner = blockMatch[1].trim();
+
+      // Try JSON format first: {"name": "...", "arguments": {...}} or {"function": "...", "parameters": {...}}
+      if (inner.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(inner) as Record<string, unknown>;
+          const toolName = String(parsed['name'] ?? parsed['function'] ?? '');
+          const args = (parsed['arguments'] ?? parsed['parameters'] ?? {}) as Record<string, unknown>;
+          if (toolName) {
+            results.push({
+              type: 'tool-call',
+              toolCallId: `textual-${Date.now()}-${idCounter++}`,
+              toolName,
+              args,
+            });
+          }
+        } catch {
+          // Not valid JSON — ignore this block
+        }
+        continue;
+      }
+
+      // Try XML format: <function=tool_name> ... </function>
+      const funcMatch = /^<function=([^\s>]+)>([\s\S]*?)<\/function>$/s.exec(inner);
+      if (funcMatch) {
+        const toolName = funcMatch[1].trim();
+        const paramBlock = funcMatch[2];
+        const args: Record<string, unknown> = {};
+
+        const paramRe = /<parameter=([^\s>]+)>([\s\S]*?)<\/parameter>/g;
+        let paramMatch: RegExpExecArray | null;
+        while ((paramMatch = paramRe.exec(paramBlock)) !== null) {
+          const key = paramMatch[1].trim();
+          const rawValue = paramMatch[2].trim();
+          // Try to parse as JSON (for arrays/objects), fall back to string
+          try {
+            args[key] = JSON.parse(rawValue);
+          } catch {
+            args[key] = rawValue;
+          }
+        }
+
+        if (toolName) {
+          results.push({
+            type: 'tool-call',
+            toolCallId: `textual-${Date.now()}-${idCounter++}`,
+            toolName,
+            args,
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+
   private _looksLikeLegacyActionOutput(content: string): boolean {
     const trimmed = content.trimStart();
     if (/^```(?:json|xml)?\s*\n/i.test(trimmed)) {
@@ -1229,6 +1312,24 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
         if (this._userCancelled) {
           break;
+        }
+
+        // Recovery: some local models (e.g. Qwen) drop to textual <tool_call> syntax instead
+        // of using the native API. Parse and salvage those calls before any stall detection.
+        if (nativeToolMode && pendingToolCalls.length === 0 && fullResponse) {
+          const textualCalls = this._parseTextualToolCalls(fullResponse);
+          if (textualCalls.length > 0) {
+            this._log.appendLine(
+              `[tools] recovered ${textualCalls.length} textual tool call(s) from plain-text response`
+            );
+            pendingToolCalls.push(...textualCalls);
+            // Strip the tool-call blocks from the visible response so the user
+            // doesn't see raw XML in the chat output. Keep any surrounding prose.
+            const stripped = fullResponse.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+            if (stripped !== fullResponse) {
+              fullResponse = stripped;
+            }
+          }
         }
 
         // If the model returned empty with no tool calls after tool results, reroute immediately.
