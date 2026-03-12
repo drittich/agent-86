@@ -573,18 +573,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       /^python\/scripts\//.test(target);
   }
 
-  private _isLikelyAppOwnedPath(target: string): boolean {
-    if (!target) {
-      return false;
-    }
-
-    return /^(web|src|app|server|backend|frontend)\//.test(target) ||
-      target === 'web' ||
-      target === 'src' ||
-      target === 'app' ||
-      target === 'server';
-  }
-
   private _normalizeDiscoveryGlob(toolCall: ToolCallEvent): string {
     return String(toolCall.args['glob'] ?? '').trim().toLowerCase();
   }
@@ -860,12 +848,12 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let repetitiveDiscoveryRounds = 0;
     const seenDiscoveryGlobs = new Set<string>();
     let substantiveToolRounds = 0;
-    let appOwnedSubstantiveRounds = 0;
-    let lowValueSubstantiveRounds = 0;
     const MAX_DISCOVERY_REFOCUS = 1;
     let discoveryRefocuses = 0;
     let concreteReadRefocuses = 0;
-    let appOwnedFileReadRounds = 0;
+    let totalFileReadRounds = 0;
+    const MAX_CONCRETE_READ_REFOCUSES = 2;
+    let totalConcreteReadRefocuses = 0;
     let lastToolResultWasError = false;
 
     // Set to true if the provider signals it doesn't support native tools;
@@ -959,27 +947,22 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
           // Level 2: Context-aware nudge — one recovery message chosen by state.
           // Record a placeholder assistant turn first to maintain alternation.
-          if (concreteReadRefocuses < 1) {
+          // Only fires if no file has been read yet AND session-wide cap not exceeded.
+          if (concreteReadRefocuses < 1 && totalConcreteReadRefocuses < MAX_CONCRETE_READ_REFOCUSES && totalFileReadRounds === 0) {
             concreteReadRefocuses++;
+            totalConcreteReadRefocuses++;
             this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
 
             if (lastToolResultWasError) {
               this._log.appendLine('[tools] empty response after failed tool result — prompting model to try a different file');
               this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
               this._postMessage({ type: 'status', text: 'File not found — trying a different approach…' });
-            } else if (appOwnedFileReadRounds === 0) {
+            } else {
               this._log.appendLine('[tools] empty response before any file read — refocusing to a concrete read_file call');
               this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
               this._postMessage({ type: 'status', text: 'Model paused after discovery — choosing a concrete app file…' });
-            } else {
-              // Already has evidence — skip nudge, fall through to final answer
-              concreteReadRefocuses--; // undo increment so Level 3 fires
-              this._sessions.history.pop(); // remove placeholder
             }
-
-            if (concreteReadRefocuses > 0) {
-              continue;
-            }
+            continue;
           }
 
           // Level 3: Final answer mode — compact prompt with tool evidence summary.
@@ -1058,7 +1041,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
         emptyResponseRetries = 0;
         silentRetries = 0;
-        concreteReadRefocuses = 0;
         forcePlainTextAnswer = false;
         nativeFinalAnswerRetries = 0;
 
@@ -1086,15 +1068,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           }
           if (substantiveCalls.length > 0) {
             substantiveToolRounds++;
-            const hadAppOwnedSubstantiveTarget = substantiveCalls.some(tc => {
-              const target = this._extractToolTarget(tc);
-              return this._isLikelyAppOwnedPath(target) && !this._isLikelyVendorOrRuntimePath(target);
-            });
-            if (hadAppOwnedSubstantiveTarget) {
-              appOwnedSubstantiveRounds++;
-            } else {
-              lowValueSubstantiveRounds++;
-            }
           }
 
           const upcomingToolRound = toolRound + 1;
@@ -1117,18 +1090,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             continue;
           }
 
-          const softRoundBudgetExceeded = overToolRoundBudget && (
-            overContextBudget ||
-            (appOwnedSubstantiveRounds > 0 && (tooManyDiscoveryGlobs || excessiveDiscoveryLoop || lowValueSubstantiveRounds >= 2))
-          );
+          const discoveryLoopAfterEvidence = substantiveToolRounds > 0 && (tooManyDiscoveryGlobs || excessiveDiscoveryLoop);
+          const softRoundBudgetExceeded = overToolRoundBudget && (overContextBudget || discoveryLoopAfterEvidence);
 
-          if (!forcePlainTextAnswer && (overContextBudget || softRoundBudgetExceeded || (appOwnedSubstantiveRounds > 0 && (tooManyDiscoveryGlobs || excessiveDiscoveryLoop)))) {
+          if (!forcePlainTextAnswer && (overContextBudget || softRoundBudgetExceeded || discoveryLoopAfterEvidence)) {
             forcePlainTextAnswer = true;
             this._log.appendLine(
               `[tools] switching to final-answer mode before executing more tools ` +
               `(nextToolRound=${upcomingToolRound}, contextTokens=${contextTokens}, contextThreshold=${finalAnswerContextThreshold || 'n/a'}, ` +
-              `seenDiscoveryGlobs=${seenDiscoveryGlobs.size}, repetitiveDiscoveryRounds=${repetitiveDiscoveryRounds}, substantiveToolRounds=${substantiveToolRounds}, ` +
-              `appOwnedSubstantiveRounds=${appOwnedSubstantiveRounds}, lowValueSubstantiveRounds=${lowValueSubstantiveRounds})`
+              `seenDiscoveryGlobs=${seenDiscoveryGlobs.size}, repetitiveDiscoveryRounds=${repetitiveDiscoveryRounds}, substantiveToolRounds=${substantiveToolRounds})`
             );
             this._sessions.history.push({
               role: 'user',
@@ -1136,7 +1106,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
                 noMoreTools: true,
                 mentionUncertainty: true,
                 strictDirectAnswer: true,
-                reason: (appOwnedSubstantiveRounds > 0 && (excessiveDiscoveryLoop || tooManyDiscoveryGlobs || lowValueSubstantiveRounds >= 2))
+                reason: discoveryLoopAfterEvidence
                   ? 'the model is repeating broad file discovery instead of synthesizing'
                   : 'the exploration budget is exhausted'
               })
@@ -1183,6 +1153,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
           // Execute each tool call and collect results
           const successfulReadTargets = new Set<string>();
+          let anySuccessfulSearch = false;
           lastToolResultWasError = false;
           for (const toolCall of pendingToolCalls) {
             this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
@@ -1193,6 +1164,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             }
             if (toolCall.toolName === 'read_file' && !toolResult.result.startsWith('Error')) {
               successfulReadTargets.add(this._extractToolTarget(toolCall));
+            }
+            if (toolCall.toolName === 'search_file_contents' && !toolResult.result.startsWith('Error') && !toolResult.result.startsWith('No matches')) {
+              anySuccessfulSearch = true;
             }
             const compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result);
             if (compactResult.length !== toolResult.result.length) {
@@ -1208,11 +1182,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             });
           }
 
-          const hadSuccessfulAppOwnedRead = [...successfulReadTargets].some(target =>
-            this._isLikelyAppOwnedPath(target) && !this._isLikelyVendorOrRuntimePath(target)
-          );
-          if (hadSuccessfulAppOwnedRead) {
-            appOwnedFileReadRounds++;
+          if (successfulReadTargets.size > 0 || anySuccessfulSearch) {
+            totalFileReadRounds++;
           }
 
           forcePlainTextAnswer = false;
