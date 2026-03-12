@@ -13,7 +13,7 @@ export class ChatPanelSessions {
   private _currentSession: Session;
   private _history: ChatMessage[] = [];
   private _attachedFiles: AttachedFile[] = [];
-  private _thinkingMode = false;
+  private _thinkingMode = true;
   private _includeAgentsMd = false;
   private _systemPrompt?: string;
 
@@ -77,7 +77,7 @@ export class ChatPanelSessions {
       this._currentSession = restored;
       this._history = restored.messages;
       this._attachedFiles = restored.attachments;
-      this._thinkingMode = restored.thinkingMode ?? false;
+      this._thinkingMode = restored.thinkingMode ?? true;
       this._includeAgentsMd = restored.includeAgentsMd ?? false;
       this._systemPrompt = restored.systemPrompt;
     }
@@ -90,7 +90,7 @@ export class ChatPanelSessions {
   newSession(): void {
     this._history = [];
     this._attachedFiles = [];
-    this._thinkingMode = false;
+    this._thinkingMode = true;
     this._includeAgentsMd = false;
     this._systemPrompt = undefined;
     this._currentSession = this.deps.configManager.createSession();
@@ -103,7 +103,7 @@ export class ChatPanelSessions {
   restoreSession(session: Session): void {
     this._history = session.messages;
     this._attachedFiles = session.attachments;
-    this._thinkingMode = session.thinkingMode ?? false;
+    this._thinkingMode = session.thinkingMode ?? true;
     this._includeAgentsMd = session.includeAgentsMd ?? false;
     this._systemPrompt = session.systemPrompt;
     this._currentSession = session;

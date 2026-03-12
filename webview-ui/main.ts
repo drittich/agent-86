@@ -599,7 +599,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     }
 
     case 'checkboxState': {
-      chkThinking.checked = msg.thinkingMode ?? false;
+      chkThinking.checked = msg.thinkingMode ?? true;
       chkAgentsMd.checked = msg.includeAgentsMd ?? false;
       break;
     }

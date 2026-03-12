@@ -129,7 +129,7 @@ export const TEMPLATE_HTML: string = `
       </div>
     </div>
     <div id="thinking-row">
-      <label><input type="checkbox" id="chk-thinking"> Thinking mode</label>
+      <label><input type="checkbox" id="chk-thinking" checked> Thinking mode</label>
       <label id="lbl-agents-md" hidden><input type="checkbox" id="chk-agents-md"> Include AGENTS.md</label>
     </div>
     <div id="composer-actions"></div>
