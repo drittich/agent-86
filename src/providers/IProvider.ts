@@ -52,4 +52,6 @@ export interface StreamOptions {
   extraBody?: Record<string, unknown>;
   /** Native tool definitions to pass to the model. When provided and toolUse is enabled, uses native tool calling. */
   tools?: import('ai').ToolSet;
+  /** Override thinking mode for this request. When false, disables chain-of-thought/thinking (e.g. in answer-only mode). */
+  thinkingMode?: boolean;
 }

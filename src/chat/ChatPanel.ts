@@ -418,8 +418,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * For local llama.cpp-style OpenAI endpoints, send cache hints so repeated turns
    * can reuse KV state when prompts are append-only.
    */
-  private _buildExtraBody(provider: ProviderConfig | undefined, overrideThinking?: boolean): Record<string, unknown> {
-    const enableThinking = overrideThinking !== undefined ? overrideThinking : this._sessions.thinkingMode;
+  private _buildExtraBody(provider: ProviderConfig | undefined, thinkingMode?: boolean): Record<string, unknown> {
+    const enableThinking = thinkingMode ?? this._sessions.thinkingMode;
     const body: Record<string, unknown> = {
       chat_template_kwargs: { enable_thinking: enableThinking }
     };
@@ -1322,12 +1322,13 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
         const pendingToolCalls: ToolCallEvent[] = [];
         const nativeToolMode = useNativeTools && !toolsFallbackActive;
         const bufferPlainTextOnlyResponse = forcePlainTextAnswer;
+        const toolsEnabledThisRound = nativeToolMode && !forcePlainTextAnswer;
+        const thinkingModeThisRound = forcePlainTextAnswer ? false : this._sessions.thinkingMode;
         this._abortController = new AbortController();
 
         this._log.appendLine(
-          `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode}, plainTextOnly=${forcePlainTextAnswer})`
+          `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode}, plainTextOnly=${forcePlainTextAnswer}, thinkingMode=${thinkingModeThisRound})`
         );
-        const toolsEnabledThisRound = nativeToolMode && !forcePlainTextAnswer;
         const messages = this._buildMessages(agentsMdContent, toolsEnabledThisRound);
         const contextTokens = await this._tokenCounter.countMessages(messages);
         const exact = this._tokenCounter.isReady;
@@ -1362,7 +1363,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           },
           {
             tools: toolsEnabledThisRound ? buildAgentTools() : undefined,
-            extraBody: this._buildExtraBody(activeProvider, forcePlainTextAnswer ? false : undefined)
+            thinkingMode: thinkingModeThisRound,
+            extraBody: this._buildExtraBody(activeProvider, thinkingModeThisRound)
           }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
