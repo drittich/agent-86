@@ -336,6 +336,7 @@ export class AIProvider implements IProvider {
           }
         }
         // No underlying error or not a Responses API error - emit as empty response
+        console.log('[AIProvider] AI_NoOutputGeneratedError (silent empty):', rootError.message);
         onEvent({ type: 'done', finishReason: 'stop' });
         return;
       }

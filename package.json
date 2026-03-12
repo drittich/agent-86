@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.1.62",
+  "version": "0.1.64",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -128,7 +128,11 @@
         },
         "agent86.modelTier": {
           "type": "string",
-          "enum": ["small", "balanced", "high"],
+          "enum": [
+            "small",
+            "balanced",
+            "high"
+          ],
           "default": "balanced",
           "description": "Model tier for tool selection policy. 'small' enforces strict search-first with aggressive recovery (9B-class models). 'balanced' is the default for 35B-class models. 'high' allows broader exploration for capable hosted models."
         },
