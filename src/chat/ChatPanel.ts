@@ -646,6 +646,151 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return parts.join(' ');
   }
 
+  /**
+   * Build a compact scratch summary of all tool evidence gathered so far.
+   * Used by _collapseToolHistory to replace messy tool transcripts with a
+   * clean structured block before requesting the final answer.
+   *
+   * Format:
+   *   Files inspected: <list>
+   *   Key findings:
+   *   - <file>: <first meaningful non-empty line from tool result>
+   *   Search hits: <pattern> → <first match line>
+   *   Errors: <any tool errors>
+   *   Task: <original prompt>
+   */
+  private _buildContextScratch(originalPrompt: string): string {
+    const lines: string[] = ['[Research summary]'];
+
+    // Collect tool calls with their paired results
+    const toolCalls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    const toolResults = new Map<string, string>(); // toolCallId → result
+
+    for (const msg of this._sessions.history) {
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          toolCalls.push({ toolName: tc.toolName, input: tc.input ?? {} });
+        }
+      }
+      if (msg.role === 'tool' && msg.tool_call_id) {
+        toolResults.set(msg.tool_call_id, msg.content);
+      }
+    }
+
+    // Gather reads
+    const reads: string[] = [];
+    for (const msg of this._sessions.history) {
+      if (msg.role !== 'assistant' || !msg.tool_calls) { continue; }
+      for (const tc of msg.tool_calls) {
+        if (tc.toolName === 'read_file') {
+          const p = String(tc.input?.['path'] ?? '').replace(/\\/g, '/');
+          if (p && !reads.includes(p)) { reads.push(p); }
+        }
+      }
+    }
+    if (reads.length > 0) {
+      lines.push(`Files inspected: ${reads.join(', ')}`);
+    }
+
+    // Gather key findings: for each file read, pull the first meaningful snippet from result
+    const findingLines: string[] = [];
+    for (const msg of this._sessions.history) {
+      if (msg.role !== 'assistant' || !msg.tool_calls) { continue; }
+      for (const tc of msg.tool_calls) {
+        if (tc.toolName !== 'read_file') { continue; }
+        const filePath = String(tc.input?.['path'] ?? '').replace(/\\/g, '/');
+        if (!filePath) { continue; }
+        // Find the paired tool result
+        const resultMsg = this._sessions.history.find(
+          m => m.role === 'tool' && m.tool_call_id === tc.toolCallId
+        );
+        if (!resultMsg || resultMsg.content.startsWith('Error')) { continue; }
+        // Extract first non-trivial line (skip blank lines and file headers)
+        const snippet = resultMsg.content
+          .split(/\r?\n/)
+          .filter(l => l.trim().length > 10)
+          .slice(0, 3)
+          .join(' | ')
+          .slice(0, 200);
+        if (snippet) {
+          findingLines.push(`- ${filePath}: ${snippet}`);
+        }
+      }
+    }
+    if (findingLines.length > 0) {
+      lines.push('Key findings:');
+      lines.push(...findingLines);
+    }
+
+    // Gather search hits
+    const searchHits: string[] = [];
+    for (const msg of this._sessions.history) {
+      if (msg.role !== 'assistant' || !msg.tool_calls) { continue; }
+      for (const tc of msg.tool_calls) {
+        if (tc.toolName !== 'search_file_contents') { continue; }
+        const pattern = String(tc.input?.['pattern'] ?? '');
+        if (!pattern) { continue; }
+        const resultMsg = this._sessions.history.find(
+          m => m.role === 'tool' && m.tool_call_id === tc.toolCallId
+        );
+        if (!resultMsg) { continue; }
+        if (resultMsg.content.startsWith('Error') || resultMsg.content.startsWith('No matches')) {
+          searchHits.push(`- "${pattern}": no matches`);
+        } else {
+          const firstHit = resultMsg.content.split(/\r?\n/).find(l => l.trim().length > 0) ?? '';
+          searchHits.push(`- "${pattern}": ${firstHit.slice(0, 150)}`);
+        }
+      }
+    }
+    if (searchHits.length > 0) {
+      lines.push('Search hits:');
+      lines.push(...searchHits);
+    }
+
+    // Errors
+    const errors: string[] = [];
+    for (const msg of this._sessions.history) {
+      if (msg.role === 'tool' && (msg.content.startsWith('Error') || msg.content.startsWith('No files matched'))) {
+        const firstLine = msg.content.split(/\r?\n/)[0].slice(0, 120);
+        if (!errors.includes(firstLine)) { errors.push(firstLine); }
+      }
+    }
+    if (errors.length > 0) {
+      lines.push(`Errors encountered: ${errors.join('; ')}`);
+    }
+
+    lines.push(`Task: ${originalPrompt.slice(0, 300)}`);
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Collapse the messy tool transcript into a compact scratch summary.
+   * Strips all assistant+tool turns from history (keeping only the original
+   * user message), then injects the scratch summary as a fresh user message.
+   * This dramatically improves context shape before requesting the final answer.
+   */
+  private _collapseToolHistory(originalPrompt: string): void {
+    const scratch = this._buildContextScratch(originalPrompt);
+
+    // Find the first user message (the original task prompt)
+    const firstUserIdx = this._sessions.history.findIndex(m => m.role === 'user');
+    if (firstUserIdx < 0) { return; }
+
+    const firstUserMsg = this._sessions.history[firstUserIdx];
+
+    // Keep everything before the first user message (should be empty, but safe)
+    const before = this._sessions.history.slice(0, firstUserIdx);
+
+    // Replace everything from the first user message onward with:
+    //   [original user message] + [scratch summary as new user message]
+    this._sessions.history = [
+      ...before,
+      firstUserMsg,
+      { role: 'user', content: scratch },
+    ];
+  }
+
   /** Compact single-line preview for debug logs. */
   private _previewForLog(content: string, maxLen = 300): string {
     const singleLine = content.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
@@ -980,9 +1125,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let toolLimitSummaryRequested = false;
     const MAX_EMPTY_RESPONSE_RETRIES = 1;
     let emptyResponseRetries = 0;
-    const MAX_SILENT_RETRIES = 1;
-    let silentRetries = 0;
-    const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
+const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     let nativeFinalAnswerRetries = 0;
     let forcePlainTextAnswer = false;
     const MAX_UNRECOGNIZED_JSON_RETRIES = 2;
@@ -997,6 +1140,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const MAX_CONCRETE_READ_REFOCUSES = 2;
     let totalConcreteReadRefocuses = 0;
     let lastToolResultWasError = false;
+    // After this many tool rounds, collapse the messy transcript into a compact
+    // scratch summary before requesting the final answer. This improves context
+    // shape for models that stall on long tool transcripts.
+    const SCRATCH_COLLAPSE_THRESHOLD = 4;
+    let scratchCollapsed = false;
 
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
@@ -1071,26 +1219,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           break;
         }
 
-        // If the model returned empty with no tool calls after tool results,
-        // use a 3-level recovery: silent retry → context-aware nudge → final answer.
-        // Minimises injected messages to preserve llama.cpp SWA cache.
+        // If the model returned empty with no tool calls after tool results, reroute immediately.
+        // A silent retry is low-value here: the model has evidence and already decided to produce
+        // nothing — re-sending the same context rarely changes the outcome. Instead synthesize a
+        // state summary and re-ask in answer-only mode (no tools passed to the provider).
         if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && nativeToolMode) {
+          this._log.appendLine(
+            `[metrics] stall_event, toolRound=${toolRound}, taskType=${taskClassification.taskType}, tier=${modelTier}`
+          );
 
-          // Level 1: Silent retry — re-send the exact same prompt (no history change).
-          // Preserves the SWA cache and handles sampling artifacts cheaply.
-          if (silentRetries < MAX_SILENT_RETRIES) {
-            silentRetries++;
-            this._log.appendLine(
-              `[tools] empty response after tool results — silent retry (${silentRetries}/${MAX_SILENT_RETRIES})`
-            );
-            this._log.appendLine(
-              `[metrics] stall_event, toolRound=${toolRound}, taskType=${taskClassification.taskType}, tier=${modelTier}`
-            );
-            this._postMessage({ type: 'status', text: 'Retrying…' });
-            continue;
-          }
-
-          // Level 2: Context-aware nudge — one recovery message chosen by state.
+          // Level 1: Context-aware nudge — one recovery message chosen by state.
           // Record a placeholder assistant turn first to maintain alternation.
           // Only fires if no file has been read yet AND session-wide cap not exceeded.
           if (concreteReadRefocuses < 1 && totalConcreteReadRefocuses < MAX_CONCRETE_READ_REFOCUSES && totalFileReadRounds === 0) {
@@ -1110,14 +1248,23 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             continue;
           }
 
-          // Level 3: Final answer mode — compact prompt with tool evidence summary.
+          // Level 2: Final answer mode — collapse transcript + compact prompt, tools disabled.
           if (nativeFinalAnswerRetries < MAX_NATIVE_FINAL_ANSWER_RETRIES) {
             nativeFinalAnswerRetries++;
             forcePlainTextAnswer = true;
             this._log.appendLine(
-              `[tools] empty response after tool results — retrying final answer (${nativeFinalAnswerRetries}/${MAX_NATIVE_FINAL_ANSWER_RETRIES})`
+              `[tools] empty response after tool results — rerouting to answer-only mode (${nativeFinalAnswerRetries}/${MAX_NATIVE_FINAL_ANSWER_RETRIES})`
             );
-            this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
+            // Collapse the messy tool transcript into a clean scratch summary.
+            // This fixes the poor context shape that causes models to stall.
+            if (!scratchCollapsed && toolRound >= SCRATCH_COLLAPSE_THRESHOLD) {
+              scratchCollapsed = true;
+              this._log.appendLine(`[tools] collapsing tool history into scratch summary (toolRound=${toolRound})`);
+              this._collapseToolHistory(prompt);
+              this._postMessage({ type: 'status', text: 'Summarising research…' });
+            } else {
+              this._sessions.history.push({ role: 'assistant', content: '(thinking)' });
+            }
             this._sessions.history.push({
               role: 'user',
               content: this._buildFinalAnswerPrompt({ compact: true })
@@ -1185,7 +1332,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         }
 
         emptyResponseRetries = 0;
-        silentRetries = 0;
         forcePlainTextAnswer = false;
         nativeFinalAnswerRetries = 0;
 
@@ -1247,6 +1393,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
               `(nextToolRound=${upcomingToolRound}, contextTokens=${contextTokens}, contextThreshold=${finalAnswerContextThreshold || 'n/a'}, ` +
               `seenDiscoveryGlobs=${seenDiscoveryGlobs.size}, repetitiveDiscoveryRounds=${repetitiveDiscoveryRounds}, substantiveToolRounds=${substantiveToolRounds})`
             );
+            // After enough tool rounds the history shape degrades badly (many tool blobs,
+            // compressed code, errors). Collapse it into a clean scratch summary so the
+            // model sees structured findings rather than a messy transcript.
+            if (!scratchCollapsed && toolRound >= SCRATCH_COLLAPSE_THRESHOLD) {
+              scratchCollapsed = true;
+              this._log.appendLine(`[tools] collapsing tool history into scratch summary (toolRound=${toolRound})`);
+              this._collapseToolHistory(prompt);
+              this._postMessage({ type: 'status', text: 'Summarising research…' });
+            }
             this._sessions.history.push({
               role: 'user',
               content: this._buildFinalAnswerPrompt({
