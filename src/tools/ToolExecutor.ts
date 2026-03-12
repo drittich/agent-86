@@ -369,8 +369,95 @@ export class ToolExecutor {
     }
   }
 
+  private _isBroadDiscoveryGlob(glob: string): boolean {
+    const normalized = glob.trim();
+    return normalized === '*' || normalized === '**' || normalized === '**/*' || normalized === '**/*.*';
+  }
+
+  private async _normalizeDirectoryGlob(glob: string): Promise<string> {
+    const trimmed = glob.trim().replace(/\\/g, '/');
+    if (!trimmed || trimmed === '.') {
+      return '**/*';
+    }
+
+    if (/[*?{\[]/.test(trimmed)) {
+      return trimmed;
+    }
+
+    const resolved = resolveEditPath(trimmed, this.wsRoots);
+    if (resolved.error || !resolved.resolvedPath) {
+      return trimmed;
+    }
+
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(resolved.resolvedPath));
+      if ((stat.type & vscode.FileType.Directory) !== 0) {
+        return `${trimmed.replace(/\/+$/, '')}/**/*`;
+      }
+    } catch {
+      // Fall back to the original glob when the path does not exist.
+    }
+
+    return trimmed;
+  }
+
+  private _summarizePaths(paths: string[], glob: string): string {
+    const topLevelCounts = new Map<string, number>();
+    const extensionCounts = new Map<string, number>();
+
+    for (const relPath of paths) {
+      const [topLevel = '(root)'] = relPath.split('/');
+      topLevelCounts.set(topLevel, (topLevelCounts.get(topLevel) ?? 0) + 1);
+
+      const ext = path.extname(relPath).toLowerCase() || '(no extension)';
+      extensionCounts.set(ext, (extensionCounts.get(ext) ?? 0) + 1);
+    }
+
+    const topLevelSummary = Array.from(topLevelCounts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 12)
+      .map(([name, count]) => `- ${name}: ${count}`)
+      .join('\n');
+
+    const extensionSummary = Array.from(extensionCounts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 12)
+      .map(([ext, count]) => `- ${ext}: ${count}`)
+      .join('\n');
+
+    const samplePaths = paths.slice(0, 60).map(relPath => `- ${relPath}`).join('\n');
+
+    const prioritizedCandidates = paths.filter(relPath => {
+      const normalized = relPath.toLowerCase();
+      return normalized === 'web/pgadmin4.py' ||
+        normalized === 'web/setup.py' ||
+        normalized === 'web/version.py' ||
+        normalized === 'web/config.py' ||
+        normalized === 'web/pgadmin/__init__.py' ||
+        normalized.endsWith('/__init__.py');
+    }).slice(0, 12);
+
+    const candidateSection = prioritizedCandidates.length > 0
+      ? ['Recommended next files:', ...prioritizedCandidates.map(relPath => `- ${relPath}`)].join('\n')
+      : '';
+
+    return [
+      `${paths.length} file(s) matching "${glob}".`,
+      'Broad discovery summary:',
+      'Top-level entries:',
+      topLevelSummary || '- (none)',
+      'Most common extensions:',
+      extensionSummary || '- (none)',
+      candidateSection,
+      'Sample paths:',
+      samplePaths || '- (none)',
+      'Use a narrower recursive glob next (for example: **/*.py, src/**/*.ts, **/package.json) before reading files.'
+    ].filter(Boolean).join('\n');
+  }
+
   private async _listDirectory(args: Record<string, unknown>): Promise<string> {
-    const glob = String(args['glob'] ?? '**/*');
+    const requestedGlob = String(args['glob'] ?? '**/*');
+    const glob = await this._normalizeDirectoryGlob(requestedGlob);
     let uris: vscode.Uri[] = [];
     try {
       uris = await vscode.workspace.findFiles(glob, FILE_EXCLUDE_GLOB, 500);
@@ -390,8 +477,13 @@ export class ToolExecutor {
       .filter(p => !this.gitIgnoreFilter.isIgnored(p))
       .sort();
 
-    if (paths.length === 0) { return `No files matched glob: ${glob}`; }
-    return `${paths.length} file(s) matching "${glob}":\n${paths.join('\n')}`;
+    if (paths.length === 0) { return `No files matched glob: ${requestedGlob}`; }
+
+    if (this._isBroadDiscoveryGlob(glob) || paths.length > 200) {
+      return this._summarizePaths(paths, requestedGlob);
+    }
+
+    return `${paths.length} file(s) matching "${requestedGlob}":\n${paths.join('\n')}`;
   }
 
   // ── Code execution ────────────────────────────────────────────────────────

@@ -189,7 +189,9 @@ const STATIC_TOOLS: ToolSet = {
   list_directory: tool({
     description:
       'List files matching a glob pattern within the workspace. ' +
-      'Use specific globs (e.g. src/**/*.ts). Excludes node_modules, .git, dist, build.',
+      'Use recursive globs when the exact path is unknown (for example: **/*.py, src/**/*.ts). ' +
+      'Useful for an initial directory-tree scan before reading code. ' +
+      'Excludes node_modules, .git, dist, build, and gitignored paths.',
     inputSchema: jsonSchema<{
       glob: string;
     }>({
@@ -198,7 +200,7 @@ const STATIC_TOOLS: ToolSet = {
         glob: {
           type: 'string',
           description:
-            'Glob pattern relative to workspace root. Use correct extensions: ' +
+            'Glob pattern relative to workspace root. Use ** to search subdirectories. Use correct extensions: ' +
             'cs for C#, cpp for C++, fs for F# (not c#, c++, f#).'
         }
       },
@@ -212,7 +214,8 @@ const STATIC_TOOLS: ToolSet = {
     description:
       'Execute a shell command in the workspace root. ' +
       'stdout + stderr are captured (capped at 32 KB). Times out after 30 s. ' +
-      'Requires explicit user approval before running.',
+      'Requires explicit user approval before running. ' +
+      'Do not use this for simple file listing, file search, or directory discovery when native file tools can answer the question.',
     inputSchema: jsonSchema<{
       command: string;
     }>({
@@ -230,7 +233,10 @@ const STATIC_TOOLS: ToolSet = {
   // ── Search ────────────────────────────────────────────────────────────────
 
   find_files: tool({
-    description: 'Find files by glob pattern. Returns matching workspace-relative paths.',
+    description:
+      'Find files by glob pattern. Returns matching workspace-relative paths. ' +
+      'Prefer recursive globs when exploring unknown codebases (for example: **/*.py, src/**/*.ts, **/package.json). ' +
+      'Ignored folders and gitignored files are excluded.',
     inputSchema: jsonSchema<{
       glob: string;
     }>({
@@ -238,7 +244,7 @@ const STATIC_TOOLS: ToolSet = {
       properties: {
         glob: {
           type: 'string',
-          description: 'Glob pattern relative to workspace root.'
+          description: 'Glob pattern relative to workspace root. Use ** to search subdirectories.'
         }
       },
       required: ['glob']
@@ -250,6 +256,7 @@ const STATIC_TOOLS: ToolSet = {
       'Search for a regex pattern within a file or directory using ripgrep. ' +
       'Returns matching lines with surrounding context. ' +
       'Use this to find usages, imports, and call sites rather than reading file chunks. ' +
+      'If the exact file is unknown, search a directory or the workspace recursively before guessing a path. ' +
       'WARNING: Results include line-number annotations and markers (e.g. "> 92:") that are NOT in the actual file. ' +
       'Never use search result lines directly as old_str in string_replace — always call read_file on the relevant lines first to get the exact file content.',
     inputSchema: jsonSchema<{

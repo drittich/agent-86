@@ -297,6 +297,72 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
   }
 
+  private _buildDiscoveryHint(prompt: string): string | undefined {
+    const normalized = prompt.toLowerCase();
+    const explicitPathPattern = /(^|\s)([\w.-]+\/)+[\w.-]+/;
+    if (explicitPathPattern.test(prompt)) {
+      return undefined;
+    }
+
+    const globs = new Set<string>();
+
+    if (/\bpython\b|\.py\b|pydantic|django|flask|fastapi|pytest|site-packages/.test(normalized)) {
+      globs.add('**/*.py');
+      globs.add('**/*.pyi');
+      globs.add('**/pyproject.toml');
+      globs.add('**/requirements*.txt');
+
+      if (/\bstartup\b|\blaunch\b|\bbootstrap\b|\bimport\b|\bmodule\b|\bload\b|\bscan\b|\bcache\b/.test(normalized)) {
+        globs.add('web/**/*.py');
+        globs.add('web/pgadmin/**/*.py');
+        globs.add('web/pgAdmin4.py');
+        globs.add('web/setup.py');
+        globs.add('web/version.py');
+      }
+    }
+    if (/\btypescript\b|\bjavascript\b|\bnode\b|\breact\b|\bjsx\b|\btsx\b|\bimport\b|\bnpm\b/.test(normalized)) {
+      globs.add('src/**/*.ts');
+      globs.add('src/**/*.tsx');
+      globs.add('**/*.js');
+      globs.add('**/*.jsx');
+      globs.add('**/package.json');
+      globs.add('**/tsconfig.json');
+    }
+    if (/\bconfig\b|\bstartup\b|\bbuild\b|\blaunch\b|\bbootstrap\b|\bsettings\b/.test(normalized)) {
+      globs.add('**/*.json');
+      globs.add('**/*.yml');
+      globs.add('**/*.yaml');
+      globs.add('**/*.toml');
+    }
+    if (/\bc#\b|\.cs\b|\.sln\b|\.csproj\b/.test(normalized)) {
+      globs.add('**/*.cs');
+      globs.add('**/*.csproj');
+      globs.add('**/*.sln');
+    }
+    if (/\bc\+\+\b|\bcpp\b|\.cpp\b|\.hpp\b|\.cc\b|\.h\b/.test(normalized)) {
+      globs.add('**/*.cpp');
+      globs.add('**/*.hpp');
+      globs.add('**/*.cc');
+      globs.add('**/*.h');
+    }
+
+    if (globs.size === 0) {
+      return undefined;
+    }
+
+    return [
+      '<discovery_hint>',
+      'If the relevant path is unknown, start with recursive discovery across subdirectories.',
+      'Prefer find_files or list_directory with ** globs rather than root-only "*".',
+      'Ignored folders and gitignored files are excluded automatically.',
+      'For Python application startup analysis, prefer app-owned paths like web/ and web/pgadmin/ before bundled runtime or site-packages code.',
+      'Avoid broad workspace-wide content searches such as path="." with generic import patterns when a likely application directory is available.',
+      'Likely relevant globs for this request:',
+      ...Array.from(globs).map(glob => `- ${glob}`),
+      '</discovery_hint>'
+    ].join('\n');
+  }
+
   private _createSystemPrompt(agentsMdContent?: string): string {
     const thinkingMode = this._sessions.thinkingMode;
     const behaviorInstructions = thinkingMode
@@ -404,6 +470,138 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       trimmed.includes('<MOVE>') ||
       trimmed.includes('<DELETE>')
     );
+  }
+
+  /**
+   * Detects assistant replies that are still planning or asking to inspect more
+   * files instead of answering directly from the gathered evidence.
+   */
+  private _looksLikeDeferredAnswer(content: string): boolean {
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    const hasStructuredSections =
+      /(^|\n)Findings:/i.test(trimmed) &&
+      /(^|\n)Recommendation:/i.test(trimmed) &&
+      /(^|\n)Where to change:/i.test(trimmed);
+    if (hasStructuredSections) {
+      return false;
+    }
+
+    if (/\b(let me|i(?:'ll| will)|first\s+check|next\s+i(?:'ll| will)|need to check|need to inspect|i should check|i'll create|i will create)\b/i.test(trimmed)) {
+      return true;
+    }
+
+    if (/(:\s*$|\bcheck the version file\b|\bunderstand the module structure\b)/im.test(trimmed)) {
+      return true;
+    }
+
+    const nonEmptyLines = trimmed
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+    if (nonEmptyLines.length > 0 && nonEmptyLines.every(line => /^[\w./-]+\.[\w]+$/.test(line))) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private _buildFinalAnswerPrompt(options?: {
+    noMoreTools?: boolean;
+    mentionUncertainty?: boolean;
+    strictDirectAnswer?: boolean;
+    reason?: string;
+  }): string {
+    const noMoreTools = options?.noMoreTools ?? true;
+    const mentionUncertainty = options?.mentionUncertainty ?? true;
+    const strictDirectAnswer = options?.strictDirectAnswer ?? false;
+    const reason = options?.reason ? ` Reason: ${options.reason}.` : '';
+
+    return [
+      `Stop exploring.${noMoreTools ? ' Do not call more tools.' : ''}${reason}`,
+      'Using only the information already gathered in this conversation, answer the original question directly now.',
+      strictDirectAnswer
+        ? 'Do not describe more investigation, do not mention checking additional files, and do not propose next steps before answering.'
+        : 'Do not output JSON, XML, or tool syntax.',
+      'Use this exact structure:',
+      'Findings: 2-4 short sentences with concrete observations from the gathered evidence.',
+      'Recommendation: 1-2 short sentences describing the most likely implementation approach.',
+      'Where to change: a short list of the most relevant file path(s) or function(s) already observed.',
+      mentionUncertainty
+        ? 'Uncertainty: one short sentence only if the gathered evidence is insufficient; otherwise write "none".'
+        : 'Uncertainty: none.'
+    ].join(' ');
+  }
+
+  private _isDiscoveryToolCall(toolCall: ToolCallEvent): boolean {
+    return toolCall.toolName === 'find_files' || toolCall.toolName === 'list_directory';
+  }
+
+  private _isSubstantiveToolCall(toolCall: ToolCallEvent): boolean {
+    return toolCall.toolName === 'read_file' || toolCall.toolName === 'search_file_contents';
+  }
+
+  private _extractToolTarget(toolCall: ToolCallEvent): string {
+    if (toolCall.toolName === 'read_file' || toolCall.toolName === 'search_file_contents') {
+      return String(toolCall.args['path'] ?? '').replace(/\\/g, '/').toLowerCase();
+    }
+    if (toolCall.toolName === 'find_files' || toolCall.toolName === 'list_directory') {
+      return String(toolCall.args['glob'] ?? '').replace(/\\/g, '/').toLowerCase();
+    }
+    return '';
+  }
+
+  private _isLikelyVendorOrRuntimePath(target: string): boolean {
+    if (!target) {
+      return false;
+    }
+
+    return /(^|\/)(site-packages|node_modules|dist|build|runtime|venv|\.venv|__pycache__)(\/|$)/.test(target) ||
+      /^python\/lib\//.test(target) ||
+      /^python\/scripts\//.test(target);
+  }
+
+  private _isLikelyAppOwnedPath(target: string): boolean {
+    if (!target) {
+      return false;
+    }
+
+    return /^(web|src|app|server|backend|frontend)\//.test(target) ||
+      target === 'web' ||
+      target === 'src' ||
+      target === 'app' ||
+      target === 'server';
+  }
+
+  private _normalizeDiscoveryGlob(toolCall: ToolCallEvent): string {
+    return String(toolCall.args['glob'] ?? '').trim().toLowerCase();
+  }
+
+  private _buildDiscoveryRefocusPrompt(): string {
+    return [
+      'Broad file discovery is complete. Do not keep expanding generic discovery globs.',
+      'Do not search vendor or runtime folders unless there is direct evidence they own the startup path.',
+      'Prioritize application-owned source directories already seen in the workspace, such as web, web/pgadmin, src, app, or server.',
+      'Choose one of these next actions only:',
+      '1. Read 1-2 likely entry-point or initialization files in the application-owned directory, such as web/pgAdmin4.py, web/setup.py, web/version.py, or web/pgadmin/__init__.py.',
+      '2. Run one targeted content search inside that directory for startup, module loading, import scanning, plugin registration, app creation, find_submodules, find_modules, or import_module.',
+      'Do not use broad patterns like **, **/*.py, **/__init__.py, or **/__main__.py again unless there is no application-owned directory available.',
+      'Do not use execute_bash for simple directory discovery when native file tools can answer the question.'
+    ].join(' ');
+  }
+
+  private _buildConcreteReadRefocusPrompt(): string {
+    return [
+      'The last result already identified the application-owned area. Continue with tools; do not answer yet.',
+      'Do not call execute_bash.',
+      'Choose one concrete next step only:',
+      '1. Read one likely startup file such as web/pgAdmin4.py, web/setup.py, web/version.py, or web/pgadmin/__init__.py.',
+      '2. Run one targeted search inside web/ or web/pgadmin/ for find_submodules, find_modules, import_module, create_app, blueprint, module, startup, or cache.',
+      'Do not broaden discovery again unless these files are missing.'
+    ].join(' ');
   }
 
   /** Compact single-line preview for debug logs. */
@@ -554,6 +752,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       }
     }
 
+    const discoveryHint = this._buildDiscoveryHint(prompt);
+    if (discoveryHint) {
+      userContent = `${userContent}\n\n${discoveryHint}`;
+    }
+
     this._sessions.history.push({ role: 'user', content: userContent, displayContent: prompt });
 
     // Read AGENTS.md once for this send if the user has opted in
@@ -613,17 +816,33 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     // Cap native tool rounds to avoid runaway loops
     const MAX_TOOL_ROUNDS = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRounds') ?? 40;
+    const MAX_EXPLORATION_TOOL_ROUNDS = 6;
     let toolRound = 0;
     let toolLimitSummaryRequested = false;
     const MAX_EMPTY_RESPONSE_RETRIES = 1;
     let emptyResponseRetries = 0;
+    const MAX_NATIVE_FINAL_ANSWER_RETRIES = 2;
+    let nativeFinalAnswerRetries = 0;
+    let forcePlainTextAnswer = false;
     const MAX_UNRECOGNIZED_JSON_RETRIES = 2;
     let unrecognizedJsonRetries = 0;
+    let repetitiveDiscoveryRounds = 0;
+    const seenDiscoveryGlobs = new Set<string>();
+    let substantiveToolRounds = 0;
+    let appOwnedSubstantiveRounds = 0;
+    let lowValueSubstantiveRounds = 0;
+    const MAX_DISCOVERY_REFOCUS = 1;
+    let discoveryRefocuses = 0;
+    let concreteReadRefocuses = 0;
 
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
     let toolsFallbackActive = false;
 
+    const providerContextWindow = Math.max(activeProvider?.context ?? 0, 0);
+    const finalAnswerContextThreshold = providerContextWindow > 0
+      ? Math.floor(providerContextWindow * 0.7)
+      : 0;
 
     const provider = this._getProvider();
 
@@ -632,12 +851,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         let fullResponse = '';
         const pendingToolCalls: ToolCallEvent[] = [];
         const nativeToolMode = useNativeTools && !toolsFallbackActive;
+        const bufferPlainTextOnlyResponse = forcePlainTextAnswer;
         this._abortController = new AbortController();
 
         this._log.appendLine(
-          `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode})`
+          `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode}, plainTextOnly=${forcePlainTextAnswer})`
         );
-        const messages = this._buildMessages(agentsMdContent, nativeToolMode);
+        const toolsEnabledThisRound = nativeToolMode && !forcePlainTextAnswer;
+        const messages = this._buildMessages(agentsMdContent, toolsEnabledThisRound);
         const contextTokens = await this._tokenCounter.countMessages(messages);
         const exact = this._tokenCounter.isReady;
         this._postMessage({
@@ -652,7 +873,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           (event) => {
             if (event.type === 'delta') {
               fullResponse += event.content;
-              this._postMessage({ type: 'delta', content: event.content });
+              if (!bufferPlainTextOnlyResponse) {
+                this._postMessage({ type: 'delta', content: event.content });
+              }
             } else if (event.type === 'tool-call') {
               pendingToolCalls.push(event);
             } else if (event.type === 'done') {
@@ -668,7 +891,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
             }
           },
           {
-            tools: nativeToolMode ? buildAgentTools() : undefined,
+            tools: toolsEnabledThisRound ? buildAgentTools() : undefined,
             extraBody: this._buildExtraBody(activeProvider)
           }
         );
@@ -686,20 +909,50 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         }
 
         // If the model returned empty with no tool calls after we just fed it tool results,
-        // the model can't continue the native tool loop. Fall back to legacy mode.
+        // first retry in native mode with tool calls disabled and an explicit request
+        // for a final plain-text answer. Local models often handle this better than
+        // switching formats mid-turn.
         if (!fullResponse && pendingToolCalls.length === 0 && toolRound > 0 && nativeToolMode) {
-          this._log.appendLine(`[tools] empty response after tool results — falling back to legacy prompt`);
-          toolsFallbackActive = true;
+          if (appOwnedSubstantiveRounds === 0 && concreteReadRefocuses < 1) {
+            concreteReadRefocuses++;
+            this._log.appendLine('[tools] empty response after discovery-only results — refocusing to a concrete app-owned read/search');
+            this._sessions.history.push({
+              role: 'user',
+              content: this._buildConcreteReadRefocusPrompt()
+            });
+            this._postMessage({ type: 'status', text: 'Model paused after discovery — choosing a concrete app file…' });
+            continue;
+          }
 
-          // Prompt the model to summarize findings in plain text while preserving
-          // prior tool context in conversation history.
-          this._sessions.history.push({
-            role: 'user',
-            content: 'The search has completed. Based on the information gathered so far, please respond in plain text with your findings and answer the original question directly. Do not output JSON.'
-          });
+          if (nativeFinalAnswerRetries < MAX_NATIVE_FINAL_ANSWER_RETRIES) {
+            nativeFinalAnswerRetries++;
+            forcePlainTextAnswer = true;
+            this._log.appendLine(
+              `[tools] empty response after tool results — retrying final answer in native mode (${nativeFinalAnswerRetries}/${MAX_NATIVE_FINAL_ANSWER_RETRIES})`
+            );
+            this._sessions.history.push({
+              role: 'user',
+              content: this._buildFinalAnswerPrompt({
+                noMoreTools: true,
+                mentionUncertainty: true,
+                strictDirectAnswer: false,
+                reason: 'the model paused after tool results'
+              })
+            });
 
-          this._postMessage({ type: 'status', text: 'Model cannot continue tool loop — retrying with legacy format…' });
-          continue;
+            this._postMessage({ type: 'status', text: 'Model paused after tool results — retrying final answer in native mode…' });
+            continue;
+          }
+
+          this._log.appendLine(
+            `[tools] empty response after tool results — final-answer retries exhausted (${MAX_NATIVE_FINAL_ANSWER_RETRIES})`
+          );
+          const emptyAfterToolsMsg =
+            '(Model stopped after tool results without producing a final answer. The gathered tool results remain in the conversation history.)';
+          this._postMessage({ type: 'warning', text: 'Model stopped after tool results without producing a final answer.' });
+          this._postMessage({ type: 'delta', content: emptyAfterToolsMsg });
+          finalResponse = emptyAfterToolsMsg;
+          break;
         }
 
 
@@ -718,10 +971,123 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           }
           break;
         }
+
+        if (bufferPlainTextOnlyResponse && pendingToolCalls.length === 0 && this._looksLikeDeferredAnswer(fullResponse)) {
+          this._log.appendLine(
+            `[tools] deferred/non-final answer during final-answer mode (${nativeFinalAnswerRetries}/${MAX_NATIVE_FINAL_ANSWER_RETRIES}): ${this._previewForLog(fullResponse)}`
+          );
+
+          if (nativeFinalAnswerRetries < MAX_NATIVE_FINAL_ANSWER_RETRIES) {
+            nativeFinalAnswerRetries++;
+            forcePlainTextAnswer = true;
+            this._sessions.history.push({
+              role: 'user',
+              content: this._buildFinalAnswerPrompt({
+                noMoreTools: true,
+                mentionUncertainty: true,
+                strictDirectAnswer: true,
+                reason: 'the previous reply was not a direct final answer'
+              })
+            });
+            this._postMessage({ type: 'status', text: 'Model returned a non-final answer — retrying direct answer…' });
+            continue;
+          }
+
+          const invalidFinalAnswerMsg =
+            '(Model did not provide a direct final answer after tool exploration. The gathered tool results remain in the conversation history.)';
+          this._postMessage({ type: 'warning', text: 'Model did not provide a direct final answer.' });
+          this._postMessage({ type: 'delta', content: invalidFinalAnswerMsg });
+          finalResponse = invalidFinalAnswerMsg;
+          break;
+        }
+
         emptyResponseRetries = 0;
+        forcePlainTextAnswer = false;
+        nativeFinalAnswerRetries = 0;
+
+        if (bufferPlainTextOnlyResponse && fullResponse) {
+          this._postMessage({ type: 'delta', content: fullResponse });
+        }
 
         // ── Native tool call loop ────────────────────────────────────────────
         if (nativeToolMode && pendingToolCalls.length > 0 && toolExecutor) {
+          const discoveryCalls = pendingToolCalls.filter(tc => this._isDiscoveryToolCall(tc));
+          const substantiveCalls = pendingToolCalls.filter(tc => this._isSubstantiveToolCall(tc));
+          if (discoveryCalls.length > 0) {
+            let repeatedThisRound = false;
+            for (const toolCall of discoveryCalls) {
+              const normalizedGlob = this._normalizeDiscoveryGlob(toolCall);
+              if (!normalizedGlob) {
+                continue;
+              }
+              if (seenDiscoveryGlobs.has(normalizedGlob)) {
+                repeatedThisRound = true;
+              }
+              seenDiscoveryGlobs.add(normalizedGlob);
+            }
+            repetitiveDiscoveryRounds = repeatedThisRound ? repetitiveDiscoveryRounds + 1 : repetitiveDiscoveryRounds;
+          }
+          if (substantiveCalls.length > 0) {
+            substantiveToolRounds++;
+            const hadAppOwnedSubstantiveTarget = substantiveCalls.some(tc => {
+              const target = this._extractToolTarget(tc);
+              return this._isLikelyAppOwnedPath(target) && !this._isLikelyVendorOrRuntimePath(target);
+            });
+            if (hadAppOwnedSubstantiveTarget) {
+              appOwnedSubstantiveRounds++;
+            } else {
+              lowValueSubstantiveRounds++;
+            }
+          }
+
+          const upcomingToolRound = toolRound + 1;
+          const overToolRoundBudget = upcomingToolRound > MAX_EXPLORATION_TOOL_ROUNDS;
+          const overContextBudget = finalAnswerContextThreshold > 0 && contextTokens >= finalAnswerContextThreshold;
+          const tooManyDiscoveryGlobs = seenDiscoveryGlobs.size >= 4;
+          const excessiveDiscoveryLoop = repetitiveDiscoveryRounds >= 1 && seenDiscoveryGlobs.size >= 3;
+          const discoveryLoopWithoutEvidence = substantiveToolRounds === 0 && (tooManyDiscoveryGlobs || excessiveDiscoveryLoop || (upcomingToolRound >= 3 && discoveryCalls.length > 0));
+          if (!forcePlainTextAnswer && discoveryLoopWithoutEvidence && discoveryRefocuses < MAX_DISCOVERY_REFOCUS) {
+            discoveryRefocuses++;
+            this._log.appendLine(
+              `[tools] broad discovery loop detected before substantive evidence — refocusing ` +
+              `(nextToolRound=${upcomingToolRound}, seenDiscoveryGlobs=${seenDiscoveryGlobs.size}, repetitiveDiscoveryRounds=${repetitiveDiscoveryRounds})`
+            );
+            this._sessions.history.push({
+              role: 'user',
+              content: this._buildDiscoveryRefocusPrompt()
+            });
+            this._postMessage({ type: 'status', text: 'Broad discovery detected — narrowing to app code…' });
+            continue;
+          }
+
+          const softRoundBudgetExceeded = overToolRoundBudget && (
+            overContextBudget ||
+            (appOwnedSubstantiveRounds > 0 && (tooManyDiscoveryGlobs || excessiveDiscoveryLoop || lowValueSubstantiveRounds >= 2))
+          );
+
+          if (!forcePlainTextAnswer && (overContextBudget || softRoundBudgetExceeded || (appOwnedSubstantiveRounds > 0 && (tooManyDiscoveryGlobs || excessiveDiscoveryLoop)))) {
+            forcePlainTextAnswer = true;
+            this._log.appendLine(
+              `[tools] switching to final-answer mode before executing more tools ` +
+              `(nextToolRound=${upcomingToolRound}, contextTokens=${contextTokens}, contextThreshold=${finalAnswerContextThreshold || 'n/a'}, ` +
+              `seenDiscoveryGlobs=${seenDiscoveryGlobs.size}, repetitiveDiscoveryRounds=${repetitiveDiscoveryRounds}, substantiveToolRounds=${substantiveToolRounds}, ` +
+              `appOwnedSubstantiveRounds=${appOwnedSubstantiveRounds}, lowValueSubstantiveRounds=${lowValueSubstantiveRounds})`
+            );
+            this._sessions.history.push({
+              role: 'user',
+              content: this._buildFinalAnswerPrompt({
+                noMoreTools: true,
+                mentionUncertainty: true,
+                strictDirectAnswer: true,
+                reason: (appOwnedSubstantiveRounds > 0 && (excessiveDiscoveryLoop || tooManyDiscoveryGlobs || lowValueSubstantiveRounds >= 2))
+                  ? 'the model is repeating broad file discovery instead of synthesizing'
+                  : 'the exploration budget is exhausted'
+              })
+            });
+            this._postMessage({ type: 'status', text: 'Context budget reached — generating final answer…' });
+            continue;
+          }
+
           toolRound++;
           if (toolRound > MAX_TOOL_ROUNDS) {
             this._log.appendLine(`[tools] tool round limit (${MAX_TOOL_ROUNDS}) reached`);
@@ -776,6 +1142,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
               tool_call_id: toolResult.toolCallId,
             });
           }
+
+          forcePlainTextAnswer = false;
+          nativeFinalAnswerRetries = 0;
 
           continue; // Re-stream with tool results injected
         }

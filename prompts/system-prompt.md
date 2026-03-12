@@ -21,6 +21,19 @@ After any tool call, stop and answer if you have enough information. Do not seek
 - Do not use shell commands to read or edit files when dedicated tools are available.
 - Prefer `list_directory` for structure, `find_files` for discovery, `search_file_contents` for patterns/references, `read_file` for content/metadata, `lsp_get_diagnostics` for diagnostics, and `web_search` / `fetch_url` for external docs.
 
+## Discovery
+
+If the relevant files are unknown, start with recursive discovery across subdirectories before reading code.
+
+- Prefer `find_files` or `list_directory` with recursive globs such as `**/*.py`, `src/**/*.ts`, or `**/package.json`.
+- Do not start with root-only `*` unless the user is explicitly asking about workspace-root files.
+- Infer likely file types from the request. Examples: Python questions should bias toward `**/*.py`, `**/*.pyi`, `**/pyproject.toml`, and `**/requirements*.txt`.
+- If the exact file is unknown, prefer `search_file_contents` on a directory or the workspace rather than guessing a single root-level file path.
+- Ignored files and folders are excluded automatically, including `.gitignore`d content.
+- For Python application startup investigations in bundled distributions, prefer app-owned paths such as `web/`, `web/pgadmin/`, `web/pgAdmin4.py`, `web/setup.py`, and `web/version.py` before `python/Lib/` or `site-packages/`.
+- Avoid broad workspace-wide content searches like `search_file_contents(path=".", pattern="import.*")` when a likely application directory is available.
+- Do not use `execute_bash` for simple file or directory discovery. Use native file tools instead. On Windows especially, avoid Unix commands like `find ... | head` for discovery.
+
 ## Web search
 
 Use `web_search` when current documentation, API references, code examples, or troubleshooting information is needed.

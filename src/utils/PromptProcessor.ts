@@ -118,7 +118,20 @@ ${behaviorInstructions}
 Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in tool calls.
 
 ## Tools
-Use the provided tools to read files, make edits, run commands, and search. Prefer \`search_file_contents\` to verify usages before reading file sections. Use \`read_file\` with a line range when you need a specific section. Use \`string_replace\` for targeted edits.`;
+ Use the provided tools to read files, make edits, run commands, and search. Prefer \`search_file_contents\` to verify usages before reading file sections. Use \`read_file\` with a line range when you need a specific section. Use \`string_replace\` for targeted edits.
+
+ ## Discovery
+ If the relevant files are unknown, start with recursive discovery across subdirectories. Prefer \`find_files\` or \`list_directory\` with \`**\` globs rather than root-only \`*\`.
+
+ Examples:
+ - Python: \`**/*.py\`, \`**/*.pyi\`, \`**/pyproject.toml\`, \`**/requirements*.txt\`
+ - TypeScript / JavaScript: \`src/**/*.ts\`, \`src/**/*.tsx\`, \`**/*.js\`, \`**/*.jsx\`
+ - Config / build files: \`**/package.json\`, \`**/tsconfig.json\`, \`**/*.yml\`, \`**/*.yaml\`
+
+ Ignored files and folders are excluded automatically. If a file path is uncertain, search a directory or the workspace recursively before guessing exact paths.
+
+ ## When to stop calling tools
+ After 2-3 rounds of tool calls without useful results, STOP calling more tools. Instead, answer the user's question directly in plain text, stating what you found (or that nothing relevant was found). Do not keep calling tools indefinitely.`;
 }
 
 /**
@@ -134,6 +147,15 @@ Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version h
 
 ## Requesting data
 Before any file search, resolve workspace-relative paths and confirm existence.
+
+If the relevant files are unknown, start with recursive discovery across subdirectories. Prefer \`request_files\` with \`**\` globs rather than root-only \`*\`.
+
+Examples:
+- Python: \`**/*.py\`, \`**/*.pyi\`, \`**/pyproject.toml\`, \`**/requirements*.txt\`
+- TypeScript / JavaScript: \`src/**/*.ts\`, \`src/**/*.tsx\`, \`**/*.js\`, \`**/*.jsx\`
+- Config / build files: \`**/package.json\`, \`**/tsconfig.json\`, \`**/*.yml\`, \`**/*.yaml\`
+
+Ignored files and folders are excluded automatically. If a file path is uncertain, search a directory or the workspace recursively before guessing exact paths.
 
 Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not combine with \`edits\` or each other):
 
