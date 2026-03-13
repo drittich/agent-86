@@ -480,9 +480,11 @@ export class ToolExecutor {
     if (paths.length === 0) { return `No files matched glob: ${requestedGlob}`; }
 
     if (this._isBroadDiscoveryGlob(glob) || paths.length > 200) {
+      this._activity(`Find: ${requestedGlob} (${paths.length} file(s), broad summary)`);
       return this._summarizePaths(paths, requestedGlob);
     }
 
+    this._activity(`Find: ${requestedGlob} (${paths.length} file(s))`);
     return `${paths.length} file(s) matching "${requestedGlob}":\n${paths.join('\n')}`;
   }
 
@@ -553,8 +555,10 @@ export class ToolExecutor {
       return `Search error: ${error}`;
     }
     if (matchCount === 0) {
+      this._activity(`Search: "${pattern}" in ${relPath || 'workspace'} — no matches`);
       return `No matches found for pattern "${pattern}" in ${relPath || 'workspace'}`;
     }
+    this._activity(`Search: "${pattern}" in ${relPath || 'workspace'} (${matchCount} match(es))`);
     const resultBody = `${matchCount} match(es) for "${pattern}" in ${relPath || 'workspace'}:\n${lines.join('\n')}`;
     // Remind the model that context lines include formatting markers not in the file.
     const isFilePath = !isGlob && !!relPath;
@@ -667,6 +671,7 @@ export class ToolExecutor {
 
     try {
       const output = await runWebSearch({ query, intent, max_results }, httpGet);
+      this._activity(`Search web: "${query}"`);
       return formatWebSearchOutput(query, output);
     } catch (err) {
       return `Error performing web search: ${err instanceof Error ? err.message : String(err)}`;
@@ -705,6 +710,7 @@ export class ToolExecutor {
         .replace(/\n{3,}/g, '\n\n')
         .trim();
 
+      this._activity(`Fetch: ${url}`);
       if (text.length > MAX_BYTES) {
         return text.slice(0, MAX_BYTES) + `\n\n... [content truncated at ${MAX_BYTES} bytes]`;
       }
