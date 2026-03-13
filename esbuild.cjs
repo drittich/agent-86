@@ -46,13 +46,18 @@ async function build() {
     incrementPatchVersion();
   }
 
-  // Extension host bundle (Node/CJS, external: vscode)
+  // Extension host bundle (Node/ESM with code splitting, external: vscode)
+  // ESM format enables esbuild code-splitting so heavy AI SDK packages are loaded
+  // lazily on first use rather than parsed eagerly at extension startup.
   const extensionCtx = await esbuild.context({
     ...baseOptions,
     entryPoints: ['src/extension.ts'],
-    outfile: 'dist/extension.js',
+    outdir: 'dist',
+    outbase: 'src',
+    chunkNames: 'chunks/[name]-[hash]',
     platform: 'node',
-    format: 'cjs',
+    format: 'esm',
+    splitting: true,
     external: ['vscode'],
   });
 

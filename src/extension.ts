@@ -78,60 +78,80 @@ export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel('Agent 86');
   context.subscriptions.push(outputChannel);
 
+  // Resolve rg path eagerly — it's a fast fs.existsSync check, not I/O bound
   const rgPathInfo = initRgPath(context.extensionPath);
   outputChannel.appendLine(`[init] rg path (${rgPathInfo})`);
-  const chatPanel = new ChatPanel(context, outputChannel);
 
   // Register file tree view in the sidebar (only if workspace is open)
   initializeFileTreeView(context);
 
+  // ChatPanel is constructed lazily — only when the webview is first revealed.
+  // Commands that need the panel will trigger reveal(), which constructs it.
+  let chatPanel: ChatPanel | undefined;
+
+  function getOrCreatePanel(): ChatPanel {
+    if (!chatPanel) {
+      chatPanel = new ChatPanel(context, outputChannel);
+    }
+    return chatPanel;
+  }
+
+  // Lazy WebviewViewProvider wrapper — defers ChatPanel construction to first reveal
+  const lazyProvider: vscode.WebviewViewProvider = {
+    resolveWebviewView(webviewView, resolveContext, token) {
+      getOrCreatePanel().resolveWebviewView(webviewView, resolveContext, token);
+    },
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand('agentic.openPanel', () => {
-      chatPanel.reveal();
+      getOrCreatePanel().reveal();
     }),
     vscode.commands.registerCommand('agent86.openPanel', () => {
-      chatPanel.reveal();
+      getOrCreatePanel().reveal();
     }),
     vscode.commands.registerCommand('agentic.newSession', () => {
-      chatPanel.newSession();
+      getOrCreatePanel().newSession();
     }),
     vscode.commands.registerCommand('agent86.newSession', () => {
-      chatPanel.newSession();
+      getOrCreatePanel().newSession();
     }),
     vscode.commands.registerCommand('agent86.openSettings', () => {
-      chatPanel.openSettings();
+      getOrCreatePanel().openSettings();
     }),
     vscode.commands.registerCommand('agentic.attachFiles', async () => {
-      chatPanel.reveal();
+      const panel = getOrCreatePanel();
+      panel.reveal();
       // Use the file tree picker instead of the old dialog
-      const existing = chatPanel.getAttachedFiles();
+      const existing = panel.getAttachedFiles();
       const treeProvider = getFileTreeProvider();
       if (treeProvider && fileTreeView) {
         const updated = await pickAndReadFilesFromTree(existing, treeProvider, fileTreeView);
-        chatPanel.updateAttachedFiles(updated);
+        panel.updateAttachedFiles(updated);
       } else {
         vscode.window.showWarningMessage('Please open a workspace folder to attach files.');
       }
     }),
     vscode.commands.registerCommand('agentic.selectSession', () => {
-      showSessionQuickPick(chatPanel);
+      showSessionQuickPick(getOrCreatePanel());
     }),
     vscode.commands.registerCommand('agent86.selectSession', () => {
-      showSessionQuickPick(chatPanel);
+      showSessionQuickPick(getOrCreatePanel());
     }),
     vscode.commands.registerCommand('agentic.attachActiveEditor', async () => {
-      chatPanel.reveal();
-      const existing = chatPanel.getAttachedFiles();
+      const panel = getOrCreatePanel();
+      panel.reveal();
+      const existing = panel.getAttachedFiles();
       const updated = await readActiveEditor(existing);
       if (updated) {
-        chatPanel.updateAttachedFiles(updated);
+        panel.updateAttachedFiles(updated);
       }
     }),
     vscode.commands.registerCommand('agent86FilePicker.focus', () => {
       // The tree view is visible in the Explorer view under "File Picker"
       // This command is kept for potential future use
     }),
-    vscode.window.registerWebviewViewProvider('agent86.panel', chatPanel, {
+    vscode.window.registerWebviewViewProvider('agent86.panel', lazyProvider, {
       webviewOptions: { retainContextWhenHidden: true },
     })
   );

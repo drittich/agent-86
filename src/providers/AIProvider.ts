@@ -57,31 +57,41 @@ function isResponsesAPIError(err: unknown): boolean {
  */
 export class AIProvider implements IProvider {
   private readonly model: string;
-  private readonly provider: AIProviderInstance;
   private readonly toolUse: boolean;
   private readonly config: ProviderConfig;
-  private chatCompletionsProvider?: AIProviderInstance;
+  // Lazily initialized on first stream() call via createProvider()
+  private _provider: AIProviderInstance | undefined;
+  private _chatCompletionsProvider: AIProviderInstance | undefined;
 
   constructor(config: ProviderConfig, _logger?: unknown) {
     this.model = config.model;
     this.toolUse = config.toolUse ?? true;
     this.config = config;
-    this.provider = createProvider(config);
+  }
+
+  /**
+   * Gets or initializes the primary provider (lazy, async).
+   */
+  private async getProvider(): Promise<AIProviderInstance> {
+    if (!this._provider) {
+      this._provider = await createProvider(this.config);
+    }
+    return this._provider;
   }
 
   /**
    * Gets or creates a provider that uses Chat Completions API (fallback for models
    * that don't support the Responses API).
    */
-  private getChatCompletionsProvider(): AIProviderInstance {
-    if (!this.chatCompletionsProvider) {
-      this.chatCompletionsProvider = createProvider({
+  private async getChatCompletionsProvider(): Promise<AIProviderInstance> {
+    if (!this._chatCompletionsProvider) {
+      this._chatCompletionsProvider = await createProvider({
         ...this.config,
         // Force Chat Completions API instead of Responses API
         useChatCompletions: true
       });
     }
-    return this.chatCompletionsProvider;
+    return this._chatCompletionsProvider;
   }
 
   /**
@@ -186,7 +196,7 @@ export class AIProvider implements IProvider {
     options?: StreamOptions
   ): Promise<void> {
     // Try with default provider (Responses API), fall back to Chat Completions on error
-    await this.doStream(this.provider, messages, signal, onEvent, options, false);
+    await this.doStream(await this.getProvider(), messages, signal, onEvent, options, false);
   }
 
   /**
@@ -285,7 +295,7 @@ export class AIProvider implements IProvider {
       if (streamError && !hasContent && !isFallback && isResponsesAPIError(streamError)) {
         // Retry with Chat Completions API
         console.log('[AIProvider] Responses API error detected, falling back to Chat Completions');
-        await this.doStream(this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
+        await this.doStream(await this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
         return;
       }
 
@@ -333,7 +343,7 @@ export class AIProvider implements IProvider {
           // There's a real error underneath - check if it's a Responses API error
           if (!isFallback && isResponsesAPIError(rootError)) {
             console.log('[AIProvider] Responses API error (from NoOutputGeneratedError), falling back to Chat Completions');
-            await this.doStream(this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
+            await this.doStream(await this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
             return;
           }
         }
@@ -368,7 +378,7 @@ export class AIProvider implements IProvider {
 
       // Responses API error - try fallback with Chat Completions
       console.log('[AIProvider] Responses API error in catch, falling back to Chat Completions');
-      await this.doStream(this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
+      await this.doStream(await this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
     }
   }
 }

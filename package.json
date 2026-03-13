@@ -3,9 +3,9 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.1.67",
+  "version": "0.1.69",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.111.0"
   },
   "categories": [
     "Other"
@@ -13,6 +13,7 @@
   "activationEvents": [
     "onView:agent86.panel"
   ],
+  "type": "module",
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -187,11 +188,11 @@
     "url": "https://github.com/drittich/agent-86"
   },
   "scripts": {
-    "build": "node esbuild.js",
-    "watch": "node esbuild.js --watch",
+    "build": "node esbuild.cjs",
+    "watch": "node esbuild.cjs --watch",
     "typecheck": "tsc --noEmit",
-    "vscode:prepublish": "node esbuild.js --production --bump-version",
-    "version:minor": "node esbuild.js --minor"
+    "vscode:prepublish": "node esbuild.cjs --production --bump-version",
+    "version:minor": "node esbuild.cjs --minor"
   },
   "devDependencies": {
     "@types/marked": "^5.0.2",

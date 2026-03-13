@@ -1,6 +1,3 @@
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createAnthropic } from '@ai-sdk/anthropic';
 import { ProviderConfig } from '../config/ConfigManager';
 
 /**
@@ -11,12 +8,16 @@ export interface OpenAIProviderConfig extends ProviderConfig {
   useChatCompletions?: boolean;
 }
 
-/**
- * Union type representing any Vercel AI SDK provider instance.
- * Different providers (OpenAI, Anthropic, etc.) have different interfaces,
- * so we use a union to handle them all.
- */
-export type AIProviderInstance = ReturnType<typeof createOpenAICompatible> | ReturnType<typeof createOpenAI> | ReturnType<typeof createAnthropic>;
+// Lazy-loaded provider module types — avoids pulling all three SDKs into the
+// extension bundle until the first stream is initiated.
+type OpenAICompatibleModule = typeof import('@ai-sdk/openai-compatible');
+type OpenAIModule = typeof import('@ai-sdk/openai');
+type AnthropicModule = typeof import('@ai-sdk/anthropic');
+
+export type AIProviderInstance =
+  | ReturnType<OpenAICompatibleModule['createOpenAICompatible']>
+  | ReturnType<OpenAIModule['createOpenAI']>
+  | ReturnType<AnthropicModule['createAnthropic']>;
 
 /**
  * Detects which Vercel AI SDK provider factory to use from URL.
@@ -42,8 +43,9 @@ function detectProviderFromUrl(baseUrl: string): string {
 /**
  * Creates a Vercel AI SDK provider instance based on configuration.
  * Auto-detects provider from URL - no explicit provider type needed.
+ * Imports are deferred until first call to avoid loading all AI SDKs at startup.
  */
-export function createProvider(config: OpenAIProviderConfig): AIProviderInstance {
+export async function createProvider(config: OpenAIProviderConfig): Promise<AIProviderInstance> {
   const baseUrl = config.baseUrl;
   const apiKey = config.apiKey ?? 'local';
 
@@ -51,29 +53,35 @@ export function createProvider(config: OpenAIProviderConfig): AIProviderInstance
   const providerType = detectProviderFromUrl(baseUrl);
 
   switch (providerType) {
-    case 'anthropic':
+    case 'anthropic': {
       // Anthropic requires createAnthropic() - different API structure
+      const { createAnthropic } = await import('@ai-sdk/anthropic');
       return createAnthropic({
         apiKey,
         baseURL: baseUrl || 'https://api.anthropic.com'
       });
+    }
 
-    case 'openai':
+    case 'openai': {
       // Official OpenAI API uses createOpenAI()
+      const { createOpenAI } = await import('@ai-sdk/openai');
       return createOpenAI({
         apiKey,
         baseURL: baseUrl || 'https://api.openai.com/v1'
       });
+    }
 
     case 'openai-compatible':
-    default:
+    default: {
       // OpenAI-compatible endpoints use createOpenAICompatible()
       // This includes: OpenRouter, local LLMs (llama-server, LM Studio, Ollama), custom endpoints
       // createOpenAICompatible defaults to Chat Completions API, avoiding Responses API issues
+      const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
       return createOpenAICompatible({
         name: config.name || 'openai-compatible',
         apiKey,
         baseURL: baseUrl || 'http://127.0.0.1:8083/v1'
       });
+    }
   }
 }

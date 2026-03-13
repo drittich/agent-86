@@ -46,7 +46,14 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private readonly _pickResolvers = new Map<string, (indices: number[]) => void>();
   private _pickCounter = 0;
   private readonly _configManager: ConfigManager;
-  private readonly _tokenCounter: TokenCounter;
+  private _tokenCounter: TokenCounter | undefined;
+
+  private get tokenCounter(): TokenCounter {
+    if (!this._tokenCounter) {
+      this._tokenCounter = new TokenCounter();
+    }
+    return this._tokenCounter;
+  }
 
   // Backpressure handling: buffer deltas when webview is hidden
   private _isViewVisible = true;
@@ -54,6 +61,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   // Track active editor state
   private _hasActiveEditor = false;
+
+  // Whether session has been loaded from storage (deferred to first reveal)
+  private _sessionInitialized = false;
 
   // Multi-provider support
   private _activeProviderIndex = 0;
@@ -71,8 +81,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     );
     this._configManager = new ConfigManager(context);
     this._activeProviderIndex = this._configManager.getActiveProviderIndex();
-
-    this._tokenCounter = new TokenCounter();
 
     // Initialize modular components
     this._sessions = new ChatPanelSessions({
@@ -103,12 +111,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       pushHistory: (msg) => this._sessions.history.push(msg),
       saveSession: () => this._sessions.saveCurrentSession(),
     });
-
-    // Restore last session, or start a fresh one
-    const restored = this._sessions.loadLastSession();
-    if (!restored) {
-      this._sessions.newSession();
-    }
 
     // Track active editor state changes
     this._hasActiveEditor = !!vscode.window.activeTextEditor;
@@ -151,6 +153,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         this._flushDeltaBuffer();
       }
     });
+
+    // Restore last session on first reveal, or start a fresh one
+    if (!this._sessionInitialized) {
+      this._sessionInitialized = true;
+      const restored = this._sessions.loadLastSession();
+      if (!restored) {
+        this._sessions.newSession();
+      }
+    }
 
     // Restore UI state from the current session once the webview is ready
     this._restoreSessionUi();
@@ -1330,8 +1341,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode}, plainTextOnly=${forcePlainTextAnswer}, thinkingMode=${thinkingModeThisRound})`
         );
         const messages = this._buildMessages(agentsMdContent, toolsEnabledThisRound);
-        const contextTokens = await this._tokenCounter.countMessages(messages);
-        const exact = this._tokenCounter.isReady;
+        const contextTokens = await this.tokenCounter.countMessages(messages);
+        const exact = this.tokenCounter.isReady;
         this._postMessage({
           type: 'status',
           text:

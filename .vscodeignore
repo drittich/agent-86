@@ -3,7 +3,7 @@ node_modules/**
 src/**
 webview-ui/**
 .gitignore
-esbuild.js
+esbuild.cjs
 tsconfig.json
 **/*.map
 **/*.ts
