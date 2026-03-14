@@ -54,19 +54,22 @@ npm run package
 
 Then reinstall the new `.vsix`.
 
-### Development
+### Development (Preferred Workflow)
 
-For development builds (with sourcemaps, no minification):
-```bash
-npm run build
-```
+The fastest way to develop is using VS Code's Extension Development Host with watch mode. This avoids packaging and manual installation entirely.
 
-For watch mode (auto-rebuilds on file changes):
-```bash
-npm run watch
-```
+1. Start the watch build in a terminal (auto-rebuilds on save):
+   ```bash
+   npm run watch
+   ```
 
-To run in VS Code's Extension Development Host, press `F5` (requires a standard `launch.json` with `extensionDevelopmentPath`).
+2. Press `F5` to launch the Extension Development Host — a second VS Code window opens with the extension loaded from source.
+
+3. Make code changes and save. The watch build rebuilds automatically.
+
+4. Press `Ctrl+Shift+F5` in the dev host window to reload with the updated build.
+
+The repo includes `.vscode/launch.json` and `.vscode/tasks.json` preconfigured for this workflow (gitignored).
 
 ## Configuration
 
