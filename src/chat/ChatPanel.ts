@@ -101,7 +101,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
       requestApproval: (action, payload, reason) => this._requestApproval(action, payload, reason),
       pushHistory: (msg) => this._sessions.history.push(msg),
-      saveSession: () => this._sessions.saveCurrentSession(),
+      saveSession: () => { this._sessions.saveCurrentSession().catch(e => this._log.appendLine(`[save] ${e}`)); },
     });
 
     this._actions = new ChatPanelActions({
@@ -109,7 +109,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
       requestApproval: (action, payload, reason) => this._requestApproval(action, payload, reason),
       pushHistory: (msg) => this._sessions.history.push(msg),
-      saveSession: () => this._sessions.saveCurrentSession(),
+      saveSession: () => { this._sessions.saveCurrentSession().catch(e => this._log.appendLine(`[save] ${e}`)); },
     });
 
     // Track active editor state changes
@@ -122,11 +122,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     );
   }
 
-  public resolveWebviewView(
+  public async resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
-  ): void {
+  ): Promise<void> {
     this._view = webviewView;
 
     const version = this.context.extension.packageJSON.version as string;
@@ -157,10 +157,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     // Restore last session on first reveal, or start a fresh one
     if (!this._sessionInitialized) {
       this._sessionInitialized = true;
-      const restored = this._sessions.loadLastSession();
-      if (!restored) {
-        this._sessions.newSession();
-      }
+      await this._sessions.init();
     }
 
     // Restore UI state from the current session once the webview is ready
@@ -178,7 +175,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     }
   }
 
-  public newSession(): void {
+  public async newSession(): Promise<void> {
     this._abortController?.abort();
     this._abortController = undefined;
     // Reject any pending approval dialogs so their promises settle cleanly
@@ -199,7 +196,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     this._chunks.chunkMeta = new Map();
     // Discard any buffered deltas — the webview is about to clear its output
     this._deltaBuffer = [];
-    this._sessions.newSession();
+    await this._sessions.newSession();
     if (this._view) {
       this._postMessage({ type: 'newSession' });
       this._postMessage({ type: 'attachments', files: [] });
@@ -236,7 +233,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     this._sessions.attachedFiles = files;
     this._postMessage({ type: 'attachments', files });
-    this._sessions.saveCurrentSession();
+    this._sessions.saveCurrentSession().catch(e => this._log.appendLine(`[save] ${e}`));
 
     for (const f of added) {
       this._postMessage({ type: 'tool-activity', label: 'Attached:', detail: f.relativePath });
@@ -1959,7 +1956,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     // Persist session after each completed turn (skip if cancelled mid-stream
     // with no content, to avoid storing an empty assistant turn)
     if (finalResponse || !this._userCancelled) {
-      this._sessions.saveCurrentSession();
+      await this._sessions.saveCurrentSession();
     }
   }
 
@@ -2109,7 +2106,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
         // Update internal state when checkbox is toggled (without sending a message)
         if (message.includeAgentsMd !== undefined) {
           this._sessions.includeAgentsMd = message.includeAgentsMd;
-          this._sessions.saveCurrentSession();
+          this._sessions.saveCurrentSession().catch(e => this._log.appendLine(`[save] ${e}`));
         }
         break;
     }
@@ -2147,7 +2144,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     if (updated) {
       this._sessions.attachedFiles = updated;
       this._postMessage({ type: 'attachments', files: updated });
-      this._sessions.saveCurrentSession();
+      await this._sessions.saveCurrentSession();
     }
   }
 

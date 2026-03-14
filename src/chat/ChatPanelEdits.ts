@@ -10,7 +10,7 @@ export interface EditDeps {
   postMessage: (message: unknown) => void;
   requestApproval: (action: string, payload: unknown, reason?: string) => Promise<boolean>;
   pushHistory: (message: { role: 'user' | 'assistant'; content: string; displayContent?: string }) => void;
-  saveSession: () => void;
+  saveSession: () => void | Promise<void>;
 }
 
 export class ChatPanelEdits {

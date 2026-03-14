@@ -10,15 +10,25 @@ export interface SessionDeps {
 }
 
 export class ChatPanelSessions {
-  private _currentSession: Session;
+  private _currentSession!: Session;
   private _history: ChatMessage[] = [];
   private _attachedFiles: AttachedFile[] = [];
   private _thinkingMode = true;
   private _includeAgentsMd = false;
   private _systemPrompt?: string;
 
-  constructor(private deps: SessionDeps) {
-    this._currentSession = deps.configManager.createSession();
+  constructor(private deps: SessionDeps) {}
+
+  /**
+   * Initialize storage and load or create the active session.
+   * Must be called before any other method.
+   */
+  async init(): Promise<void> {
+    await this.deps.configManager.init();
+    const restored = this.loadLastSession();
+    if (!restored) {
+      await this.newSession();
+    }
   }
 
   public get currentSession(): Session {
@@ -69,7 +79,7 @@ export class ChatPanelSessions {
   }
 
   /**
-   * Load the last session from storage.
+   * Load the last session from the in-memory cache (sync after init).
    */
   loadLastSession(): Session | null {
     const restored = this.deps.configManager.loadLastSession();
@@ -87,14 +97,13 @@ export class ChatPanelSessions {
   /**
    * Create a new session, clearing all state.
    */
-  newSession(): void {
+  async newSession(): Promise<void> {
     this._history = [];
     this._attachedFiles = [];
     this._thinkingMode = true;
     this._includeAgentsMd = false;
     this._systemPrompt = undefined;
-    this._currentSession = this.deps.configManager.createSession();
-    this.saveCurrentSession();
+    this._currentSession = await this.deps.configManager.createSession();
   }
 
   /**
@@ -112,7 +121,7 @@ export class ChatPanelSessions {
   /**
    * Save the current session to storage.
    */
-  saveCurrentSession(): void {
+  async saveCurrentSession(): Promise<void> {
     this._currentSession = {
       ...this._currentSession,
       messages: this._history,
@@ -121,11 +130,11 @@ export class ChatPanelSessions {
       includeAgentsMd: this._includeAgentsMd,
       systemPrompt: this._systemPrompt,
     };
-    this.deps.configManager.saveSession(this._currentSession);
+    await this.deps.configManager.saveSession(this._currentSession);
   }
 
   /**
-   * Get all sessions for the session picker.
+   * Get all sessions for the session picker (sync — reads from cache).
    */
   loadAllSessions(): Session[] {
     return this.deps.configManager.loadAllSessions();

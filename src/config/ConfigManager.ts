@@ -1,10 +1,9 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
+import * as path from 'path';
 import { ChatMessage } from '../providers/IProvider';
 import { AttachedFile } from '../chat/messageProtocol';
 import { ModelTier } from '../agent/ModelProfile';
-
-// Session storage key prefix
-const SESSION_STORAGE_PREFIX = 'agentic.session.';
 
 // ── Provider schema ───────────────────────────────────────────────────────────
 
@@ -30,40 +29,96 @@ export interface Session {
   systemPrompt?: string;
 }
 
-// ── Storage keys ─────────────────────────────────────────────────────────────
-
-const LAST_SESSION_KEY = 'agentic.lastSession';
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function generateId(): string {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Derive a short title from the first user message in a session,
- * falling back to a timestamp-based label.
- */
 function deriveTitle(messages: ChatMessage[], createdAt: number): string {
   const firstUser = messages.find(m => m.role === 'user');
   if (firstUser) {
-    const text = firstUser.content.replace(/\s+/g, ' ').trim();
+    const text = (firstUser.displayContent ?? firstUser.content).replace(/\s+/g, ' ').trim();
     return text.length > 60 ? text.slice(0, 57) + '…' : text;
   }
   return `Session ${new Date(createdAt).toLocaleString()}`;
 }
 
+function isValidSession(raw: unknown): raw is Session {
+  if (!raw || typeof raw !== 'object') { return false; }
+  const c = raw as Partial<Session>;
+  return (
+    typeof c.sessionId === 'string' &&
+    typeof c.title === 'string' &&
+    typeof c.createdAt === 'number' &&
+    Array.isArray(c.messages) &&
+    Array.isArray(c.attachments)
+  );
+}
+
+// ── On-disk file format ───────────────────────────────────────────────────────
+
+interface SessionFile {
+  activeSessionId: string | undefined;
+  sessions: Session[];
+}
+
 // ── ConfigManager ─────────────────────────────────────────────────────────────
 
 export class ConfigManager {
+  private _sessions: Session[] = [];
+  private _activeSessionId: string | undefined;
+  private _workspaceHash!: string;
+  private _sessionsDir!: vscode.Uri;
+  private _sessionFile!: vscode.Uri;
+  private _indexFile!: vscode.Uri;
+
   constructor(private readonly context: vscode.ExtensionContext) {}
 
-  /** Create a new, empty session and persist it as the last session. */
-  createSession(): Session {
-    // Archive the previous session before overwriting
-    const prev = this.loadLastSession();
-    if (prev) { this._archive(prev); }
+  // ── Public async init ──────────────────────────────────────────────────────
 
+  async init(): Promise<void> {
+    const folderPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    this._workspaceHash = crypto
+      .createHash('sha1')
+      .update(folderPath ?? '__no-workspace__')
+      .digest('hex')
+      .slice(0, 8);
+
+    this._sessionsDir = vscode.Uri.joinPath(this.context.globalStorageUri, 'sessions');
+    this._sessionFile = vscode.Uri.joinPath(this._sessionsDir, this._workspaceHash + '.json');
+    this._indexFile = vscode.Uri.joinPath(this._sessionsDir, 'index.json');
+
+    try {
+      await vscode.workspace.fs.createDirectory(this._sessionsDir);
+    } catch {
+      // already exists or unrecoverable — proceed anyway
+    }
+
+    await this._loadFromDisk();
+    await this._migrateFromWorkspaceState();
+  }
+
+  // ── Public API (reads — synchronous after init) ────────────────────────────
+
+  loadLastSession(): Session | undefined {
+    if (this._activeSessionId) {
+      return this._sessions.find(s => s.sessionId === this._activeSessionId);
+    }
+    // Fall back to the most recently created session
+    const sorted = [...this._sessions].sort((a, b) => b.createdAt - a.createdAt);
+    return sorted[0];
+  }
+
+  loadAllSessions(): Session[] {
+    return this._sessions
+      .filter(s => s.messages.some(m => m.role === 'user'))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  // ── Public API (writes — async) ────────────────────────────────────────────
+
+  async createSession(): Promise<Session> {
     const now = Date.now();
     const session: Session = {
       sessionId: generateId(),
@@ -72,50 +127,34 @@ export class ConfigManager {
       messages: [],
       attachments: [],
     };
-    this._persist(session);
+    this._sessions.push(session);
+    this._activeSessionId = session.sessionId;
+    await this._flushToDisk();
     return session;
   }
 
-  /**
-   * Save the current session state.  Automatically updates the title
-   * based on the first user message.
-   */
-  saveSession(session: Session): void {
+  async saveSession(session: Session): Promise<void> {
     const updated: Session = {
       ...session,
       title: deriveTitle(session.messages, session.createdAt),
     };
-    this._persist(updated);
-  }
-
-  /**
-   * Load the most recently persisted session, or `undefined` if none exists.
-   */
-  loadLastSession(): Session | undefined {
-    const raw = this.context.workspaceState.get<unknown>(LAST_SESSION_KEY);
-    if (!raw || typeof raw !== 'object') {
-      return undefined;
+    const idx = this._sessions.findIndex(s => s.sessionId === updated.sessionId);
+    if (idx >= 0) {
+      this._sessions[idx] = updated;
+    } else {
+      this._sessions.push(updated);
     }
-    // Basic shape validation so stale/corrupt data doesn't crash the extension
-    const candidate = raw as Partial<Session>;
-    if (
-      typeof candidate.sessionId !== 'string' ||
-      typeof candidate.title !== 'string' ||
-      typeof candidate.createdAt !== 'number' ||
-      !Array.isArray(candidate.messages) ||
-      !Array.isArray(candidate.attachments)
-    ) {
-      return undefined;
-    }
-    return candidate as Session;
+    this._activeSessionId = updated.sessionId;
+    await this._flushToDisk();
   }
 
-  /** Erase the persisted last session (called on explicit "New Session"). */
-  clearLastSession(): void {
-    this.context.workspaceState.update(LAST_SESSION_KEY, undefined);
+  async clearLastSession(): Promise<void> {
+    this._activeSessionId = undefined;
+    await this._flushToDisk();
   }
 
-  /** Persist the active provider index across sessions. */
+  // ── Provider / settings (unchanged) ───────────────────────────────────────
+
   getActiveProviderIndex(): number {
     return this.context.globalState.get<number>('agentic.activeProviderIndex') ?? 0;
   }
@@ -124,49 +163,6 @@ export class ConfigManager {
     this.context.globalState.update('agentic.activeProviderIndex', index);
   }
 
-  /**
-   * Load all stored sessions (last session + any additional ones).
-   * Returns sessions sorted by creation date (newest first).
-   */
-  loadAllSessions(): Session[] {
-    const sessions: Session[] = [];
-    
-    // Load the last session
-    const lastSession = this.loadLastSession();
-    if (lastSession) {
-      sessions.push(lastSession);
-    }
-    
-    // Load additional sessions from workspace state
-    const allKeys = this.context.workspaceState.keys();
-    for (const key of allKeys) {
-      if (key.startsWith(SESSION_STORAGE_PREFIX) && key !== LAST_SESSION_KEY) {
-        const raw = this.context.workspaceState.get<unknown>(key);
-        if (raw && typeof raw === 'object') {
-          const candidate = raw as Partial<Session>;
-          if (
-            typeof candidate.sessionId === 'string' &&
-            typeof candidate.title === 'string' &&
-            typeof candidate.createdAt === 'number' &&
-            Array.isArray(candidate.messages) &&
-            Array.isArray(candidate.attachments)
-          ) {
-            // Avoid duplicates if lastSession is also stored with a prefix key
-            if (!sessions.find(s => s.sessionId === candidate.sessionId)) {
-              sessions.push(candidate as Session);
-            }
-          }
-        }
-      }
-    }
-    
-    // Sort by creation date, newest first; exclude sessions with no user messages
-    return sessions
-      .filter(s => s.messages.some(m => m.role === 'user'))
-      .sort((a, b) => b.createdAt - a.createdAt);
-  }
-
-  /** Return the configured model tier for tool selection policy. */
   getModelTier(): ModelTier {
     const tier = vscode.workspace.getConfiguration('agent86').get<string>('modelTier') ?? 'balanced';
     if (tier === 'small' || tier === 'balanced' || tier === 'high') {
@@ -175,20 +171,81 @@ export class ConfigManager {
     return 'balanced';
   }
 
-  /**
-   * Archive a session under its prefix key so it appears in history.
-   * Skips empty sessions (no user messages).
-   */
-  private _archive(session: Session): void {
-    const hasContent = session.messages.some(m => m.role === 'user');
-    if (!hasContent) { return; }
-    const key = SESSION_STORAGE_PREFIX + session.sessionId;
-    this.context.workspaceState.update(key, session);
+  // ── Private helpers ────────────────────────────────────────────────────────
+
+  private async _loadFromDisk(): Promise<void> {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(this._sessionFile);
+      const parsed = JSON.parse(Buffer.from(bytes).toString('utf8')) as Partial<SessionFile>;
+      this._sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+      this._activeSessionId = typeof parsed.activeSessionId === 'string'
+        ? parsed.activeSessionId
+        : undefined;
+    } catch {
+      this._sessions = [];
+      this._activeSessionId = undefined;
+    }
   }
 
-  private _persist(session: Session): void {
-    this.context.workspaceState.update(LAST_SESSION_KEY, session);
-    // Also keep an archived copy so loadAllSessions() can find it
-    this._archive(session);
+  private async _flushToDisk(): Promise<void> {
+    try {
+      const data: SessionFile = {
+        activeSessionId: this._activeSessionId,
+        sessions: this._sessions,
+      };
+      const bytes = Buffer.from(JSON.stringify(data, null, 2), 'utf8');
+      await vscode.workspace.fs.writeFile(this._sessionFile, bytes);
+      await this._updateIndex();
+    } catch (err) {
+      // Non-fatal: in-memory state is authoritative for this session lifetime
+    }
+  }
+
+  private async _updateIndex(): Promise<void> {
+    try {
+      let index: Record<string, { path: string; label: string; lastAccessed: string }> = {};
+      try {
+        const bytes = await vscode.workspace.fs.readFile(this._indexFile);
+        index = JSON.parse(Buffer.from(bytes).toString('utf8'));
+      } catch {
+        // index doesn't exist yet — start fresh
+      }
+      const folderPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '__no-workspace__';
+      index[this._workspaceHash] = {
+        path: folderPath,
+        label: folderPath === '__no-workspace__' ? '(no workspace)' : path.basename(folderPath),
+        lastAccessed: new Date().toISOString(),
+      };
+      const bytes = Buffer.from(JSON.stringify(index, null, 2), 'utf8');
+      await vscode.workspace.fs.writeFile(this._indexFile, bytes);
+    } catch {
+      // index update failure is cosmetic
+    }
+  }
+
+  private async _migrateFromWorkspaceState(): Promise<void> {
+    if (this._sessions.length > 0) { return; }
+
+    const sessions: Session[] = [];
+
+    const last = this.context.workspaceState.get<unknown>('agentic.lastSession');
+    if (isValidSession(last)) { sessions.push(last); }
+
+    for (const key of this.context.workspaceState.keys()) {
+      if (key.startsWith('agentic.session.')) {
+        const raw = this.context.workspaceState.get<unknown>(key);
+        if (isValidSession(raw) && !sessions.find(s => s.sessionId === raw.sessionId)) {
+          sessions.push(raw);
+        }
+      }
+    }
+
+    if (sessions.length === 0) { return; }
+
+    this._sessions = sessions;
+    if (isValidSession(last)) {
+      this._activeSessionId = last.sessionId;
+    }
+    await this._flushToDisk();
   }
 }
