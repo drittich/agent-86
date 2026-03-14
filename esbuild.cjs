@@ -58,7 +58,10 @@ async function build() {
     platform: 'node',
     format: 'esm',
     splitting: true,
-    external: ['vscode'],
+    external: ['vscode', 'path', 'fs', 'os', 'crypto', 'stream', 'util', 'events', 'child_process', 'url', 'http', 'https', 'net', 'tls', 'zlib', 'buffer', 'assert', 'module'],
+    banner: {
+      js: `import{createRequire}from'module';import{fileURLToPath}from'url';import{dirname as __pathDirname}from'path';const require=createRequire(import.meta.url);const __filename=fileURLToPath(import.meta.url);const __dirname=__pathDirname(__filename);`,
+    },
   });
 
   // Webview bundle (browser)

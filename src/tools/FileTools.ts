@@ -167,86 +167,28 @@ let fileTreeProviderGlobal: FileTreeDataProvider | undefined;
 
 export async function pickAndReadFilesFromTree(
   existing: AttachedFile[],
-  provider?: FileTreeDataProvider,
-  treeView?: vscode.TreeView<FileTreeItem>
+  _provider?: FileTreeDataProvider,
+  _treeView?: vscode.TreeView<FileTreeItem>
 ): Promise<AttachedFile[]> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders || workspaceFolders.length === 0) {
-    vscode.window.showWarningMessage('No workspace folder is open.');
+  const defaultUri = workspaceFolders?.[0]?.uri;
+
+  const picked = await vscode.window.showOpenDialog({
+    canSelectMany: true,
+    canSelectFiles: true,
+    canSelectFolders: false,
+    openLabel: 'Attach',
+    defaultUri,
+  });
+
+  if (!picked || picked.length === 0) {
     return existing;
   }
 
-  const workspaceRoot = workspaceFolders[0].uri;
-
-  // Use provided provider or create/reuse global one
-  const fileTreeProvider = provider || fileTreeProviderGlobal || new FileTreeDataProvider(workspaceRoot);
-  if (!provider) {
-    fileTreeProviderGlobal = fileTreeProvider;
-  }
-  await fileTreeProvider.refresh();
-
-  // Get currently attached file URIs to mark them as checked
-  const existingUris = new Set(existing.map((f: AttachedFile) => f.uri));
-  for (const uri of existingUris) {
-    fileTreeProvider.toggleCheck(vscode.Uri.parse(uri));
-  }
-  await fileTreeProvider.refresh();
-
-  // Use provided tree view or create/reuse global one
-  const currentTreeView = treeView || fileTreeView;
-  
-  // If no tree view provided, we can't proceed with interactive selection
-  if (!currentTreeView) {
-    vscode.window.showWarningMessage('File tree view not available. Please use the Attach Files button from the extension.');
-    return existing;
-  }
-
-  // Create buttons for confirm/cancel
-  const btnConfirm = 'Confirm Selection';
-  const btnCancel = 'Cancel';
-
-  // Show a message prompting user to select files from the tree view
-  const selection = await vscode.window.showInformationMessage(
-    'Select files from the file tree in the Explorer, then click Confirm.',
-    { modal: false },
-    btnConfirm,
-    btnCancel
-  );
-
-  if (selection === btnCancel || !selection) {
-    return existing;
-  }
-
-  // Get checked items from tree view selection or provider checked items
-  const selectedItems = currentTreeView.selection;
-  let selectedUris: vscode.Uri[] = [];
-  
-  if (selectedItems.length > 0) {
-    selectedUris = selectedItems.filter(item => item.isFile).map(item => item.uri);
-  } else {
-    selectedUris = fileTreeProvider.getCheckedItems();
-  }
-
-  if (selectedUris.length === 0) {
-    vscode.window.showWarningMessage('No files selected. Check the files you want to attach in the file tree.');
-    return existing;
-  }
-
-  // Filter to only files (not directories)
-  const fileUris: vscode.Uri[] = [];
-  for (const uri of selectedUris) {
-    try {
-      const stat = await vscode.workspace.fs.stat(uri);
-      if (stat.type === vscode.FileType.File) {
-        fileUris.push(uri);
-      }
-    } catch {
-      // Skip files that can't be stat'd
-    }
-  }
+  const fileUris = picked;
 
   // Build the result
-  const wsRoots = workspaceFolders.map(f => f.uri.fsPath);
+  const wsRoots = workspaceFolders?.map(f => f.uri.fsPath) ?? [];
   const result: AttachedFile[] = [...existing];
   const resultUris = new Set(result.map((f: AttachedFile) => f.uri));
 
