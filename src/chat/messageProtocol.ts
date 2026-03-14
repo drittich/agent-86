@@ -9,7 +9,7 @@ export interface TokenUsage {
 // Messages sent from the extension host to the webview
 export type ExtensionToWebview =
   | { type: 'delta'; content: string }
-  | { type: 'done'; usage?: TokenUsage; cancelled?: boolean; finishReason?: string }
+  | { type: 'done'; usage?: TokenUsage; cancelled?: boolean; finishReason?: string; contextTokens?: number }
   | { type: 'warning'; text: string }
   | { type: 'error'; message: string }
   | { type: 'status'; text: string }
