@@ -21,6 +21,7 @@ import {
   renderProvidersList,
   renderModelDropdown,
   setProviderStatus,
+  getProviderStatus,
   openProviderForm,
   closeProviderForm,
   setProviders,
@@ -413,6 +414,13 @@ modelSelect.addEventListener('change', () => {
   }
 });
 
+// Re-check provider health when dropdown closes while status is offline
+modelSelect.addEventListener('blur', () => {
+  if (getProviderStatus() === 'offline') {
+    triggerProviderStatusCheck();
+  }
+});
+
 // ── Copy actions ──────────────────────────────────────────────────────────────
 
 /**
@@ -455,9 +463,20 @@ btnCopyRaw.addEventListener('click', async () => {
   }
 });
 
+let pendingSend: { prompt: string; thinkingMode: boolean; includeAgentsMd: boolean } | null = null;
+
 function sendPrompt(): void {
   const prompt = promptInput.value.trim();
   if (!prompt || isGenerating) { return; }
+
+  if (getProviderStatus() === 'offline') {
+    // Re-check before giving up — store the pending send and trigger a health check
+    pendingSend = { prompt, thinkingMode: chkThinking.checked, includeAgentsMd: chkAgentsMd.checked };
+    setProviderStatus('checking');
+    vscode.postMessage({ type: 'selectModel', providerIndex: activeProviderIndex });
+    return;
+  }
+
   setStatus('');
   setGenerating(true);
   insertUserPrompt(prompt);
@@ -648,6 +667,20 @@ window.addEventListener('message', (event: MessageEvent) => {
     case 'providerStatus': {
       if (msg.status) {
         setProviderStatus(msg.status);
+        if (pendingSend) {
+          const ps = pendingSend;
+          pendingSend = null;
+          if (msg.status === 'online') {
+            setStatus('');
+            setGenerating(true);
+            insertUserPrompt(ps.prompt);
+            vscode.postMessage({ type: 'send', prompt: ps.prompt, thinkingMode: ps.thinkingMode, includeAgentsMd: ps.includeAgentsMd });
+            promptInput.value = '';
+            promptInput.style.height = '';
+          } else if (msg.status === 'offline') {
+            setStatus('Model is offline — request not sent.');
+          }
+        }
       }
       break;
     }

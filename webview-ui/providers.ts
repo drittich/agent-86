@@ -21,6 +21,7 @@ export interface ProviderConfig {
 export let providers: ProviderConfig[] = [];
 export let activeProviderIndex = 0;
 let editingProviderIndex = -1; // -1 = adding new
+let currentProviderStatus: 'online' | 'offline' | 'checking' | 'unknown' = 'unknown';
 
 // DOM refs — set by initProviders()
 let providersList: HTMLUListElement;
@@ -143,9 +144,14 @@ export function renderModelDropdown(): void {
 }
 
 export function setProviderStatus(status: 'online' | 'offline' | 'checking' | 'unknown'): void {
+  currentProviderStatus = status;
   providerStatusDot.className = `status-dot status-${status}`;
   const labels: Record<string, string> = { online: 'Online', offline: 'Offline', checking: 'Checking...', unknown: 'Unknown' };
   providerStatusDot.title = labels[status] ?? 'Unknown';
+}
+
+export function getProviderStatus(): 'online' | 'offline' | 'checking' | 'unknown' {
+  return currentProviderStatus;
 }
 
 export function updateProviderStatusVisibility(): void {
