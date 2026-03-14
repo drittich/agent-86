@@ -2171,6 +2171,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
    * the webview so the UI reflects a restored session after a VS Code restart.
    */
   private _restoreSessionUi(): void {
+    // Clear the existing chat output before replaying the restored session
+    this._postMessage({ type: 'newSession' });
     // Send the current editor state
     this._postMessage({ type: 'editorState', hasActiveEditor: this._hasActiveEditor });
     // Send checkbox states so the UI reflects the restored session
