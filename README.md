@@ -63,11 +63,11 @@ The fastest way to develop is using VS Code's Extension Development Host with wa
    npm run watch
    ```
 
-2. Press `F5` to launch the Extension Development Host — a second VS Code window opens with the extension loaded from source.
+2. Press `F5` to open the test window — a second VS Code window where you can run and test the extension.
 
 3. Make code changes and save. The watch build rebuilds automatically.
 
-4. Press `Ctrl+Shift+F5` in the dev host window to reload with the updated build.
+4. Press `Ctrl+Shift+F5` in **your editor** (not the test window) to restart the test window with the updated build.
 
 The repo includes `.vscode/launch.json` and `.vscode/tasks.json` preconfigured for this workflow (gitignored).
 
