@@ -524,7 +524,10 @@ window.addEventListener('message', (event: MessageEvent) => {
     apiKey?: string;
     providers?: ProviderConfig[];
     activeProviderIndex?: number;
+    label?: string;
+    detail?: string;
     providerName?: string;
+    maxToolRounds?: number;
     status?: 'online' | 'offline' | 'checking';
   };
 
