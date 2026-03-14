@@ -160,8 +160,10 @@ export class ConfigManager {
       }
     }
     
-    // Sort by creation date, newest first
-    return sessions.sort((a, b) => b.createdAt - a.createdAt);
+    // Sort by creation date, newest first; exclude sessions with no user messages
+    return sessions
+      .filter(s => s.messages.some(m => m.role === 'user'))
+      .sort((a, b) => b.createdAt - a.createdAt);
   }
 
   /** Return the configured model tier for tool selection policy. */
