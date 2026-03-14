@@ -111,8 +111,15 @@ export function renderProvidersList(): void {
       vscodeApi.postMessage({ type: 'saveSettings', providers });
       renderProvidersList();
       renderModelDropdown();
+      triggerProviderStatusCheck();
     });
   });
+}
+
+export function triggerProviderStatusCheck(): void {
+  if (providers.length === 0) { return; }
+  setProviderStatus('checking');
+  vscodeApi.postMessage({ type: 'selectModel', providerIndex: activeProviderIndex });
 }
 
 export function renderModelDropdown(): void {

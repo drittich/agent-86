@@ -26,6 +26,7 @@ import {
   setProviders,
   setActiveProviderIndex,
   getEditingProviderIndex,
+  triggerProviderStatusCheck,
   providers,
   activeProviderIndex,
   type ProviderConfig,
@@ -399,6 +400,7 @@ btnPfSave.addEventListener('click', () => {
   renderProvidersList();
   renderModelDropdown();
   closeProviderForm();
+  triggerProviderStatusCheck();
 });
 
 // Model dropdown selection
