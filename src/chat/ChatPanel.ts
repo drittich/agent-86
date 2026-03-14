@@ -186,6 +186,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       this._approvalResolvers.delete(id);
       resolve(false);
     }
+    // Settle any pending question/pick resolvers so their promises don't leak
+    for (const [id, resolve] of this._questionResolvers) {
+      this._questionResolvers.delete(id);
+      resolve('');
+    }
+    for (const [id, resolve] of this._pickResolvers) {
+      this._pickResolvers.delete(id);
+      resolve([]);
+    }
     this._injectedFileUris = new Set();
     this._chunks.chunkMeta = new Map();
     // Discard any buffered deltas — the webview is about to clear its output

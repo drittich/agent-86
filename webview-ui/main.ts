@@ -605,6 +605,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     }
 
     case 'newSession': {
+      setGenerating(false);
       clearOutput();
       approvalsContainer.innerHTML = '';
       attachedFiles = [];
