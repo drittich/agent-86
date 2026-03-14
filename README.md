@@ -19,147 +19,54 @@ A VS Code extension that provides a local LLM-powered agentic coding assistant w
 - [Visual Studio Code](https://code.visualstudio.com/) (v1.85.0 or later)
 - A local LLM server with OpenAI-compatible API (e.g., llama.cpp, ollama, vLLM)
 
-## Building the Extension
+## Building and Installing
 
-### 1. Clone the Repository
+### Prerequisites
 
+Install the `@vscode/vsce` packaging tool globally:
 ```bash
-git clone <repository-url>
-cd vscode-agent-extension
+npm install -g @vscode/vsce
 ```
 
-### 2. Install Dependencies
+### Packaging for Sideloading
 
 ```bash
-npm install
+npm run package
 ```
 
-### 3. Build the Extension
+This single command installs dependencies, type-checks the source, builds a production bundle (minified, no sourcemaps), auto-bumps the patch version, and produces a `.vsix` file.
 
-For development (with source maps):
+### Installing the VSIX
+
+In VS Code: **Extensions** (`Ctrl+Shift+X`) → `...` menu → **Install from VSIX...** → select the `.vsix` file.
+
+Or from the command line:
+```bash
+code --install-extension agent-86-x.y.z.vsix
+```
+
+### Updating
+
+```bash
+git pull origin main
+npm run package
+```
+
+Then reinstall the new `.vsix`.
+
+### Development
+
+For development builds (with sourcemaps, no minification):
 ```bash
 npm run build
 ```
 
-For production (minified):
-```bash
-npm run vscode:prepublish
-```
-
-For development with watch mode:
+For watch mode (auto-rebuilds on file changes):
 ```bash
 npm run watch
 ```
 
-### 4. Type Check (Optional)
-
-```bash
-npm run typecheck
-```
-
-## Sideloading the Extension
-
-### Method 1: Using VS Code Debug (Recommended for Development)
-
-1. Create a `.vscode/launch.json` file in the project root with the following content:
-   ```json
-   {
-     "version": "0.2.0",
-     "configurations": [
-       {
-         "name": "Run Extension",
-         "type": "extensionHost",
-         "request": "launch",
-         "args": [
-           "--extensionDevelopmentPath=${workspaceFolder}"
-         ],
-         "outFiles": ["${workspaceFolder}/dist/**/*.js"],
-         "preLaunchTask": "npm: build"
-       }
-     ]
-   }
-   ```
-
-2. (Optional) Create a `.vscode/tasks.json` for the build task:
-   ```json
-   {
-     "version": "2.0.0",
-     "tasks": [
-       {
-         "type": "npm",
-         "script": "build",
-         "problemMatcher": ["$tsc"],
-         "isBackground": false,
-         "presentation": {
-           "reveal": "silent"
-         },
-         "group": {
-           "kind": "build",
-           "isDefault": true
-         }
-       }
-     ]
-   }
-   ```
-
-3. Open the project in VS Code
-4. Press `F5` or go to **Run and Debug** from the sidebar
-5. Select **Run Extension** from the debug configuration dropdown
-6. This will open a new VS Code Extension Development Host window with the extension loaded
-
-### Method 2: Manual Installation from VSIX
-
-1. Install the `@vscode/vsce` tool globally:
-   ```bash
-   npm install -g @vscode/vsce
-   ```
-
-2. Package the extension:
-   ```bash
-   vsce package
-   ```
-   This creates a `.vsix` file in the project directory.
-
-3. Install in VS Code:
-   - Open VS Code
-   - Go to **Extensions** view (`Ctrl+Shift+X` or `Cmd+Shift+X`)
-   - Click the `...` menu in the top-right of the Extensions panel
-   - Select **Install from VSIX...**
-   - Choose the generated `.vsix` file
-
-Alternatively, from the command line:
-```bash
-code --install-extension vscode-agent-extension-0.0.1.vsix
-```
-
-## Updating the Extension
-
-### When a New Version is Released
-
-1. **Pull the latest changes**:
-   ```bash
-   git pull origin main
-   ```
-
-2. **Update dependencies** (if `package.json` or `package-lock.json` changed):
-   ```bash
-   npm install
-   ```
-
-3. **Rebuild the extension**:
-   ```bash
-   npm run build
-   ```
-
-4. **Reload the extension**:
-   - If using Extension Development Host: Restart the debug session (`Ctrl+Shift+F5` or `Cmd+Shift+F5`)
-   - If installed from VSIX: Repackage and reinstall following the steps in [Method 2: Manual Installation from VSIX](#method-2-manual-installation-from-vsix)
-
-### Updating the Version Number
-
-When releasing a new version, update the `version` field in [`package.json`](package.json:5) and the `.vsix` filename will be updated automatically.
-
-Then rebuild and repackage.
+To run in VS Code's Extension Development Host, press `F5` (requires a standard `launch.json` with `extensionDevelopmentPath`).
 
 ## Configuration
 
@@ -295,14 +202,6 @@ vscode-agent-extension/
 ├── package.json              # Extension manifest
 └── tsconfig.json             # TypeScript configuration
 ```
-
-### Building for Production
-
-```bash
-npm run vscode:prepublish
-```
-
-This creates minified bundles without source maps, suitable for distribution.
 
 ## License
 

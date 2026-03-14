@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.1.75",
+  "version": "0.2.3",
   "engines": {
     "vscode": "^1.111.0"
   },
@@ -192,7 +192,8 @@
     "watch": "node esbuild.cjs --watch",
     "typecheck": "tsc --noEmit",
     "vscode:prepublish": "node esbuild.cjs --production --bump-version",
-    "version:minor": "node esbuild.cjs --minor"
+    "version:minor": "node esbuild.cjs --minor",
+    "package": "npm install && npm run typecheck && vsce package"
   },
   "devDependencies": {
     "@types/marked": "^5.0.2",
