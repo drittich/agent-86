@@ -60,6 +60,10 @@ export class ConfigManager {
 
   /** Create a new, empty session and persist it as the last session. */
   createSession(): Session {
+    // Archive the previous session before overwriting
+    const prev = this.loadLastSession();
+    if (prev) { this._archive(prev); }
+
     const now = Date.now();
     const session: Session = {
       sessionId: generateId(),
@@ -169,7 +173,20 @@ export class ConfigManager {
     return 'balanced';
   }
 
+  /**
+   * Archive a session under its prefix key so it appears in history.
+   * Skips empty sessions (no user messages).
+   */
+  private _archive(session: Session): void {
+    const hasContent = session.messages.some(m => m.role === 'user');
+    if (!hasContent) { return; }
+    const key = SESSION_STORAGE_PREFIX + session.sessionId;
+    this.context.workspaceState.update(key, session);
+  }
+
   private _persist(session: Session): void {
     this.context.workspaceState.update(LAST_SESSION_KEY, session);
+    // Also keep an archived copy so loadAllSessions() can find it
+    this._archive(session);
   }
 }
