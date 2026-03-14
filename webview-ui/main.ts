@@ -670,7 +670,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     case 'providerStatus': {
       if (msg.status) {
         setProviderStatus(msg.status);
-        if (pendingSend) {
+        if (pendingSend && msg.status !== 'checking') {
           const ps = pendingSend;
           pendingSend = null;
           if (msg.status === 'online') {
