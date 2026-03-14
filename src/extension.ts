@@ -1,37 +1,7 @@
 import * as vscode from 'vscode';
 import { ChatPanel } from './chat/ChatPanel';
-import { Session } from './config/ConfigManager';
 import { FileTreeDataProvider, pickAndReadFilesFromTree, readActiveEditor } from './tools/FileTools';
 import { initRgPath } from './tools/ChunkManager';
-
-// Quick-pick for sessions
-async function showSessionQuickPick(chatPanel: ChatPanel): Promise<void> {
-  const configManager = chatPanel.getConfigManager();
-  const sessions = configManager.loadAllSessions();
-  if (!sessions || sessions.length === 0) {
-    vscode.window.showInformationMessage('No sessions found.');
-    return;
-  }
-
-  const items: vscode.QuickPickItem[] = sessions.map((s: Session) => ({
-    label: s.title,
-    description: new Date(s.createdAt).toLocaleString()
-  }));
-
-  const selected = await vscode.window.showQuickPick(items, {
-    placeHolder: 'Select a session to restore',
-    matchOnDescription: true
-  });
-
-  if (selected) {
-    // Find the selected session
-    const selectedSession = sessions.find((s: Session) => s.title === selected.label);
-    if (selectedSession) {
-      chatPanel.restoreSession(selectedSession);
-      vscode.window.showInformationMessage(`Restored session: ${selectedSession.title}`);
-    }
-  }
-}
 
 // File tree provider instance - shared across the extension
 let fileTreeProvider: FileTreeDataProvider | undefined;
@@ -133,10 +103,10 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand('agentic.selectSession', () => {
-      showSessionQuickPick(getOrCreatePanel());
+      getOrCreatePanel().showSessionHistory();
     }),
     vscode.commands.registerCommand('agent86.selectSession', () => {
-      showSessionQuickPick(getOrCreatePanel());
+      getOrCreatePanel().showSessionHistory();
     }),
     vscode.commands.registerCommand('agentic.attachActiveEditor', async () => {
       const panel = getOrCreatePanel();

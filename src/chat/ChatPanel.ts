@@ -257,6 +257,13 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Show the in-panel session history overlay (called from the toolbar button).
+   */
+  public showSessionHistory(): void {
+    this._postSessionsToWebview();
+  }
+
+  /**
    * Get the ConfigManager instance (used by quick-pick).
    */
   public getConfigManager(): ConfigManager {
