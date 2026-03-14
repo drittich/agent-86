@@ -491,6 +491,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     prompt?: string;
     options?: string[];
     usage?: TokenUsage;
+    contextTokens?: number;
     cancelled?: boolean;
     finishReason?: string;
     hasActiveEditor?: boolean;
@@ -528,14 +529,17 @@ window.addEventListener('message', (event: MessageEvent) => {
       if (msg.cancelled) {
         approvalsContainer.innerHTML = '';
         setStatusBadge('cancelled', 'Cancelled');
-      } else if (msg.usage) {
-        const u = msg.usage;
-        const fr = msg.finishReason;
-        const frSuffix = fr ? ` · ${fr}` : '';
-        setStatusBadge('completed', 'Done', `${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} + ${u.completionTokens.toLocaleString()})${frSuffix}`);
       } else {
         const fr = msg.finishReason;
-        setStatusBadge('completed', 'Done', fr || undefined);
+        const frSuffix = fr ? ` · ${fr}` : '';
+        const u = msg.usage;
+        if (u && u.totalTokens > 0) {
+          setStatusBadge('completed', 'Done', `${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} + ${u.completionTokens.toLocaleString()})${frSuffix}`);
+        } else if (msg.contextTokens) {
+          setStatusBadge('completed', 'Done', `~${msg.contextTokens.toLocaleString()} ctx tokens${frSuffix}`);
+        } else {
+          setStatusBadge('completed', 'Done', fr || undefined);
+        }
       }
       break;
 

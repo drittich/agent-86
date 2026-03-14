@@ -1291,6 +1291,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let finalResponse = '';
     let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
     let lastFinishReason: string | undefined;
+    let lastContextTokens: number | undefined;
 
     // Cap native tool rounds to avoid runaway loops
     const MAX_TOOL_ROUNDS = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRounds') ?? 40;
@@ -1351,6 +1352,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
         );
         const messages = this._buildMessages(agentsMdContent, toolsEnabledThisRound);
         const contextTokens = await this.tokenCounter.countMessages(messages);
+        lastContextTokens = contextTokens;
         const exact = this.tokenCounter.isReady;
         this._postMessage({
           type: 'status',
@@ -1908,7 +1910,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
       // Post 'done' exactly once after all rounds complete
       if (!this._userCancelled) {
-        this._postMessage({ type: 'done', usage: lastUsage, finishReason: lastFinishReason });
+        this._postMessage({ type: 'done', usage: lastUsage, finishReason: lastFinishReason, contextTokens: lastContextTokens });
       }
 
       // If the model response was truncated, surface an explicit warning.
