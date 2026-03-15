@@ -656,18 +656,40 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const strictDirectAnswer = options?.strictDirectAnswer ?? false;
     const reason = options?.reason ? ` Reason: ${options.reason}.` : '';
 
+    const actionTools = new Set(['write_file', 'string_replace', 'copy_file', 'move_file', 'delete_file', 'create_directory', 'execute_bash']);
+    const usedActionTool = this._sessions.history.some(
+      msg => msg.role === 'assistant' && msg.tool_calls?.some(tc => actionTools.has(tc.toolName))
+    );
+
+    const preamble = `Stop.${noMoreTools ? ' Do not call more tools.' : ''}${reason} Summarize what was done in plain text.`;
+    const noPropose = strictDirectAnswer
+      ? 'Do not describe more investigation, do not mention checking additional files, and do not propose further steps before answering.'
+      : 'Do not output JSON, XML, or tool syntax.';
+
+    if (usedActionTool) {
+      // Action task: model wrote/edited/ran commands — describe what was done, not where to change.
+      return [
+        preamble,
+        noPropose,
+        'Use this exact structure:',
+        'Done: 1-3 short sentences stating exactly what was changed or executed.',
+        mentionUncertainty
+          ? 'Issues: write "none" if everything succeeded, otherwise one short sentence describing any problem or partial failure.'
+          : 'Issues: none.'
+      ].join(' ');
+    }
+
+    // Research task: model only read/searched — describe findings and where to act.
     return [
       `Stop exploring.${noMoreTools ? ' Do not call more tools.' : ''}${reason}`,
       'Using only the information already gathered in this conversation, answer the original question directly now.',
-      strictDirectAnswer
-        ? 'Do not describe more investigation, do not mention checking additional files, and do not propose next steps before answering.'
-        : 'Do not output JSON, XML, or tool syntax.',
+      noPropose,
       'Use this exact structure:',
       'Findings: 2-4 short sentences with concrete observations from the gathered evidence.',
       'Recommendation: 1-2 short sentences describing the most likely implementation approach.',
       'Where to change: a short list of the most relevant file path(s) or function(s) already observed.',
       mentionUncertainty
-        ? 'Uncertainty: one short sentence only if the gathered evidence is insufficient; otherwise write "none".'
+        ? 'Uncertainty: write "none" unless evidence is clearly insufficient, in which case write one short sentence explaining what is missing.'
         : 'Uncertainty: none.'
     ].join(' ');
   }
