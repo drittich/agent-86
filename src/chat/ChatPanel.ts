@@ -717,9 +717,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * Key: normalized path. Value: array of covered ranges [{start, end}].
    * A missing start_line/end_line is treated as full-file (0 → Infinity).
    */
-  private _buildReadFileCache(): Map<string, Array<{ start: number; end: number }>> {
+  private _buildReadFileCache(fromIndex = 0): Map<string, Array<{ start: number; end: number }>> {
     const cache = new Map<string, Array<{ start: number; end: number }>>();
-    for (const msg of this._sessions.history) {
+    for (const msg of this._sessions.history.slice(fromIndex)) {
       if (msg.role === 'assistant' && msg.tool_calls) {
         for (const tc of msg.tool_calls) {
           if (tc.toolName === 'read_file') {
@@ -1352,6 +1352,11 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     const SCRATCH_COLLAPSE_THRESHOLD = 4;
     let scratchCollapsed = false;
 
+    // Snapshot history length at turn start so the duplicate-read guard only
+    // considers reads made within this turn, not from prior turns whose tool
+    // results may have been compacted out of context.
+    const turnHistoryStartIndex = this._sessions.history.length;
+
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
     let toolsFallbackActive = false;
@@ -1747,7 +1752,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           let anySuccessfulSearch = false;
           lastToolResultWasError = false;
           // Snapshot of files already read before this round (used for duplicate-read guard)
-          const readCache = this._buildReadFileCache();
+          const readCache = this._buildReadFileCache(turnHistoryStartIndex);
           for (const toolCall of pendingToolCalls) {
             this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
             this._postMessage({ type: 'status', text: `Tool: ${toolCall.toolName}…` });
