@@ -31,15 +31,14 @@ const NODE_EXTERNALS = [
 ];
 
 // CJS compatibility shims injected at the top of every ESM chunk.
-// VS Code's extension host is ESM-capable but some runtime APIs (e.g. require,
-// __dirname) still come from the CJS world, so we polyfill them.
+// tiktoken's CJS code (inlined by the bundler) uses __dirname to locate its
+// WASM file, so we must polyfill it. The banner uses _vite_ prefixed helpers
+// to avoid colliding with Rolldown's own imports from the same modules.
 const CJS_BANNER =
-  `import{createRequire}from'module';` +
-  `import{fileURLToPath}from'url';` +
-  `import{dirname as __pathDirname}from'path';` +
-  `const require=createRequire(import.meta.url);` +
-  `const __filename=fileURLToPath(import.meta.url);` +
-  `const __dirname=__pathDirname(__filename);`;
+  `import{fileURLToPath as _viteFileURLToPath}from'url';` +
+  `import{dirname as _viteDirname}from'path';` +
+  `const __filename=_viteFileURLToPath(import.meta.url);` +
+  `const __dirname=_viteDirname(__filename);`;
 
 // ---------------------------------------------------------------------------
 // Version bumping
@@ -113,6 +112,11 @@ function bundleTiktokenWasm(): void {
 const extensionConfig: InlineConfig = {
   configFile: false,
   root: __dirname,
+  ssr: {
+    // Bundle all npm packages into the output — the packaged .vsix excludes
+    // node_modules, so everything must be inlined.
+    noExternal: true,
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -163,7 +167,6 @@ async function main(): Promise<void> {
   }
 
   bundleRipgrepBinary();
-  bundleTiktokenWasm();
 
   if (isWatch) {
     // In watch mode run both builds concurrently; each returns a watcher.
@@ -171,11 +174,15 @@ async function main(): Promise<void> {
       build({ ...extensionConfig }),
       build({ ...webviewConfig }),
     ]);
+    // Copy WASM after builds so emptyOutDir doesn't delete it.
+    bundleTiktokenWasm();
     console.log('[build] watching for changes…');
   } else {
     // Sequential: extension first (clears dist/), then webview (emptyOutDir: false).
     await build(extensionConfig);
     await build(webviewConfig);
+    // Copy WASM after builds so emptyOutDir doesn't delete it.
+    bundleTiktokenWasm();
   }
 }
 
