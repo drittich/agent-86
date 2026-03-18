@@ -1477,7 +1477,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             this._sessions.history.push({
               role: 'user',
               content:
-                'You have search results above. Pick the single most relevant file and call read_file on it now. Do not summarize yet.'
+                'You have search results above. Pick the single most relevant file and call read_file on it now. Do not summarize yet.',
+              internal: true,
             });
             this._postMessage({ type: 'status', text: 'Nudging model to select a file…' });
             continue;
@@ -1500,15 +1501,15 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
             if (lastToolResultWasError) {
               this._log.appendLine('[tools] empty response after failed tool result — prompting model to try a different file');
-              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
+              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt(), internal: true });
               this._postMessage({ type: 'status', text: 'File not found — trying a different approach…' });
             } else if (searchStall) {
               this._log.appendLine('[tools] empty response after broad search — nudging model to read a specific file');
-              this._sessions.history.push({ role: 'user', content: this._buildSearchStallRefocusPrompt() });
+              this._sessions.history.push({ role: 'user', content: this._buildSearchStallRefocusPrompt(), internal: true });
               this._postMessage({ type: 'status', text: 'Model paused after search — choosing a concrete file to read…' });
             } else {
               this._log.appendLine('[tools] empty response before any file read — refocusing to a concrete read_file call');
-              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt() });
+              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt(), internal: true });
               this._postMessage({ type: 'status', text: 'Model paused after discovery — choosing a concrete app file…' });
             }
             continue;
@@ -1526,7 +1527,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             this._sessions.history.push({
               role: 'user',
               content:
-                'You have search results. Continue the investigation. If needed, call one tool to inspect the most relevant file. Do not summarize yet.'
+                'You have search results. Continue the investigation. If needed, call one tool to inspect the most relevant file. Do not summarize yet.',
+              internal: true,
             });
             this._postMessage({ type: 'status', text: 'Continuing investigation…' });
             continue;
@@ -1550,7 +1552,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             }
             this._sessions.history.push({
               role: 'user',
-              content: this._buildFinalAnswerPrompt({ compact: true })
+              content: this._buildFinalAnswerPrompt({ compact: true }),
+              internal: true,
             });
             this._postMessage({ type: 'status', text: 'Requesting final answer…' });
             continue;
@@ -1573,7 +1576,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           if (!this._userCancelled && emptyResponseRetries < MAX_EMPTY_RESPONSE_RETRIES) {
             emptyResponseRetries++;
             this._log.appendLine(`[stream] empty response (retry ${emptyResponseRetries}/${MAX_EMPTY_RESPONSE_RETRIES})`);
-            this._sessions.history.push({ role: 'user', content: 'Please continue.' });
+            this._sessions.history.push({ role: 'user', content: 'Please continue.', internal: true });
             continue;
           }
           if (!this._userCancelled) {
@@ -1600,7 +1603,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
                 mentionUncertainty: true,
                 strictDirectAnswer: true,
                 reason: 'the previous reply was not a direct final answer'
-              })
+              }),
+              internal: true,
             });
             this._postMessage({ type: 'status', text: 'Model returned a non-final answer — retrying direct answer…' });
             continue;
@@ -1660,7 +1664,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             );
             this._sessions.history.push({
               role: 'user',
-              content: this._buildDiscoveryRefocusPrompt()
+              content: this._buildDiscoveryRefocusPrompt(),
+              internal: true,
             });
             this._postMessage({ type: 'status', text: 'Broad discovery detected — narrowing to app code…' });
             continue;
@@ -1694,7 +1699,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
                 reason: discoveryLoopAfterEvidence
                   ? 'the model is repeating broad file discovery instead of synthesizing'
                   : 'the exploration budget is exhausted'
-              })
+              }),
+              internal: true,
             });
             this._postMessage({ type: 'status', text: 'Context budget reached — generating final answer…' });
             continue;
@@ -1710,6 +1716,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
                 role: 'user',
                 content:
                   'Tool call limit reached. Do not call more tools. Using the gathered tool results already in this conversation, provide the best possible final answer in plain text.',
+                internal: true,
               });
               this._postMessage({ type: 'status', text: 'Tool call limit reached — generating final answer…' });
               continue;
@@ -1838,7 +1845,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           const fileResult = await this._chunks.processFileRequests(fullResponse, wsRoots, MAX_FILE_ROUNDS, fileRound);
           if (!fileResult.done && fileResult.content) {
             fileRound = fileResult.nextRound;
-            this._sessions.history.push({ role: 'user', content: fileResult.content });
+            this._sessions.history.push({ role: 'user', content: fileResult.content, internal: true });
             continue;
           }
 
@@ -1864,13 +1871,14 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
               content:
                 '<tool_guidance>For usage/import/reference checks, use local ripgrep via search_file first.' +
                 ' Request chunks only after search hits if exact surrounding code is still needed.</tool_guidance>',
+              internal: true,
             });
             continue;
           }
 
           if (!searchResult.done && searchResult.content) {
             searchRound = searchResult.nextRound;
-            this._sessions.history.push({ role: 'user', content: searchResult.content });
+            this._sessions.history.push({ role: 'user', content: searchResult.content, internal: true });
             continue;
           }
 
@@ -1894,14 +1902,14 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
           if (chunkResult.noOp && chunkResult.content) {
             chunkNoOpRounds = chunkResult.nextNoOpRounds;
-            this._sessions.history.push({ role: 'user', content: chunkResult.content });
+            this._sessions.history.push({ role: 'user', content: chunkResult.content, internal: true });
             continue;
           }
 
           if (!chunkResult.done && chunkResult.content) {
             chunkRound = chunkResult.nextRound;
             chunkNoOpRounds = chunkResult.nextNoOpRounds;
-            this._sessions.history.push({ role: 'user', content: chunkResult.content });
+            this._sessions.history.push({ role: 'user', content: chunkResult.content, internal: true });
             continue;
           }
 
@@ -1924,6 +1932,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
                   '{"request_files":[{"glob":"**/*.ts","reason":"..."}]}, ' +
                   '{"request_chunks":[{"uri":"path","preferred":{"near_line":1,"max_chunks":1}}]}. ' +
                   'Do not output other JSON keys.</tool_guidance>',
+                internal: true,
               });
             }
             // If retry limit exceeded, fall through to break with current response
@@ -2218,6 +2227,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
       // Replay the conversation as a series of delta messages followed by done,
       // so the existing output area rendering logic is reused without changes.
       for (const msg of this._sessions.history) {
+        if (msg.internal) { continue; }
         if (msg.role === 'user') {
           const display = msg.displayContent ?? msg.content;
           this._postMessage({ type: 'userPrompt', content: display });

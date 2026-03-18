@@ -12,6 +12,8 @@ export interface ChatMessage {
   tool_calls?: ToolCallRef[];
   /** Human-readable display text (omits injected file chunks). Used for session restore. */
   displayContent?: string;
+  /** When true, this message was injected by the extension (steering nudge, tool result, etc.) and should not be rendered in the UI. */
+  internal?: boolean;
 }
 
 export interface ProviderUsage {
