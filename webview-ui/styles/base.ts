@@ -824,8 +824,21 @@ export const BASE_CSS: string = `
   }
 
   .history-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     font-size: 11px;
     color: var(--vscode-descriptionForeground);
+  }
+
+  .history-item-meta-sep {
+    opacity: 0.4;
+    user-select: none;
+  }
+
+  .history-item-duration {
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.75;
   }
 
   .history-empty {

@@ -251,7 +251,16 @@ function closeSettings(): void {
 
 // ── History panel ─────────────────────────────────────────────────────────────
 
-interface SessionSummary { sessionId: string; title: string; createdAt: number; messageCount: number; }
+interface SessionSummary { sessionId: string; title: string; createdAt: number; updatedAt?: number; messageCount: number; }
+
+function formatDuration(startMs: number, endMs: number): string {
+  const mins = Math.round((endMs - startMs) / 60000);
+  if (mins < 1) { return '<1 min'; }
+  if (mins < 60) { return `${mins} min`; }
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem === 0 ? `${hrs} hr` : `${hrs} hr ${rem} min`;
+}
 
 let _historySessions: SessionSummary[] = [];
 
@@ -293,11 +302,24 @@ function renderHistoryList(): void {
     prompt.className = 'history-item-title';
     const raw = s.title.replace(/\s+/g, ' ').trim();
     prompt.textContent = raw.length > 72 ? raw.slice(0, 69) + '…' : raw;
-    const time = document.createElement('div');
-    time.className = 'history-item-meta';
-    time.textContent = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    const meta = document.createElement('div');
+    meta.className = 'history-item-meta';
+    const timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    const timeSpan = document.createElement('span');
+    timeSpan.textContent = timeStr;
+    meta.appendChild(timeSpan);
+    if (s.updatedAt && s.updatedAt > s.createdAt) {
+      const sep = document.createElement('span');
+      sep.className = 'history-item-meta-sep';
+      sep.textContent = '·';
+      const dur = document.createElement('span');
+      dur.className = 'history-item-duration';
+      dur.textContent = formatDuration(s.createdAt, s.updatedAt);
+      meta.appendChild(sep);
+      meta.appendChild(dur);
+    }
     li.appendChild(prompt);
-    li.appendChild(time);
+    li.appendChild(meta);
     const restore = () => {
       closeHistoryPanel();
       vscode.postMessage({ type: 'restoreSession', sessionId: s.sessionId });

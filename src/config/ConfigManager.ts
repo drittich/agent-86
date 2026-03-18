@@ -22,6 +22,7 @@ export interface Session {
   sessionId: string;
   title: string;
   createdAt: number; // Unix ms
+  updatedAt?: number; // Unix ms — set on save
   messages: ChatMessage[];
   attachments: AttachedFile[];
   thinkingMode?: boolean;
@@ -137,6 +138,7 @@ export class ConfigManager {
     const updated: Session = {
       ...session,
       title: deriveTitle(session.messages, session.createdAt),
+      updatedAt: Date.now(),
     };
     const idx = this._sessions.findIndex(s => s.sessionId === updated.sessionId);
     if (idx >= 0) {

@@ -2249,6 +2249,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
       sessionId: s.sessionId,
       title: s.title,
       createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
       messageCount: s.messages.length,
     }));
     this._postMessage({ type: 'sessions', sessions: summaries });
