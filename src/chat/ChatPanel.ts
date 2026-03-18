@@ -2234,7 +2234,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
   }
 
   private _postSessionsToWebview(): void {
-    const all = this._sessions.loadAllSessions();
+    const all = this._sessions.loadAllSessions().slice(0, 10);
     const summaries = all.map(s => ({
       sessionId: s.sessionId,
       title: s.title,

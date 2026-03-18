@@ -274,19 +274,30 @@ function renderHistoryList(): void {
     historyList.appendChild(empty);
     return;
   }
+  let lastDateLabel = '';
   for (const s of _historySessions) {
+    const d = new Date(s.createdAt);
+    const dateLabel = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    if (dateLabel !== lastDateLabel) {
+      lastDateLabel = dateLabel;
+      const sep = document.createElement('li');
+      sep.className = 'history-date-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      sep.textContent = dateLabel;
+      historyList.appendChild(sep);
+    }
     const li = document.createElement('li');
     li.setAttribute('role', 'button');
     li.tabIndex = 0;
-    const title = document.createElement('div');
-    title.className = 'history-item-title';
-    title.textContent = s.title;
-    const meta = document.createElement('div');
-    meta.className = 'history-item-meta';
-    const date = new Date(s.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    meta.textContent = `${date}`;
-    li.appendChild(title);
-    li.appendChild(meta);
+    const prompt = document.createElement('div');
+    prompt.className = 'history-item-title';
+    const raw = s.title.replace(/\s+/g, ' ').trim();
+    prompt.textContent = raw.length > 72 ? raw.slice(0, 69) + '…' : raw;
+    const time = document.createElement('div');
+    time.className = 'history-item-meta';
+    time.textContent = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    li.appendChild(prompt);
+    li.appendChild(time);
     const restore = () => {
       closeHistoryPanel();
       vscode.postMessage({ type: 'restoreSession', sessionId: s.sessionId });

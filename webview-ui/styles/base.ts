@@ -798,8 +798,21 @@ export const BASE_CSS: string = `
     transition: background 0.1s ease;
   }
   #history-list li:last-child { border-bottom: none; }
-  #history-list li:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
-  #history-list li:active { background: var(--vscode-list-activeSelectionBackground, #094771); }
+  #history-list li:not(.history-date-sep):hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+  #history-list li:not(.history-date-sep):active { background: var(--vscode-list-activeSelectionBackground, #094771); }
+
+  .history-date-sep {
+    padding: 4px 12px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground);
+    background: var(--vscode-sideBarSectionHeader-background, transparent);
+    cursor: default;
+    pointer-events: none;
+    border-bottom: 1px solid var(--vscode-widget-border, #454545);
+  }
 
   .history-item-title {
     font-size: 13px;
