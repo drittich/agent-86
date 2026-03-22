@@ -702,12 +702,73 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return toolCall.toolName === 'read_file' || toolCall.toolName === 'search_file_contents';
   }
 
+  private _normalizeToolPath(target: string): string {
+    return target.replace(/\\/g, '/').replace(/^\.\/?/, '').trim().toLowerCase();
+  }
+
+  private _dedupePaths(paths: Iterable<string>): string[] {
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (const rawPath of paths) {
+      const normalizedPath = rawPath.replace(/\\/g, '/').replace(/^\.\/?/, '').trim();
+      if (!normalizedPath) { continue; }
+      const lookup = normalizedPath.toLowerCase();
+      if (seen.has(lookup)) { continue; }
+      seen.add(lookup);
+      deduped.push(normalizedPath);
+    }
+    return deduped;
+  }
+
+  private _extractSearchHitPaths(searchPath: string, result: string): string[] {
+    if (result.startsWith('Error') || result.startsWith('No matches')) {
+      return [];
+    }
+
+    const normalizedSearchPath = searchPath.replace(/\\/g, '/').replace(/^\.\/?/, '').trim();
+    const isGlob = /[*?{\[]/.test(searchPath);
+    const resultLines = result.split(/\r?\n/).slice(1);
+    const hitPaths: string[] = [];
+
+    for (const line of resultLines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('Note:')) { continue; }
+      if (trimmed.startsWith('@') || trimmed.startsWith('>') || /^\d+:/.test(trimmed)) { continue; }
+      if (trimmed.includes(': ') || /^Search error:/i.test(trimmed)) { continue; }
+      hitPaths.push(trimmed);
+    }
+
+    if (hitPaths.length > 0) {
+      return this._dedupePaths(hitPaths);
+    }
+
+    if (normalizedSearchPath && !isGlob) {
+      return [normalizedSearchPath];
+    }
+
+    return [];
+  }
+
+  private _pathIsWithinSearchScope(searchScope: string, candidatePath: string): boolean {
+    const normalizedScope = this._normalizeToolPath(searchScope);
+    if (!normalizedScope || /[*?{\[]/.test(searchScope)) {
+      return true;
+    }
+
+    const normalizedCandidate = this._normalizeToolPath(candidatePath);
+    return normalizedCandidate === normalizedScope || normalizedCandidate.startsWith(`${normalizedScope}/`);
+  }
+
+  private _formatExactPathList(paths: string[], maxItems = 4): string {
+    return this._dedupePaths(paths).slice(0, maxItems).join(', ');
+  }
+
   private _extractToolTarget(toolCall: ToolCallEvent): string {
     if (toolCall.toolName === 'read_file' || toolCall.toolName === 'search_file_contents') {
-      return String(toolCall.args['path'] ?? '').replace(/\\/g, '/').toLowerCase();
+      return this._normalizeToolPath(String(toolCall.args['path'] ?? ''));
     }
     if (toolCall.toolName === 'find_files' || toolCall.toolName === 'list_directory') {
-      return String(toolCall.args['glob'] ?? '').replace(/\\/g, '/').toLowerCase();
+      return this._normalizeToolPath(String(toolCall.args['glob'] ?? ''));
     }
     return '';
   }
@@ -723,7 +784,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       if (msg.role === 'assistant' && msg.tool_calls) {
         for (const tc of msg.tool_calls) {
           if (tc.toolName === 'read_file') {
-            const p = String(tc.input['path'] ?? '').replace(/\\/g, '/').toLowerCase();
+            const p = this._normalizeToolPath(String(tc.input['path'] ?? ''));
             if (!p) { continue; }
             const start = typeof tc.input['start_line'] === 'number' ? tc.input['start_line'] : 0;
             const end   = typeof tc.input['end_line']   === 'number' ? tc.input['end_line']   : Infinity;
@@ -747,7 +808,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     reqEnd: number,
     cache: Map<string, Array<{ start: number; end: number }>>
   ): boolean {
-    const normalized = path.replace(/\\/g, '/').toLowerCase();
+    const normalized = this._normalizeToolPath(path);
     const ranges = cache.get(normalized);
     if (!ranges || ranges.length === 0) { return false; }
     for (const r of ranges) {
@@ -806,22 +867,39 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     ].join(' ');
   }
 
-  private _buildConcreteReadRefocusPrompt(): string {
+  private _buildConcreteReadRefocusPrompt(preferredPaths: string[] = []): string {
+    const exactPathHint = preferredPaths.length > 0
+      ? `Use read_file on one of these exact paths from the search results: ${this._formatExactPathList(preferredPaths)}.`
+      : 'Choose the single most relevant file for the task from the directory structure already seen and read it.';
+
     return [
       'Discovery is complete. You must now call read_file on a specific file — not list_directory or find_files.',
-      'Choose the single most relevant file for the task from the directory structure already seen and read it.',
+      exactPathHint,
       'Prefer small, focused files (config files, entry scripts, specific modules) over large __init__.py or framework files.',
       'If unsure which file is most relevant, use search_file_contents to find terms related to the task.',
       'Do NOT call list_directory, find_files, or execute_bash.'
     ].join(' ');
   }
 
-  private _buildSearchStallRefocusPrompt(): string {
+  private _buildSearchStallRefocusPrompt(preferredPaths: string[] = []): string {
+    const nextStep = preferredPaths.length > 0
+      ? `Call exactly one tool next: read_file on one of these exact paths from the last successful search: ${this._formatExactPathList(preferredPaths)}.`
+      : 'If you need more information, call exactly one tool next — prefer read_file on the most relevant file from the results.';
+
     return [
       'The search results are in. Continue from the gathered results.',
-      'If you need more information, call exactly one tool next — prefer read_file on the most relevant file from the results.',
+      nextStep,
       'Do not repeat the same search. Do not call find_files or list_directory.',
       'If the results are sufficient, produce your final answer now.'
+    ].join(' ');
+  }
+
+  private _buildSearchRegressionRecoveryPrompt(pattern: string, preferredPaths: string[]): string {
+    return [
+      `An earlier search for "${pattern}" already found exact matches.`,
+      'Do not narrow the search path further or repeat the same search.',
+      `Call read_file on one of these exact paths now: ${this._formatExactPathList(preferredPaths)}.`,
+      'If the earlier evidence is already sufficient after reading that file, answer directly.'
     ].join(' ');
   }
 
@@ -1346,6 +1424,11 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     let lastToolResultWasError = false;
     let lastRoundWasSearchOnly = false;
     let consecutiveEmptyRounds = 0;
+    const MAX_SEARCH_REGRESSION_REFOCUSES = 2;
+    let searchRegressionRefocuses = 0;
+    let lastSuccessfulSearchPaths: string[] = [];
+    const searchNamedReadTargets = new Set<string>();
+    const positiveSearchPathsByPattern = new Map<string, string[]>();
     // After this many tool rounds, collapse the messy transcript into a compact
     // scratch summary before requesting the final answer. This improves context
     // shape for models that stall on long tool transcripts.
@@ -1476,8 +1559,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             );
             this._sessions.history.push({
               role: 'user',
-              content:
-                'You have search results above. Pick the single most relevant file and call read_file on it now. Do not summarize yet.',
+              content: this._buildSearchStallRefocusPrompt(lastSuccessfulSearchPaths),
               internal: true,
             });
             this._postMessage({ type: 'status', text: 'Nudging model to select a file…' });
@@ -1501,15 +1583,15 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
             if (lastToolResultWasError) {
               this._log.appendLine('[tools] empty response after failed tool result — prompting model to try a different file');
-              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt(), internal: true });
+              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt(lastSuccessfulSearchPaths), internal: true });
               this._postMessage({ type: 'status', text: 'File not found — trying a different approach…' });
             } else if (searchStall) {
               this._log.appendLine('[tools] empty response after broad search — nudging model to read a specific file');
-              this._sessions.history.push({ role: 'user', content: this._buildSearchStallRefocusPrompt(), internal: true });
+              this._sessions.history.push({ role: 'user', content: this._buildSearchStallRefocusPrompt(lastSuccessfulSearchPaths), internal: true });
               this._postMessage({ type: 'status', text: 'Model paused after search — choosing a concrete file to read…' });
             } else {
               this._log.appendLine('[tools] empty response before any file read — refocusing to a concrete read_file call');
-              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt(), internal: true });
+              this._sessions.history.push({ role: 'user', content: this._buildConcreteReadRefocusPrompt(lastSuccessfulSearchPaths), internal: true });
               this._postMessage({ type: 'status', text: 'Model paused after discovery — choosing a concrete app file…' });
             }
             continue;
@@ -1758,6 +1840,9 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           const successfulReadTargets = new Set<string>();
           let anySuccessfulSearch = false;
           lastToolResultWasError = false;
+          let searchRegressionRecovery:
+            | { pattern: string; paths: string[] }
+            | undefined;
           // Snapshot of files already read before this round (used for duplicate-read guard)
           const readCache = this._buildReadFileCache(turnHistoryStartIndex);
           for (const toolCall of pendingToolCalls) {
@@ -1771,7 +1856,13 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
               const reqPath  = String(toolCall.args['path'] ?? '');
               const reqStart = typeof toolCall.args['start_line'] === 'number' ? toolCall.args['start_line'] : 0;
               const reqEnd   = typeof toolCall.args['end_line']   === 'number' ? toolCall.args['end_line']   : Infinity;
-              if (this._isDuplicateRead(reqPath, reqStart, reqEnd, readCache)) {
+              const normalizedReqPath = this._normalizeToolPath(reqPath);
+              const isDuplicateRead = this._isDuplicateRead(reqPath, reqStart, reqEnd, readCache);
+              const allowSearchNamedReread = isDuplicateRead && searchNamedReadTargets.has(normalizedReqPath);
+              if (allowSearchNamedReread) {
+                searchNamedReadTargets.delete(normalizedReqPath);
+                this._log.appendLine(`[tools] duplicate-read bypassed for search-named file: ${reqPath}`);
+              } else if (isDuplicateRead) {
                 const rangeNote = reqStart === 0 && reqEnd === Infinity
                   ? 'in full'
                   : `lines ${reqStart}–${reqEnd === Infinity ? 'end' : reqEnd}`;
@@ -1799,6 +1890,38 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             if (toolCall.toolName === 'search_file_contents' && !toolResult.result.startsWith('Error') && !toolResult.result.startsWith('No matches')) {
               anySuccessfulSearch = true;
             }
+            if (toolCall.toolName === 'search_file_contents') {
+              const pattern = String(toolCall.args['pattern'] ?? '').trim();
+              const patternKey = pattern.toLowerCase();
+              const searchPath = String(toolCall.args['path'] ?? '');
+              const hitPaths = this._extractSearchHitPaths(searchPath, toolResult.result);
+
+              if (hitPaths.length > 0) {
+                const mergedPaths = this._dedupePaths([
+                  ...(positiveSearchPathsByPattern.get(patternKey) ?? []),
+                  ...hitPaths,
+                ]);
+                positiveSearchPathsByPattern.set(patternKey, mergedPaths);
+                lastSuccessfulSearchPaths = hitPaths;
+                for (const hitPath of hitPaths) {
+                  searchNamedReadTargets.add(this._normalizeToolPath(hitPath));
+                }
+              } else if (
+                toolResult.result.startsWith('No matches') &&
+                patternKey &&
+                searchRegressionRefocuses < MAX_SEARCH_REGRESSION_REFOCUSES
+              ) {
+                const priorHitPaths = positiveSearchPathsByPattern.get(patternKey) ?? [];
+                const outOfScopeHits = priorHitPaths.filter(hitPath => !this._pathIsWithinSearchScope(searchPath, hitPath));
+                if (outOfScopeHits.length > 0) {
+                  searchRegressionRecovery = { pattern, paths: outOfScopeHits };
+                  lastSuccessfulSearchPaths = outOfScopeHits;
+                  for (const hitPath of outOfScopeHits) {
+                    searchNamedReadTargets.add(this._normalizeToolPath(hitPath));
+                  }
+                }
+              }
+            }
             compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result, prompt);
             if (compactResult.length !== toolResult.result.length) {
               this._log.appendLine(
@@ -1815,6 +1938,21 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
           if (successfulReadTargets.size > 0 || anySuccessfulSearch) {
             totalFileReadRounds++;
+          }
+
+          if (searchRegressionRecovery) {
+            searchRegressionRefocuses++;
+            this._log.appendLine(
+              `[tools] search narrowed away from earlier hit for "${searchRegressionRecovery.pattern}" — refocusing to exact path(s): ${this._formatExactPathList(searchRegressionRecovery.paths)}`
+            );
+            this._sessions.history.push({
+              role: 'user',
+              content: this._buildSearchRegressionRecoveryPrompt(
+                searchRegressionRecovery.pattern,
+                searchRegressionRecovery.paths
+              ),
+              internal: true,
+            });
           }
 
           // True when this round was all search/discovery (find_files, list_directory,
