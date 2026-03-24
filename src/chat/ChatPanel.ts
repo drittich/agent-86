@@ -2283,6 +2283,16 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           this._sessions.saveCurrentSession().catch(e => this._log.appendLine(`[save] ${e}`));
         }
         break;
+      case 'open-file': {
+        const wsFolder = vscode.workspace.workspaceFolders?.[0];
+        if (wsFolder) {
+          const uri = vscode.Uri.joinPath(wsFolder.uri, message.relativePath);
+          vscode.window.showTextDocument(uri, { preview: false }).then(undefined, (err: unknown) => {
+            this._log.appendLine(`[open-file] failed to open ${message.relativePath}: ${err}`);
+          });
+        }
+        break;
+      }
     }
   }
 

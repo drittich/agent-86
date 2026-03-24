@@ -107,6 +107,14 @@ const btnSettingsSave    = document.getElementById('btn-settings-save') as HTMLB
 
 initOutput(outputEl);
 
+outputEl.addEventListener('click', (e) => {
+  const target = (e.target as HTMLElement).closest('[data-file]') as HTMLElement | null;
+  if (!target) { return; }
+  e.preventDefault();
+  const filePath = target.dataset.file;
+  if (filePath) { vscode.postMessage({ type: 'open-file', relativePath: filePath }); }
+});
+
 initProviders({
   providersList,
   modelSelect,
@@ -612,7 +620,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       break;
 
     case 'tool-activity':
-      insertActivity(msg.label ?? msg.text ?? '', msg.detail);
+      insertActivity(msg.label ?? msg.text ?? '', msg.detail, msg.filePath);
       break;
 
     case 'attachments':

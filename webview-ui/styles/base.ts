@@ -290,6 +290,12 @@ export const BASE_CSS: string = `
     padding: 2px 0;
     opacity: 0.8;
   }
+  .tool-activity .file-link {
+    color: var(--vscode-textLink-foreground, #4e9fde);
+    text-decoration: none;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  .tool-activity .file-link:hover { text-decoration: underline; }
 
   #status-bar {
     font-size: 11px;

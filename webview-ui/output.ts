@@ -14,7 +14,7 @@ let outputEl: HTMLElement;
 export type OutputSegment =
   | { type: 'md'; content: string }
   | { type: 'user'; content: string }
-  | { type: 'activity'; label: string; detail?: string };
+  | { type: 'activity'; label: string; detail?: string; filePath?: string };
 export let segments: OutputSegment[] = [];
 
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -185,8 +185,15 @@ export function flushMarkdown(): void {
     if (seg.type === 'user') {
       html += `<div class="user-bubble">${escapeHtml(seg.content)}</div>`;
     } else if (seg.type === 'activity') {
-      const detail = seg.detail ? ` ${escapeHtml(seg.detail)}` : '';
-      html += `<div class="tool-activity"><strong>${escapeHtml(seg.label)}</strong>${detail}</div>`;
+      if (seg.filePath) {
+        const escapedLabel = escapeHtml(seg.label);
+        const escapedPath = escapeHtml(seg.filePath);
+        const linkHtml = `<a href="#" class="file-link" data-file="${escapedPath}">${escapedPath}</a>`;
+        html += `<div class="tool-activity">${escapedLabel.replace(escapedPath, linkHtml)}</div>`;
+      } else {
+        const detail = seg.detail ? ` ${escapeHtml(seg.detail)}` : '';
+        html += `<div class="tool-activity"><strong>${escapeHtml(seg.label)}</strong>${detail}</div>`;
+      }
     } else if (seg.content) {
       const processedMd = replaceEditJsonWithAccordions(seg.content);
       html += DOMPurify.sanitize(marked.parse(processedMd) as string);
@@ -218,8 +225,8 @@ export function insertUserPrompt(text: string): void {
   flushMarkdown();
 }
 
-export function insertActivity(label: string, detail?: string): void {
-  segments.push({ type: 'activity', label, detail });
+export function insertActivity(label: string, detail?: string, filePath?: string): void {
+  segments.push({ type: 'activity', label, detail, filePath });
   flushMarkdown();
 }
 

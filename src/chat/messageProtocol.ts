@@ -24,7 +24,7 @@ export type ExtensionToWebview =
   | { type: 'openSettings'; providers: ProviderConfig[]; activeProviderIndex: number; maxToolRounds: number }
   | { type: 'providerStatus'; providerName: string; status: 'online' | 'offline' | 'checking' }
   | { type: 'providers'; providers: ProviderConfig[]; activeProviderIndex: number }
-  | { type: 'tool-activity'; text?: string; label?: string; detail?: string }
+  | { type: 'tool-activity'; text?: string; label?: string; detail?: string; filePath?: string }
   | { type: 'userPrompt'; content: string }
   | { type: 'newSession' }
   | { type: 'sessions'; sessions: SessionSummary[] };
@@ -51,7 +51,8 @@ export type WebviewToExtension =
   | { type: 'pick/response'; pickId: string; indices: number[] }
   | { type: 'checkboxChange'; includeAgentsMd?: boolean }
   | { type: 'saveSettings'; providers?: ProviderConfig[]; maxToolRounds?: number }
-  | { type: 'selectModel'; providerIndex: number };
+  | { type: 'selectModel'; providerIndex: number }
+  | { type: 'open-file'; relativePath: string };
 
 export interface AttachedFile {
   uri: string;

@@ -61,8 +61,8 @@ export class ToolExecutor {
     this.gitIgnoreFilter = new GitIgnoreFilter(this.wsRoots);
   }
 
-  private _activity(text: string): void {
-    this.deps.postMessage({ type: 'tool-activity', text });
+  private _activity(text: string, filePath?: string): void {
+    this.deps.postMessage({ type: 'tool-activity', text, filePath });
   }
 
   async execute(call: ToolCallEvent): Promise<ToolResult> {
@@ -151,7 +151,7 @@ export class ToolExecutor {
 
     const actualStart = Math.max(1, startLine + 1);
     const rangeStr = slice.length === lines.length ? '' : ` lines ${actualStart}–${actualStart + slice.length - 1}`;
-    this._activity(`Read: ${relPath}${rangeStr}`);
+    this._activity(`Read: ${relPath}${rangeStr}`, relPath);
     const header = `File: ${relPath} (lines ${actualStart}-${actualStart + slice.length - 1} of ${lines.length})`;
     return `${header}\n\`\`\`\n${slice.join('\n')}\n\`\`\``;
   }
@@ -199,7 +199,7 @@ export class ToolExecutor {
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
         await vscode.workspace.fs.writeFile(fileUri, Buffer.from(lfContent, 'utf8'));
       }
-      this._activity(`${fileExists ? 'Updated' : 'Created'}: ${relPath}`);
+      this._activity(`${fileExists ? 'Updated' : 'Created'}: ${relPath}`, relPath);
       return `Successfully ${fileExists ? 'updated' : 'created'} ${relPath}`;
     } catch (err) {
       return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
@@ -257,7 +257,7 @@ export class ToolExecutor {
         return `Error applying edit: applyEdit returned false (VS Code rejected the edit)`;
       }
       await doc.save();
-      this._activity(`Edited: ${relPath}`);
+      this._activity(`Edited: ${relPath}`, relPath);
       return `Successfully edited ${relPath}`;
     } catch (err) {
       return `Error applying edit: ${err instanceof Error ? err.message : String(err)}`;
