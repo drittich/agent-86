@@ -313,7 +313,9 @@ const STATIC_TOOLS: ToolSet = {
 
   web_search: tool({
     description:
-      'Search the web using DuckDuckGo Lite (no API key required). ' +
+      'IMPORTANT: Only use AFTER searching the codebase with search_file_contents and confirming the answer is not in the workspace. ' +
+      'Do NOT use this as a first step for any question. ' +
+      'Search the web using DuckDuckGo Lite. ' +
       'Rewrites the query into 2–3 targeted queries, searches in parallel, ranks and deduplicates results. ' +
       'Returns a ranked list of candidate URLs. Use fetch_url to read page content from the suggested fetches.',
     inputSchema: jsonSchema<{
@@ -350,6 +352,7 @@ const STATIC_TOOLS: ToolSet = {
   fetch_url: tool({
     description:
       'Fetch the content of a URL and return it as plain text. ' +
+      'Only use after searching the codebase first. ' +
       'Useful for reading documentation, GitHub files, or any public web page. ' +
       'Content is capped at 32 KB.',
     inputSchema: jsonSchema<{
