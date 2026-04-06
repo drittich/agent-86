@@ -178,7 +178,6 @@ function setGenerating(active: boolean): void {
   btnStop.hidden = !active;
   btnSend.disabled = active;
   btnStop.disabled = !active;
-  promptInput.disabled = active;
   // Reset cancelled state when starting new generation
   if (active) {
     wasExplicitlyCancelled = false;
