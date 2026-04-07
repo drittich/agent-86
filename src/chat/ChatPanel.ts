@@ -33,6 +33,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   private readonly _log: vscode.OutputChannel;
   /** Set to true when the user explicitly clicks Stop; cleared on new send. */
   private _userCancelled = false;
+  /** When set, the current generation was interrupted by a steer message. After abort completes, a new send is triggered with this prompt. */
+  private _pendingSteer: { prompt: string } | null = null;
   /** Tracks which attached file URIs have already been injected into _history. */
   private _injectedFileUris = new Set<string>();
   private readonly _diffProvider = new DiffContentProvider();
@@ -1453,6 +1455,11 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
     try {
       while (true) {
+        // If the user cancelled (Stop) or issued a steer before this round begins,
+        // avoid starting a new provider stream for the now-stale prompt.
+        if (this._userCancelled) {
+          break;
+        }
         let fullResponse = '';
         const pendingToolCalls: ToolCallEvent[] = [];
         const nativeToolMode = useNativeTools && !toolsFallbackActive;
@@ -1513,6 +1520,10 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
         }
 
         if (this._userCancelled) {
+          // If interrupted by a steer, flush partial response to history
+          if (this._pendingSteer && fullResponse.trim()) {
+            this._sessions.history.push({ role: 'assistant', content: fullResponse });
+          }
           break;
         }
 
@@ -2129,8 +2140,18 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
     // Persist session after each completed turn (skip if cancelled mid-stream
     // with no content, to avoid storing an empty assistant turn)
-    if (finalResponse || !this._userCancelled) {
+    if (finalResponse || !this._userCancelled || this._pendingSteer) {
       await this._sessions.saveCurrentSession();
+    }
+
+    // If interrupted by a steer, chain into a new send with the steer prompt
+    const steer = this._pendingSteer;
+    if (steer) {
+      this._pendingSteer = null;
+      this._userCancelled = false;
+      this._abortController = undefined;
+      this._log.appendLine(`[steer] chaining into new send: ${steer.prompt.slice(0, 80)}`);
+      await this._handleSend(steer.prompt);
     }
   }
 
@@ -2183,6 +2204,28 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           this._postMessage({ type: 'error', message: String(err) });
           this._abortController = undefined;
         });
+        break;
+      case 'steer':
+        this._sessions.thinkingMode = message.thinkingMode ?? false;
+        this._sessions.includeAgentsMd = message.includeAgentsMd ?? false;
+        this._pendingSteer = { prompt: message.prompt };
+        this._userCancelled = true;
+        this._abortController?.abort();
+        this._abortController = undefined;
+        // Reject any approval cards that are still pending
+        for (const [id, resolve] of this._approvalResolvers) {
+          this._approvalResolvers.delete(id);
+          resolve(false);
+        }
+        for (const [id, resolve] of this._questionResolvers) {
+          this._questionResolvers.delete(id);
+          resolve('User cancelled.');
+        }
+        for (const [id, resolve] of this._pickResolvers) {
+          this._pickResolvers.delete(id);
+          resolve([]);
+        }
+        // No 'done' message — the pending steer will trigger a new generation
         break;
       case 'stop':
         this._userCancelled = true;

@@ -172,12 +172,24 @@ function setStatusBadge(badgeClass: string, badgeText: string, detail?: string):
   }
 }
 
+function updateComposerButtons(): void {
+  if (isGenerating) {
+    const hasText = promptInput.value.trim().length > 0;
+    btnSend.hidden = !hasText;
+    btnStop.hidden = hasText;
+    btnSend.disabled = false;
+    btnStop.disabled = false;
+  } else {
+    btnSend.hidden = false;
+    btnStop.hidden = true;
+    btnSend.disabled = false;
+    btnStop.disabled = true;
+  }
+}
+
 function setGenerating(active: boolean): void {
   isGenerating = active;
-  btnSend.hidden = active;
-  btnStop.hidden = !active;
-  btnSend.disabled = active;
-  btnStop.disabled = !active;
+  updateComposerButtons();
   // Reset cancelled state when starting new generation
   if (active) {
     wasExplicitlyCancelled = false;
@@ -358,7 +370,10 @@ function autoResizeTextarea(): void {
   promptInput.style.height = 'auto';
   promptInput.style.height = Math.min(promptInput.scrollHeight, 220) + 'px';
 }
-promptInput.addEventListener('input', autoResizeTextarea);
+promptInput.addEventListener('input', () => {
+  autoResizeTextarea();
+  if (isGenerating) { updateComposerButtons(); }
+});
 
 promptInput.addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -507,7 +522,22 @@ let pendingSend: { prompt: string; thinkingMode: boolean; includeAgentsMd: boole
 
 function sendPrompt(): void {
   const prompt = promptInput.value.trim();
-  if (!prompt || isGenerating) { return; }
+  if (!prompt) { return; }
+
+  // Steer: user is sending while AI is still generating
+  if (isGenerating) {
+    // The old generation is about to be aborted; clear any pending cards tied to it.
+    approvalsContainer.innerHTML = '';
+    // Flush any buffered partial response before inserting user prompt
+    clearRenderTimer();
+    if (segments.length > 0) { flushMarkdown(); }
+    insertUserPrompt(prompt);
+    vscode.postMessage({ type: 'steer', prompt, thinkingMode: chkThinking.checked, includeAgentsMd: chkAgentsMd.checked });
+    promptInput.value = '';
+    promptInput.style.height = '';
+    updateComposerButtons();
+    return;
+  }
 
   if (getProviderStatus() === 'offline') {
     // Re-check before giving up — store the pending send and trigger a health check

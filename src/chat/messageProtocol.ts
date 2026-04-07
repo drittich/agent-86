@@ -39,6 +39,7 @@ export interface SessionSummary {
 // Messages sent from the webview to the extension host
 export type WebviewToExtension =
   | { type: 'send'; prompt: string; thinkingMode?: boolean; includeAgentsMd?: boolean }
+  | { type: 'steer'; prompt: string; thinkingMode?: boolean; includeAgentsMd?: boolean }
   | { type: 'stop' }
   | { type: 'newSession' }
   | { type: 'attachFiles' }
