@@ -6,3 +6,9 @@ dist/
 .kilocode/
 .vscode/
 _imports/
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
