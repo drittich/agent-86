@@ -661,7 +661,7 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     case 'approval/request': {
       const payload = msg.payload as ApprovalPayload | undefined;
-      showApprovalCard(msg.approvalId ?? '', msg.action ?? '', payload, msg.reason ?? '');
+      showApprovalCard(msg.approvalId ?? '', msg.action ?? '', payload, msg.reason ?? '', msg.allowKey);
       break;
     }
 

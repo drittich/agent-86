@@ -7,6 +7,7 @@ import { execFile } from 'child_process';
 import { ToolCallEvent } from '../providers/IProvider';
 import { runWebSearch, formatWebSearchOutput, HttpGetFn, SearchIntent } from './webSearch/index';
 import { runCommand } from './TerminalTool';
+import { isReadOnlySafe, commandAllowKey } from './safeCommands';
 import { resolveMoveBlockPath, moveFile } from './MoveFileTool';
 import { resolveDeleteBlockPath, deleteFile } from './DeleteFileTool';
 import { searchFileWithRg } from './ChunkManager';
@@ -17,7 +18,7 @@ import { GitIgnoreFilter } from '../utils/GitIgnoreFilter';
 export interface ToolExecutorDeps {
   log: vscode.OutputChannel;
   postMessage: (message: unknown) => void;
-  requestApproval: (action: string, payload: unknown, reason?: string) => Promise<boolean>;
+  requestApproval: (action: string, payload: unknown, reason?: string, allowKey?: string) => Promise<boolean>;
   requestQuestion: (question: string) => Promise<string>;
 }
 
@@ -495,12 +496,18 @@ export class ToolExecutor {
     if (!command) { return 'Error: command must not be empty.'; }
     if (!this.wsRoot) { return 'Error: no workspace folder is open.'; }
 
-    const approved = await this.deps.requestApproval(
-      'runCommand',
-      { command },
-      'The assistant wants to run a terminal command.'
-    );
-    if (!approved) { return 'Cancelled by user.'; }
+    // Read-only / harmless commands run without an approval gate. Anything that
+    // can mutate state (or carries shell operators) still requires approval —
+    // remembered per command family via `allowKey` if the user always-allows it.
+    if (!isReadOnlySafe(command)) {
+      const approved = await this.deps.requestApproval(
+        'runCommand',
+        { command },
+        'The assistant wants to run a terminal command.',
+        commandAllowKey(command)
+      );
+      if (!approved) { return 'Cancelled by user.'; }
+    }
 
     this.deps.postMessage({ type: 'status', text: `Running: ${command}` });
     const result = await runCommand(command, this.wsRoot);

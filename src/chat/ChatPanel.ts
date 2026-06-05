@@ -401,7 +401,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       : '';
 
     // Try to load system prompt from prompts/system-prompt.md with dynamic system info injection
-    const customSystemPrompt = getSystemPrompt();
+    const customSystemPrompt = getSystemPrompt(this.context.extensionUri.fsPath);
 
     // throw a warning if system prompt not found
     if (!customSystemPrompt) {
@@ -1368,7 +1368,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           {
             log: this._log,
             postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
-            requestApproval: (action, payload, reason) => this._requestApproval(action, payload, reason),
+            requestApproval: (action, payload, reason, allowKey) => this._requestApproval(action, payload, reason, allowKey),
             requestQuestion: (question) => this._requestQuestion(question),
           },
           vscode.workspace.workspaceFolders ?? []
@@ -2160,15 +2160,18 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
    * `approval/response`. Returns `true` if approved, `false` if cancelled.
    * If the action has been persistently allowed for this workspace, returns `true` immediately.
    */
-  private _requestApproval(action: string, payload: unknown, reason = ''): Promise<boolean> {
+  private _requestApproval(action: string, payload: unknown, reason = '', allowKey?: string): Promise<boolean> {
+    // `allowKey` lets callers scope "always allow" more narrowly than the action
+    // (e.g. a specific command family) while keeping `action` for display/risk.
+    const key = allowKey ?? action;
     const alwaysAllowed = this.context.workspaceState.get<string[]>('agentic.alwaysAllowedActions') ?? [];
-    if (alwaysAllowed.includes(action)) {
+    if (alwaysAllowed.includes(key)) {
       return Promise.resolve(true);
     }
     return new Promise<boolean>((resolve) => {
       const approvalId = `approval-${++this._approvalCounter}`;
       this._approvalResolvers.set(approvalId, resolve);
-      this._postMessage({ type: 'approval/request', approvalId, action, payload, reason });
+      this._postMessage({ type: 'approval/request', approvalId, action, payload, reason, allowKey });
     });
   }
 

@@ -134,7 +134,8 @@ export function showApprovalCard(
   approvalId: string,
   action: string,
   payload: ApprovalPayload | undefined,
-  reason: string
+  reason: string,
+  allowKey?: string
 ): void {
   // If this action was auto-approved for the session, respond immediately
   if (sessionAutoApproved.has(action)) {
@@ -200,6 +201,21 @@ export function showApprovalCard(
       card.remove();
     });
     buttons.appendChild(alwaysBtn);
+  }
+
+  // "Always allow" for terminal commands — persistent, scoped to the command
+  // family (e.g. `git status`, `npm test`) carried in allowKey, NOT all commands.
+  if (action === 'runCommand' && allowKey) {
+    const family = allowKey.replace(/^runCommand:/, '').trim();
+    const cmdBtn = document.createElement('button');
+    cmdBtn.className = 'btn-approve-always';
+    cmdBtn.textContent = family ? `Always allow "${family}"` : 'Always allow this command';
+    cmdBtn.addEventListener('click', () => {
+      vscodeApi.postMessage({ type: 'approval/alwaysAllow', action: allowKey });
+      vscodeApi.postMessage({ type: 'approval/response', approvalId, approved: true });
+      card.remove();
+    });
+    buttons.appendChild(cmdBtn);
   }
 
   // "Always allow in project" — persistent per action category (create / edit / delete)

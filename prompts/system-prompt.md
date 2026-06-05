@@ -97,8 +97,9 @@ You have a finite number of tool calls per response. This budget applies to resp
 
 ## Environment
 
+- Prefer native tools (`read_file`, `search_file_contents`, `list_directory`) over shell commands for reading, searching, and listing files. Reach for `execute_bash` only for builds, tests, installs, and commands without a native equivalent.
+- Tailor every `execute_bash` command to the OS and shell in **System information** below. On Windows/cmd.exe use `type`, `dir`, `findstr`, `copy`, `move`, `del` — never POSIX equivalents like `cat`, `ls`, `grep`, `cp`, `mv`, `rm`.
 - Use `cd /path && command` for one-off directory changes.
-- Tailor commands to the user's OS and shell.
 
 ## System information
 

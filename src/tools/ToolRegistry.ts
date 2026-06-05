@@ -215,8 +215,9 @@ const STATIC_TOOLS: ToolSet = {
     description:
       'Execute a shell command in the workspace root. ' +
       'stdout + stderr are captured (capped at 32 KB). Times out after 30 s. ' +
-      'Requires explicit user approval before running. ' +
-      'Do not use this for simple file listing, file search, or directory discovery when native file tools can answer the question.',
+      'Use commands appropriate to the user\'s OS and shell as stated in the system prompt ' +
+      '(on Windows/cmd.exe: type, dir, findstr — not cat, ls, grep). ' +
+      'Do not use this for reading, listing, or searching files when native file tools (read_file, list_directory, search_file_contents) can answer the question.',
     inputSchema: jsonSchema<{
       command: string;
     }>({

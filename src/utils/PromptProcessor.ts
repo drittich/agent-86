@@ -60,6 +60,27 @@ Current Time: ${timeStr}`;
 }
 
 /**
+ * An explicit, OS-tailored note steering shell usage toward the right commands
+ * for the current platform. Used to harden the inline fallback prompt.
+ */
+function environmentSection(): string {
+  const isWin = process.platform === 'win32';
+  const shellNote = isWin
+    ? 'You are on Windows (cmd.exe). For `execute_bash`, use Windows commands ' +
+      '(`type`, `dir`, `findstr`, `copy`, `move`, `del`) — NOT POSIX equivalents ' +
+      '(`cat`, `ls`, `grep`, `cp`, `mv`, `rm`).'
+    : `You are on ${getOSName()} (${getDefaultShell()}). For \`execute_bash\`, use POSIX commands.`;
+
+  return `## Environment
+
+${generateSystemInfo()}
+
+Prefer native tools (\`read_file\`, \`search_file_contents\`, \`list_directory\`) over shell ` +
+    `commands for reading, searching, and listing files. When you must use \`execute_bash\`, ` +
+    `tailor commands to the OS and shell above. ${shellNote}`;
+}
+
+/**
  * Inject system information into the prompt template
  */
 function injectSystemInfo(prompt: string): string {
@@ -72,27 +93,32 @@ function injectSystemInfo(prompt: string): string {
 }
 
 /**
- * Get the path to the system prompt file
+ * Get the path to the system prompt file. Prefers a per-project override in the
+ * opened workspace, then falls back to the prompt bundled with the extension so
+ * the OS-aware template is used regardless of which project is open.
  */
-function getPromptPath(): string | undefined {
-  // Check workspace root for prompts/system-prompt.md
+function getPromptPath(extensionPath?: string): string | undefined {
+  const candidates: string[] = [];
+
   const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (wsRoot) {
-    const promptPath = path.join(wsRoot, 'prompts', 'system-prompt.md');
-    if (fs.existsSync(promptPath)) {
-      return promptPath;
-    }
+    candidates.push(path.join(wsRoot, 'prompts', 'system-prompt.md'));
   }
-  return undefined;
+  if (extensionPath) {
+    candidates.push(path.join(extensionPath, 'prompts', 'system-prompt.md'));
+  }
+
+  return candidates.find(p => fs.existsSync(p));
 }
 
 /**
- * Process the system prompt template by injecting dynamic system info
+ * Process the system prompt template by injecting dynamic system info.
+ * @param extensionPath Absolute path to the extension install dir, used to find
+ *   the bundled prompt when the workspace has no override.
  */
-export function getSystemPrompt(): string {
-  // Try to load from prompts/system-prompt.md
-  const promptPath = getPromptPath();
-  
+export function getSystemPrompt(extensionPath?: string): string {
+  const promptPath = getPromptPath(extensionPath);
+
   if (promptPath) {
     try {
       const prompt = fs.readFileSync(promptPath, 'utf-8');
@@ -113,6 +139,8 @@ export function getNativeToolsPrompt(agentsMdSection: string, behaviorInstructio
   return `You are a VS Code coding assistant.${agentsMdSection}
 
 ${behaviorInstructions}
+
+${environmentSection()}
 
 ## Files
 Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in tool calls.
