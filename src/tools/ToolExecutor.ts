@@ -7,7 +7,7 @@ import { execFile } from 'child_process';
 import { ToolCallEvent } from '../providers/IProvider';
 import { runWebSearch, formatWebSearchOutput, HttpGetFn, SearchIntent } from './webSearch/index';
 import { runCommand } from './TerminalTool';
-import { isReadOnlySafe, commandAllowKey } from './safeCommands';
+import { isReadOnlySafe, commandAllowKey, windowsCommandCorrection } from './safeCommands';
 import { resolveMoveBlockPath, moveFile } from './MoveFileTool';
 import { resolveDeleteBlockPath, deleteFile } from './DeleteFileTool';
 import { searchFileWithRg } from './ChunkManager';
@@ -495,6 +495,16 @@ export class ToolExecutor {
     const command = String(args['command'] ?? '');
     if (!command) { return 'Error: command must not be empty.'; }
     if (!this.wsRoot) { return 'Error: no workspace folder is open.'; }
+
+    // On Windows, refuse POSIX commands that won't work under cmd.exe and tell
+    // the model the correct Windows command / native tool, so it self-corrects.
+    if (process.platform === 'win32') {
+      const correction = windowsCommandCorrection(command);
+      if (correction) {
+        this._activity(`Refused (POSIX on Windows): ${command}`);
+        return correction;
+      }
+    }
 
     // Read-only / harmless commands run without an approval gate. Anything that
     // can mutate state (or carries shell operators) still requires approval —

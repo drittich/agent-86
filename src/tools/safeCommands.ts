@@ -125,3 +125,59 @@ export function commandFamily(command: string): string {
 export function commandAllowKey(command: string): string {
   return `runCommand:${commandFamily(command)}`;
 }
+
+/**
+ * POSIX programs that don't exist (or behave differently) under Windows cmd.exe,
+ * mapped to the preferred Windows command and/or native tool. `cat`/`ls`/`grep`
+ * may exist via Git/coreutils, but the native tools are always the better path.
+ */
+const POSIX_CORRECTIONS: Record<string, string> = {
+  cat:   'Use the `read_file` tool to read files (preferred), or the Windows `type` command.',
+  ls:    'Use the `list_directory` tool, or the Windows `dir` command.',
+  ll:    'Use the `list_directory` tool, or the Windows `dir` command.',
+  grep:  'Use the `search_file_contents` tool, or the Windows `findstr` command.',
+  egrep: 'Use the `search_file_contents` tool, or the Windows `findstr` command.',
+  fgrep: 'Use the `search_file_contents` tool, or the Windows `findstr` command.',
+  cp:    'Use the `copy_file` tool, or the Windows `copy` command.',
+  mv:    'Use the `move_file` tool, or the Windows `move` command.',
+  rm:    'Use the `delete_file` tool, or the Windows `del` (files) / `rmdir /s` (directories) command.',
+  pwd:   'Use the Windows `cd` command (prints the current directory) or `echo %cd%`.',
+  which: 'Use the Windows `where` command.',
+  touch: 'Use the `write_file` tool to create a file, or `type nul > filename`.',
+  clear: 'Use the Windows `cls` command.',
+  man:   'Use `<command> /?` for help on Windows.',
+  head:  'Use the `read_file` tool with a line range; cmd.exe has no `head`.',
+  tail:  'Use the `read_file` tool with a line range; cmd.exe has no `tail`.',
+};
+
+/** POSIX `find` flags that indicate the file-finder (vs Windows `find`, a text search). */
+const POSIX_FIND_FLAGS = /(?:^|\s)-(?:name|iname|type|path|maxdepth|mindepth|exec|delete)\b/;
+
+function correctionMessage(prog: string, suggestion: string): string {
+  return `Refused: \`${prog}\` is a POSIX command but this is Windows (cmd.exe). ${suggestion} Re-issue the command using the suggested approach.`;
+}
+
+/**
+ * For a Windows host, returns a corrective message when the command leads with a
+ * POSIX tool that has no cmd.exe equivalent, so the model can self-correct from
+ * the tool result. Returns null when the command is fine to run.
+ *
+ * Platform-agnostic by design (so it is unit-testable); the caller is
+ * responsible for only applying it on Windows.
+ */
+export function windowsCommandCorrection(command: string): string | null {
+  const tokens = tokenize(command.trim());
+  if (tokens.length === 0) { return null; }
+
+  const prog = programName(tokens[0]);
+
+  if (prog === 'find' && POSIX_FIND_FLAGS.test(command)) {
+    return correctionMessage(
+      'find',
+      'Use the `find_files` tool (glob) or `search_file_contents`. Windows `find` is a text search, not a file finder — POSIX flags like `-name`/`-type` will not work.'
+    );
+  }
+
+  const suggestion = POSIX_CORRECTIONS[prog];
+  return suggestion ? correctionMessage(prog, suggestion) : null;
+}
