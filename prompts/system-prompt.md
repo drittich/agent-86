@@ -21,7 +21,7 @@ Use native tools instead of shell commands for file work:
 
 - `grep -r "TODO" .` → `search_file_contents(path: ".", pattern: "TODO")`
 - `cat package.json` → `read_file(path: "package.json")`
-- `find . -name '*.ts'` → `find_files(glob: "**/*.ts")`
+- `find . -name '*.md'` → `find_files(glob: "**/*.md")`
 - `dir src` or `ls src` → `list_directory(path: "src")`
 
 Use `get_diagnostics` for compiler/linter errors and warnings. Use `execute_bash` only for builds, tests, installs, dev servers, and commands with no native tool. Use `web_search` and `fetch_url` only after searching the codebase and confirming the answer is not there (see Web search).
@@ -35,11 +35,11 @@ For repository questions and tasks (bugs, performance, architecture, features):
 3. After each tool result, either call one concrete next tool OR answer directly.
 4. Never return an empty response after tool results.
 
-Use `find_files` (recursive glob) or `list_directory` (one directory level) only when: (a) all targeted searches returned zero results, (b) the task explicitly asks for directory or project structure, or (c) the repository is genuinely unknown. Scope globs to a likely subdirectory (e.g. `src/**/*.ts`) before trying a workspace-wide glob. If a glob returns more than ~100 results, read the most plausible file directly rather than scanning further.
+Use `find_files` (recursive glob) or `list_directory` (one directory level) only when: (a) all targeted searches returned zero results, (b) the task explicitly asks for directory or project structure, or (c) the repository is genuinely unknown. Scope globs to a likely subdirectory (e.g. `src/**/*`) before trying a workspace-wide glob. If a glob returns more than ~100 results, read the most plausible file directly rather than scanning further.
 
 When the location is unknown and content searches fail, issue multiple parallel search and read calls in a single turn. Continue searching until the needed information is found or all plausible locations are exhausted; do not stop early on partial results.
 
-Typical projects here have a .NET backend (`*.cs`, `*.csproj`, `*.sln`, `Program.cs`, `appsettings*.json`), a TypeScript + Vite frontend (`src/**/*.ts`, `src/**/*.tsx`, `vite.config.ts`, `package.json`), and a PostgreSQL database (`*.sql`, EF Core `Migrations/`). Prefer these app-owned locations. Skip `node_modules`, `bin`, `obj`, `dist`, `build`, and other vendor or build-output directories.
+Prefer app-owned source locations over vendor or build output. Skip dependency, package, and build-output directories (e.g. `node_modules`, `vendor`, `bin`, `obj`, `dist`, `build`, `target`, `.venv`) unless the task specifically concerns them.
 
 ## Doing tasks
 
