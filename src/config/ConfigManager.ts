@@ -12,7 +12,6 @@ export interface ProviderConfig {
   baseUrl: string;     // e.g., "http://localhost:8080/v1"
   model: string;       // e.g., "qwen3-coder:a3b"
   apiKey?: string;     // Optional API key (default: "local")
-  toolUse: boolean;    // Whether to enable tool use
   context: number;     // Context window size
 }
 
@@ -171,6 +170,29 @@ export class ConfigManager {
       return tier;
     }
     return 'balanced';
+  }
+
+  // ── Tool-support verdicts (auto-detected per baseUrl::model) ───────────────
+
+  private static readonly TOOL_SUPPORT_STATE_KEY = 'agent86.toolSupportVerdicts';
+
+  private _getToolSupportMap(): Record<string, boolean> {
+    return this.context.globalState.get<Record<string, boolean>>(ConfigManager.TOOL_SUPPORT_STATE_KEY) ?? {};
+  }
+
+  getToolSupportVerdict(key: string): boolean | undefined {
+    return this._getToolSupportMap()[key];
+  }
+
+  async setToolSupportVerdict(key: string, supported: boolean): Promise<void> {
+    const map = { ...this._getToolSupportMap(), [key]: supported };
+    await this.context.globalState.update(ConfigManager.TOOL_SUPPORT_STATE_KEY, map);
+  }
+
+  async clearToolSupportVerdict(key: string): Promise<void> {
+    const map = { ...this._getToolSupportMap() };
+    delete map[key];
+    await this.context.globalState.update(ConfigManager.TOOL_SUPPORT_STATE_KEY, map);
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────

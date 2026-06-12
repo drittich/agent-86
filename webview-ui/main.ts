@@ -96,7 +96,6 @@ const pfName             = document.getElementById('pf-name') as HTMLInputElemen
 const pfBaseUrl          = document.getElementById('pf-base-url') as HTMLInputElement;
 const pfModel            = document.getElementById('pf-model') as HTMLInputElement;
 const pfApiKey           = document.getElementById('pf-api-key') as HTMLInputElement;
-const pfToolUse          = document.getElementById('pf-tool-use') as HTMLInputElement;
 const pfContext          = document.getElementById('pf-context') as HTMLInputElement;
 const btnPfSave          = document.getElementById('btn-pf-save') as HTMLButtonElement;
 const btnPfCancel        = document.getElementById('btn-pf-cancel') as HTMLButtonElement;
@@ -125,7 +124,6 @@ initProviders({
   pfBaseUrl,
   pfModel,
   pfApiKey,
-  pfToolUse,
   pfContext,
   vscode,
 });
@@ -443,7 +441,6 @@ btnPfSave.addEventListener('click', () => {
     baseUrl: pfBaseUrl.value.trim(),
     model: pfModel.value.trim(),
     apiKey: pfApiKey.value || undefined,
-    toolUse: pfToolUse.checked,
     context: parseInt(pfContext.value, 10) || 32768,
   };
   const editingIdx = getEditingProviderIndex();

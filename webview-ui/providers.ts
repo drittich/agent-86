@@ -12,7 +12,6 @@ export interface ProviderConfig {
   baseUrl: string;
   model: string;
   apiKey?: string;
-  toolUse: boolean;
   context: number;
 }
 
@@ -33,7 +32,6 @@ let pfName: HTMLInputElement;
 let pfBaseUrl: HTMLInputElement;
 let pfModel: HTMLInputElement;
 let pfApiKey: HTMLInputElement;
-let pfToolUse: HTMLInputElement;
 let pfContext: HTMLInputElement;
 let vscodeApi: { postMessage(msg: unknown): void };
 
@@ -49,7 +47,6 @@ export interface ProviderRefs {
   pfBaseUrl: HTMLInputElement;
   pfModel: HTMLInputElement;
   pfApiKey: HTMLInputElement;
-  pfToolUse: HTMLInputElement;
   pfContext: HTMLInputElement;
   vscode: { postMessage(msg: unknown): void };
 }
@@ -64,7 +61,6 @@ export function initProviders(refs: ProviderRefs): void {
   pfBaseUrl = refs.pfBaseUrl;
   pfModel = refs.pfModel;
   pfApiKey = refs.pfApiKey;
-  pfToolUse = refs.pfToolUse;
   pfContext = refs.pfContext;
   vscodeApi = refs.vscode;
 }
@@ -171,7 +167,6 @@ export function openProviderForm(idx: number): void {
     pfBaseUrl.value = '';
     pfModel.value = '';
     pfApiKey.value = '';
-    pfToolUse.checked = true;
     pfContext.value = '32768';
   } else {
     const p = providers[idx];
@@ -180,7 +175,6 @@ export function openProviderForm(idx: number): void {
     pfBaseUrl.value = p.baseUrl;
     pfModel.value = p.model;
     pfApiKey.value = p.apiKey ?? '';
-    pfToolUse.checked = p.toolUse;
     pfContext.value = String(p.context);
   }
   providerForm.hidden = false;

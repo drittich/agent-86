@@ -48,8 +48,9 @@ Exceptions are acceptable for files that are inherently monolithic (e.g. a large
 
 ## Tool Calling
 
-- **Native tools** (`toolUse: true`): uses `fullStream`, emits `tool-call` events, executes via `ToolExecutor`, feeds results back as `tool` messages in history
-- **Legacy fallback** (`toolUse: false`): uses `textStream`, parses XML/JSON in-text blocks via `ChatPanelActions`/`ChatPanelEdits`
+- Tool support is **auto-detected per model** (no manual setting): a one-time probe (`src/providers/ToolSupportProbe.ts`) sends a trivial `ping` tool and caches the verdict per `baseUrl::model` in globalState; runtime fallbacks demote a model that stops producing tool calls. Re-detect via the "Re-detect Tool Support for Active Model" command.
+- **Native tools** (verdict: supported): uses `fullStream`, emits `tool-call` events, executes via `ToolExecutor`, feeds results back as `tool` messages in history
+- **Legacy fallback** (verdict: unsupported): uses `textStream`, parses XML/JSON in-text blocks via `ChatPanelActions`/`ChatPanelEdits`
 - Tool definitions use `inputSchema` (not `parameters`) — Vercel AI SDK v6
 - `streamText` `fullStream` events: `text-delta`, `tool-call` (`.input` not `.args`), `tool-result`, `finish-step`
 

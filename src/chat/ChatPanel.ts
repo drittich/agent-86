@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { AIProvider } from '../providers/AIProvider';
+import { probeToolSupport, toolSupportKey } from '../providers/ToolSupportProbe';
 import { ChatMessage } from '../providers/IProvider';
 import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB, FILE_CAP_BYTES, TOTAL_CAP_BYTES } from '../tools/FileTools';
 import { ConfigManager, Session, ProviderConfig } from '../config/ConfigManager';
@@ -282,7 +283,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
     const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
     const apiKey = cfg.get<string>('apiKey') ?? 'local';
-    return [{ name: model, baseUrl, model, apiKey, toolUse: true, context: 32768 }];
+    return [{ name: model, baseUrl, model, apiKey, context: 32768 }];
   }
 
   private _getProvider(): AIProvider {
@@ -290,6 +291,59 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const idx = Math.min(this._activeProviderIndex, providers.length - 1);
     const providerConfig = providers[idx];
     return new AIProvider(providerConfig, this._log);
+  }
+
+  /**
+   * Resolve whether the active provider supports native tool calling.
+   * Uses the cached verdict when available; otherwise runs a one-time probe
+   * (a single tiny request with one trivial tool) and caches the result
+   * per baseUrl::model.
+   */
+  private async _resolveToolSupport(provider: ProviderConfig | undefined): Promise<boolean> {
+    if (!provider) {
+      return true;
+    }
+    const key = toolSupportKey(provider);
+    const cached = this._configManager.getToolSupportVerdict(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    this._postMessage({ type: 'status', text: `Checking tool support for ${provider.name}…` });
+    const verdict = await probeToolSupport(provider, this._log);
+    if (verdict === 'unknown') {
+      // Probe couldn't run (server down, timeout) — use native for this turn
+      // without caching so the next message re-probes.
+      this._log.appendLine(`[probe] tool support for ${key}: inconclusive — assuming native, will re-probe`);
+      return true;
+    }
+    const supported = verdict === 'native';
+    await this._configManager.setToolSupportVerdict(key, supported);
+    this._log.appendLine(`[probe] tool support verdict for ${key}: ${verdict}`);
+    this._postMessage({
+      type: 'status',
+      text: supported
+        ? 'Native tool calling detected.'
+        : 'Model does not produce native tool calls — using legacy format.'
+    });
+    return supported;
+  }
+
+  /**
+   * Clear the cached tool-support verdict for the active provider so the next
+   * message re-probes (e.g. after a server or chat-template upgrade).
+   */
+  public async reprobeToolSupport(): Promise<void> {
+    const providers = this._getProviders();
+    const idx = Math.min(this._activeProviderIndex, providers.length - 1);
+    const provider = providers[idx];
+    if (!provider) {
+      return;
+    }
+    await this._configManager.clearToolSupportVerdict(toolSupportKey(provider));
+    this._log.appendLine(`[probe] cleared tool-support verdict for ${toolSupportKey(provider)}`);
+    vscode.window.showInformationMessage(
+      `Agent 86: tool support for ${provider.name} will be re-detected on the next message.`
+    );
   }
 
   private async _checkProviderHealth(provider: ProviderConfig): Promise<boolean> {
@@ -1356,11 +1410,12 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       }
     }
 
-    // Determine whether the active provider supports native tool calling
+    // Determine whether the active provider supports native tool calling.
+    // Auto-detected: cached verdict per baseUrl::model, else a one-time probe.
     const activeProviders = this._getProviders();
     const activeIdx = Math.min(this._activeProviderIndex, activeProviders.length - 1);
     const activeProvider = activeProviders[activeIdx];
-    const useNativeTools = activeProvider?.toolUse ?? true;
+    const useNativeTools = await this._resolveToolSupport(activeProvider);
 
     // Build ToolExecutor for native tool dispatch (used only when useNativeTools=true)
     const toolExecutor = useNativeTools
@@ -1426,6 +1481,12 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     let lastToolResultWasError = false;
     let lastRoundWasSearchOnly = false;
     let consecutiveEmptyRounds = 0;
+    // Backstop demotion: rounds where tools were offered but the model produced
+    // neither text nor any (native or salvaged textual) tool call. Repeated
+    // failures mark the model as legacy-only for future turns.
+    const DEMOTE_AFTER_NO_TOOL_CALL_ROUNDS = 2;
+    let consecutiveNoToolCallRounds = 0;
+    let toolSupportDemoted = false;
     const MAX_SEARCH_REGRESSION_REFOCUSES = 2;
     let searchRegressionRefocuses = 0;
     let lastSuccessfulSearchPaths: string[] = [];
@@ -1514,8 +1575,14 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
         this._abortController = undefined;
 
         // If the provider rejected tool calling, switch to legacy mode and re-run the round.
+        // Persist the verdict so future turns resolve to the legacy format up front.
         if (nativeToolMode && toolsFallbackActive && !this._userCancelled) {
           this._postMessage({ type: 'status', text: 'Model does not support tool calling — retrying with legacy format…' });
+          if (activeProvider && !toolSupportDemoted) {
+            toolSupportDemoted = true;
+            void this._configManager.setToolSupportVerdict(toolSupportKey(activeProvider), false);
+            this._log.appendLine(`[probe] recorded legacy verdict for ${toolSupportKey(activeProvider)} (provider rejected tools param)`);
+          }
           continue;
         }
 
@@ -1552,6 +1619,29 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           consecutiveEmptyRounds++;
         } else {
           consecutiveEmptyRounds = 0;
+        }
+
+        // Backstop demotion: tools were offered and the model produced nothing
+        // at all. Repeated fully-empty rounds mean it can't drive native tools —
+        // record a legacy verdict so the next turn skips native mode entirely.
+        // (Don't flip modes mid-turn: the legacy prompt and history shape differ.)
+        if (toolsEnabledThisRound) {
+          if (!fullResponse && pendingToolCalls.length === 0) {
+            consecutiveNoToolCallRounds++;
+            if (!toolSupportDemoted && consecutiveNoToolCallRounds >= DEMOTE_AFTER_NO_TOOL_CALL_ROUNDS && activeProvider) {
+              toolSupportDemoted = true;
+              void this._configManager.setToolSupportVerdict(toolSupportKey(activeProvider), false);
+              this._log.appendLine(
+                `[probe] demoting ${toolSupportKey(activeProvider)} to legacy (${consecutiveNoToolCallRounds} consecutive empty rounds with tools enabled)`
+              );
+              this._postMessage({
+                type: 'warning',
+                text: 'Model appears not to support tool calling — switching to the legacy format starting next message.'
+              });
+            }
+          } else {
+            consecutiveNoToolCallRounds = 0;
+          }
         }
 
         // If the model returned empty with no tool calls after tool results, reroute immediately.

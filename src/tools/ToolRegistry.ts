@@ -5,8 +5,9 @@ import { execSync } from 'child_process';
  * Native tool definitions for the Vercel AI SDK.
  *
  * These are passed directly to the LLM via the `tools` parameter on streamText().
- * When the active provider has `toolUse: false`, these are not sent and the system
- * falls back to the legacy XML/JSON schema injected in the system prompt.
+ * When the active model is detected as not supporting native tool calling,
+ * these are not sent and the system falls back to the legacy XML/JSON schema
+ * injected in the system prompt.
  *
  * All tools have no `execute` function — execution is handled manually in
  * ToolExecutor so that destructive tools can show an approval gate first.

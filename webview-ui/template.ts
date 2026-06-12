@@ -37,9 +37,6 @@ export const TEMPLATE_HTML: string = `
         <input id="pf-model" type="text" placeholder="model name" />
         <label for="pf-api-key">API Key (optional)</label>
         <input id="pf-api-key" type="password" placeholder="(none required for local)" />
-        <div id="pf-checkbox-row">
-          <label><input type="checkbox" id="pf-tool-use" checked /> Tool Use</label>
-        </div>
         <label for="pf-context">Context Window</label>
         <input id="pf-context" type="number" placeholder="32768" value="32768" />
         <div id="pf-buttons">

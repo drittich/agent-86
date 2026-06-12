@@ -133,7 +133,7 @@ export function getSystemPrompt(extensionPath?: string): string {
 }
 
 /**
- * Get the native tools system prompt (used when toolUse is enabled)
+ * Get the native tools system prompt (used when the model supports native tool calling)
  */
 export function getNativeToolsPrompt(agentsMdSection: string, behaviorInstructions: string): string {
   return `You are a VS Code coding assistant.${agentsMdSection}
@@ -168,7 +168,7 @@ Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version h
 }
 
 /**
- * Get the legacy system prompt (used when toolUse is disabled)
+ * Get the legacy system prompt (used when the model does not support native tool calling)
  */
 export function getLegacyPrompt(agentsMdSection: string, behaviorInstructions: string): string {
   return `You are a VS Code coding assistant.${agentsMdSection}

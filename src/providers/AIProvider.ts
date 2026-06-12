@@ -7,7 +7,7 @@ import { createProvider, AIProviderInstance } from './ProviderFactory';
  * Extracts the root cause error from AI SDK error wrappers.
  * AI SDK wraps errors in RetryError which contains lastError.
  */
-function extractRootError(error: unknown): unknown {
+export function extractRootError(error: unknown): unknown {
 	// Handle AI SDK RetryError - extract the last error
 	if (RetryError.isInstance(error)) {
 		if (error.lastError) {
@@ -21,7 +21,7 @@ function extractRootError(error: unknown): unknown {
  * Checks if an error indicates the model doesn't support tool/function calling at all.
  * Matches patterns from OpenRouter, Ollama, and other providers.
  */
-function isToolSupportError(err: unknown): boolean {
+export function isToolSupportError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return (
     /400.*\b(tool|function|parameter)\b/i.test(msg) ||
@@ -49,15 +49,15 @@ function isResponsesAPIError(err: unknown): boolean {
  * Supports multiple providers (OpenAI, Anthropic, OpenRouter, OpenAI-compatible)
  * via auto-detection from the base URL.
  *
- * When `toolUse` is enabled and tools are provided, uses native tool calling via
+ * When tools are provided via StreamOptions, uses native tool calling via
  * `fullStream` and emits `tool-call` events. Falls back to text-only streaming
- * when `toolUse` is false (for models that don't support tool calling).
+ * when no tools are passed (the caller decides based on the auto-detected
+ * tool-support verdict for the model).
  *
  * Auto-detects Responses API incompatibility and falls back to Chat Completions.
  */
 export class AIProvider implements IProvider {
   private readonly model: string;
-  private readonly toolUse: boolean;
   private readonly config: ProviderConfig;
   // Lazily initialized on first stream() call via createProvider()
   private _provider: AIProviderInstance | undefined;
@@ -65,7 +65,6 @@ export class AIProvider implements IProvider {
 
   constructor(config: ProviderConfig, _logger?: unknown) {
     this.model = config.model;
-    this.toolUse = config.toolUse ?? true;
     this.config = config;
   }
 
@@ -224,9 +223,8 @@ export class AIProvider implements IProvider {
     try {
       const languageModel = provider(this.model);
 
-      // Use native tool calling only if enabled AND tools are provided
-      const hasTools = !!options?.tools && Object.keys(options.tools).length > 0;
-      const useNativeTools = this.toolUse && hasTools;
+      // Use native tool calling whenever tools are provided
+      const useNativeTools = !!options?.tools && Object.keys(options.tools).length > 0;
       // Sanitize before sending: remove empty assistant messages and orphaned tool results.
       // Keep full conversation history regardless of native-tools mode so fallback requests
       // retain prior tool context (native tool calls and tool results).

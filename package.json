@@ -43,6 +43,10 @@
       {
         "command": "agent86.attachActiveEditor",
         "title": "Attach Active Editor"
+      },
+      {
+        "command": "agent86.reprobeToolSupport",
+        "title": "Re-detect Tool Support for Active Model"
       }
     ],
     "menus": {
@@ -147,7 +151,6 @@
               "name",
               "baseUrl",
               "model",
-              "toolUse",
               "context"
             ],
             "properties": {
@@ -166,11 +169,6 @@
               "apiKey": {
                 "type": "string",
                 "description": "API key (optional, defaults to 'local')"
-              },
-              "toolUse": {
-                "type": "boolean",
-                "default": true,
-                "description": "Whether to enable tool use for this provider"
               },
               "context": {
                 "type": "number",

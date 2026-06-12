@@ -117,6 +117,9 @@ export function activate(context: vscode.ExtensionContext): void {
         panel.updateAttachedFiles(updated);
       }
     }),
+    vscode.commands.registerCommand('agent86.reprobeToolSupport', () => {
+      getOrCreatePanel().reprobeToolSupport();
+    }),
     vscode.commands.registerCommand('agent86FilePicker.focus', () => {
       // The tree view is visible in the Explorer view under "File Picker"
       // This command is kept for potential future use
