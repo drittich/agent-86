@@ -1,5 +1,5 @@
 import { streamText, ToolSet, RetryError } from 'ai';
-import { IProvider, ChatMessage, ProviderEvent, StreamOptions } from './IProvider';
+import { IProvider, ChatMessage, ProviderEvent, StreamOptions, ILogger } from './IProvider';
 import { ProviderConfig } from '../config/ConfigManager';
 import { createProvider, AIProviderInstance } from './ProviderFactory';
 
@@ -59,13 +59,15 @@ function isResponsesAPIError(err: unknown): boolean {
 export class AIProvider implements IProvider {
   private readonly model: string;
   private readonly config: ProviderConfig;
+  private readonly log?: ILogger;
   // Lazily initialized on first stream() call via createProvider()
   private _provider: AIProviderInstance | undefined;
   private _chatCompletionsProvider: AIProviderInstance | undefined;
 
-  constructor(config: ProviderConfig, _logger?: unknown) {
+  constructor(config: ProviderConfig, logger?: ILogger) {
     this.model = config.model;
     this.config = config;
+    this.log = logger;
   }
 
   /**
@@ -245,37 +247,38 @@ export class AIProvider implements IProvider {
 
       const result = streamText(streamArgs);
 
-      if (useNativeTools) {
-        // Consume fullStream to get both text deltas and tool calls
-        for await (const part of result.fullStream) {
-          switch (part.type) {
-            case 'text-delta':
-              hasContent = true;
-              onEvent({ type: 'delta', content: part.text });
-              break;
-            case 'tool-call':
-              hasContent = true;
-              if (!('dynamic' in part) || !part.dynamic) {
-                // Static tool call — input is typed
-                onEvent({
-                  type: 'tool-call',
-                  toolCallId: part.toolCallId,
-                  toolName: part.toolName,
-                  args: (part as any).input as Record<string, unknown>
-                });
-              }
-              break;
-            case 'error':
-              // Capture error for fallback detection - don't emit yet
-              streamError = String((part as any).error ?? 'Unknown stream error');
-              break;
-          }
-        }
-      } else {
-        // Fallback: text-only streaming (models without tool support)
-        for await (const chunk of result.textStream) {
-          hasContent = true;
-          onEvent({ type: 'delta', content: chunk });
+      // Always consume fullStream (with or without tools): unlike textStream,
+      // it also carries reasoning deltas, which some models (step/deepseek-class)
+      // use for most or all of their output.
+      let reasoningText = '';
+      for await (const part of result.fullStream) {
+        switch (part.type) {
+          case 'text-delta':
+            hasContent = true;
+            onEvent({ type: 'delta', content: part.text });
+            break;
+          case 'reasoning-delta':
+            // Buffered, not emitted: only surfaced if the model produces no
+            // visible content at all (see below).
+            reasoningText += part.text;
+            break;
+          case 'tool-call':
+            hasContent = true;
+            if (!('dynamic' in part) || !part.dynamic) {
+              // Static tool call — input is typed
+              onEvent({
+                type: 'tool-call',
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                args: (part as any).input as Record<string, unknown>
+              });
+            }
+            break;
+          case 'error':
+            // Capture error for fallback detection - don't emit yet
+            streamError = String((part as any).error ?? 'Unknown stream error');
+            this.log?.appendLine(`[provider] stream error part: ${streamError}`);
+            break;
         }
       }
 
@@ -308,6 +311,17 @@ export class AIProvider implements IProvider {
         onEvent({ type: 'error', message: streamError });
       }
 
+      // Reasoning-only output: the model put everything in the `reasoning`
+      // field and emitted no visible text or tool calls. Surface the reasoning
+      // as the response rather than reporting an empty turn — for these models
+      // the actual answer usually lives there.
+      if (!hasContent && !streamError && reasoningText.trim().length > 0) {
+        this.log?.appendLine(
+          `[provider] no text content but ${reasoningText.length} chars of reasoning — surfacing reasoning as the response`
+        );
+        onEvent({ type: 'delta', content: reasoningText });
+      }
+
       onEvent({
         type: 'done',
         usage: {
@@ -333,8 +347,8 @@ export class AIProvider implements IProvider {
       }
 
       // Check for AI_NoOutputGeneratedError - model returned empty response
-      if (rootError instanceof Error && 
-          (rootError.name === 'AI_NoOutputGeneratedError' || 
+      if (rootError instanceof Error &&
+          (rootError.name === 'AI_NoOutputGeneratedError' ||
            rootError.message.includes('No output generated'))) {
         // Check if there's an underlying API error
         if (rootError !== err) {
@@ -345,8 +359,22 @@ export class AIProvider implements IProvider {
             return;
           }
         }
-        // No underlying error or not a Responses API error - emit as empty response
-        console.log('[AIProvider] AI_NoOutputGeneratedError (silent empty):', rootError.message);
+        // Surface the underlying provider error (e.g. an OpenRouter 429 rate
+        // limit) instead of treating it as the model silently saying nothing.
+        const cause = (rootError as { cause?: unknown }).cause;
+        if (cause) {
+          if (!isFallback && isResponsesAPIError(cause)) {
+            console.log('[AIProvider] Responses API error (from NoOutputGeneratedError cause), falling back to Chat Completions');
+            await this.doStream(await this.getChatCompletionsProvider(), messages, signal, onEvent, options, true);
+            return;
+          }
+          const causeMsg = cause instanceof Error ? cause.message : String(cause);
+          this.log?.appendLine(`[provider] no output generated — underlying provider error: ${causeMsg}`);
+          onEvent({ type: 'error', message: `The model returned no output. Underlying provider error: ${causeMsg}` });
+          return;
+        }
+        // Genuinely empty completion with no recorded cause - emit as empty response
+        this.log?.appendLine(`[provider] model returned no output (silent empty): ${rootError.message}`);
         onEvent({ type: 'done', finishReason: 'stop' });
         return;
       }
