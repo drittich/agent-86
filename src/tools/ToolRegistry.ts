@@ -374,6 +374,28 @@ const STATIC_TOOLS: ToolSet = {
 
   // ── Task management ───────────────────────────────────────────────────────
 
+  set_plan: tool({
+    description:
+      'Create a step-by-step plan for a multi-step task. The runtime executes the plan one step at a time, ' +
+      'each step in a fresh focused context, and verifies each step when it finishes. ' +
+      'Call this FIRST — before any other tool — when a task needs 3 or more distinct steps or changes across multiple files. ' +
+      'Do NOT use it for simple single-step tasks or questions. ' +
+      'Each item must be one short, concrete, independently executable step.',
+    inputSchema: jsonSchema<{
+      items: string[];
+    }>({
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Ordered list of short, concrete steps (max 12).'
+        }
+      },
+      required: ['items']
+    })
+  }),
+
   create_task: tool({
     description:
       'Create one or more tasks to track work. Tasks are stored in .agent86/tasks.json in the workspace. ' +

@@ -2,6 +2,8 @@ export interface ToolCallRef {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
+  /** True when the paired tool result was evicted from history to save context. Read guards must not treat the file as still in context. */
+  resultEvicted?: boolean;
 }
 
 export interface ChatMessage {

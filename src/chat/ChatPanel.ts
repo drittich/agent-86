@@ -3,7 +3,7 @@ import * as path from 'path';
 import { WebviewToExtension, ExtensionToWebview, AttachedFile } from './messageProtocol';
 import { AIProvider } from '../providers/AIProvider';
 import { probeToolSupport, toolSupportKey } from '../providers/ToolSupportProbe';
-import { ChatMessage } from '../providers/IProvider';
+import { ChatMessage, ToolCallRef } from '../providers/IProvider';
 import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB, FILE_CAP_BYTES, TOTAL_CAP_BYTES } from '../tools/FileTools';
 import { ConfigManager, Session, ProviderConfig } from '../config/ConfigManager';
 import { TokenCounter } from '../tools/TokenCounter';
@@ -18,6 +18,18 @@ import { ToolCallEvent } from '../providers/IProvider';
 import { getSystemPrompt, getNativeToolsPrompt, getLegacyFormatReference, LEGACY_FORMAT_REFERENCE_MARKER } from '../utils/PromptProcessor';
 import { classifyTask, TaskClassification } from '../agent/TaskClassifier';
 import { getModelProfile, ModelProfile } from '../agent/ModelProfile';
+import {
+  PlanRunState,
+  parsePlanItems,
+  createPlanRun,
+  renderPlanMarkdown,
+  buildItemContextMessage,
+  buildItemHandoff,
+  buildVerifierEvidence,
+  buildPlanSummary,
+} from '../agent/PlanRunner';
+import { initScratchpad, appendScratchpad, readScratchpad } from '../agent/Scratchpad';
+import { verifyPlanItem } from '../agent/PlanVerifier';
 
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -861,7 +873,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     for (const msg of this._sessions.history.slice(fromIndex)) {
       if (msg.role === 'assistant' && msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          if (tc.toolName === 'read_file') {
+          // Evicted results are no longer in context — the model must be
+          // allowed to re-read those files.
+          if (tc.toolName === 'read_file' && !tc.resultEvicted) {
             const p = this._normalizeToolPath(String(tc.input['path'] ?? ''));
             if (!p) { continue; }
             const start = typeof tc.input['start_line'] === 'number' ? tc.input['start_line'] : 0;
@@ -1148,6 +1162,81 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     ];
   }
 
+  /**
+   * Sliding-window tool-result eviction.
+   *
+   * When the in-memory history grows past a char threshold, stub every tool
+   * result outside the most recent `keepRounds` tool rounds down to a one-line
+   * marker. Batched and rare by design: evicting all old results at once drops
+   * history well below the threshold, so the prefix KV cache is invalidated
+   * once per eviction event rather than every round. Assistant and user turns
+   * are never touched.
+   */
+  private _maybeEvictOldToolResults(): void {
+    const cfg = vscode.workspace.getConfiguration('agent86');
+    const thresholdChars = cfg.get<number>('toolResultEvictionThresholdChars') ?? 30_000;
+    if (thresholdChars <= 0) { return; }
+    const keepRounds = Math.max(1, cfg.get<number>('toolResultEvictionKeepRounds') ?? 2);
+
+    const history = this._sessions.history;
+    const totalChars = history.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+    if (totalChars < thresholdChars) { return; }
+
+    // Tool results at or after this index belong to the most recent
+    // `keepRounds` tool rounds and are protected.
+    let roundsSeen = 0;
+    let protectFrom = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === 'assistant' && (history[i].tool_calls?.length ?? 0) > 0) {
+        roundsSeen++;
+        if (roundsSeen >= keepRounds) {
+          protectFrom = i;
+          break;
+        }
+      }
+    }
+    if (protectFrom < 0) { return; }
+
+    const refById = new Map<string, ToolCallRef>();
+    for (const msg of history) {
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        for (const tc of msg.tool_calls) { refById.set(tc.toolCallId, tc); }
+      }
+    }
+
+    const MIN_EVICT_CHARS = 200;
+    let evicted = 0;
+    let freedChars = 0;
+    for (let i = 0; i < protectFrom; i++) {
+      const msg = history[i];
+      if (msg.role !== 'tool') { continue; }
+      if (msg.content.length <= MIN_EVICT_CHARS) { continue; }
+      if (msg.content.startsWith('[elided ')) { continue; }
+      const ref = msg.tool_call_id ? refById.get(msg.tool_call_id) : undefined;
+      const toolName = ref?.toolName ?? 'tool';
+      const target = ref
+        ? String(ref.input?.['path'] ?? ref.input?.['glob'] ?? ref.input?.['pattern'] ?? ref.input?.['command'] ?? '')
+            .replace(/\s+/g, ' ')
+            .slice(0, 80)
+        : '';
+      const originalLength = msg.content.length;
+      msg.content =
+        `[elided ${toolName}${target ? ` ${target}` : ''} result — ` +
+        `${originalLength} chars removed to save context. Call the tool again if you need it.]`;
+      if (ref && ref.toolName === 'read_file') {
+        ref.resultEvicted = true;
+      }
+      evicted++;
+      freedChars += originalLength - msg.content.length;
+    }
+
+    if (evicted > 0) {
+      this._log.appendLine(
+        `[evict] stubbed ${evicted} old tool result(s), freed ~${freedChars} chars (history was ${totalChars} chars, threshold ${thresholdChars})`
+      );
+    }
+  }
+
   /** Compact single-line preview for debug logs. */
   private _previewForLog(content: string, maxLen = 300): string {
     const singleLine = content.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1418,6 +1507,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     }
 
     this._sessions.history.push({ role: 'user', content: userContent, displayContent: prompt });
+    // Anchor for plan mode: per-step context resets are rebuilt around this
+    // message (prior history + this task message + step directive).
+    const anchorIndex = this._sessions.history.length - 1;
 
     // Read AGENTS.md once for this send if the user has opted in
     let agentsMdContent: string | undefined;
@@ -1529,8 +1621,63 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
     // Snapshot history length at turn start so the duplicate-read guard only
     // considers reads made within this turn, not from prior turns whose tool
-    // results may have been compacted out of context.
-    const turnHistoryStartIndex = this._sessions.history.length;
+    // results may have been compacted out of context. Reset at each plan-step
+    // boundary: a fresh step context means previously-read files are gone and
+    // may legitimately be re-read.
+    let turnHistoryStartIndex = this._sessions.history.length;
+
+    // ── Plan mode ────────────────────────────────────────────────────────────
+    // Set when the model calls set_plan. From then on the harness drives:
+    // each step runs in a fresh context, the harness detects completion (a
+    // non-tool response), verifies it, and advances.
+    let planRun: PlanRunState | null = null;
+    const wsRoot = wsRoots[0] ?? '';
+
+    // Reset the turn-local exploration/recovery state at a plan-step boundary.
+    // A fresh step context gets a fresh budget; without this, stall-recovery
+    // caps from earlier steps would bleed into later ones.
+    const resetPlanItemCounters = () => {
+      turnHistoryStartIndex = this._sessions.history.length;
+      emptyResponseRetries = 0;
+      toolContinuationRetries = 0;
+      nativeFinalAnswerRetries = 0;
+      forcePlainTextAnswer = false;
+      consecutiveEmptyRounds = 0;
+      concreteReadRefocuses = 0;
+      totalConcreteReadRefocuses = 0;
+      totalFileReadRounds = 0;
+      discoveryRefocuses = 0;
+      repetitiveDiscoveryRounds = 0;
+      seenDiscoveryGlobs.clear();
+      substantiveToolRounds = 0;
+      lastToolResultWasError = false;
+      lastRoundWasSearchOnly = false;
+      lastSuccessfulSearchPaths = [];
+      searchNamedReadTargets.clear();
+      positiveSearchPathsByPattern.clear();
+    };
+
+    // Start (or retry) the current plan step: mark it in progress, rebuild
+    // history as [prior turns, task message, step directive], reset budgets.
+    const startPlanItem = (retryCritique?: string, previousAttemptHandoff?: string) => {
+      const pr = planRun!;
+      const item = pr.items[pr.currentIndex];
+      item.status = 'in_progress';
+      pr.itemToolRounds = 0;
+      pr.itemBudgetNudged = false;
+      const stepContext = buildItemContextMessage(pr, readScratchpad(wsRoot), retryCritique, previousAttemptHandoff);
+      this._sessions.history = [
+        ...pr.preTurnHistory,
+        pr.anchorMessage,
+        { role: 'user', content: stepContext, internal: true },
+      ];
+      pr.itemStartIndex = this._sessions.history.length;
+      resetPlanItemCounters();
+      const label = `Step ${pr.currentIndex + 1}/${pr.items.length}: ${item.text}`;
+      this._log.appendLine(`[plan] starting ${label}${retryCritique ? ' (retry)' : ''}`);
+      this._postMessage({ type: 'status', text: label.slice(0, 120) });
+      this._postMessage({ type: 'delta', content: `\n\n**${label}**\n\n` });
+    };
 
     // Set to true if the provider signals it doesn't support native tools;
     // triggers a legacy-prompt re-stream for the current turn.
@@ -1759,7 +1906,9 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             );
             // Collapse the messy tool transcript into a clean scratch summary.
             // This fixes the poor context shape that causes models to stall.
-            if (!scratchCollapsed && toolRound >= SCRATCH_COLLAPSE_THRESHOLD) {
+            // Skipped in plan mode: collapsing would strip the step directive;
+            // eviction keeps plan-step contexts small instead.
+            if (!scratchCollapsed && toolRound >= SCRATCH_COLLAPSE_THRESHOLD && !planRun) {
               scratchCollapsed = true;
               this._log.appendLine(`[tools] collapsing tool history into scratch summary (toolRound=${toolRound})`);
               this._collapseToolHistory(prompt);
@@ -1844,6 +1993,48 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
 
         // ── Native tool call loop ────────────────────────────────────────────
         if (nativeToolMode && pendingToolCalls.length > 0 && toolExecutor) {
+          // ── set_plan interception (harness-driven plan mode) ───────────────
+          // Never reaches ToolExecutor: accepting a plan flips the turn into
+          // plan mode, where the harness resets context per step.
+          const planCall = pendingToolCalls.find(tc => tc.toolName === 'set_plan');
+          if (planCall) {
+            const planCallRef = {
+              toolCallId: planCall.toolCallId,
+              toolName: planCall.toolName,
+              input: planCall.args,
+            };
+            if (planRun) {
+              this._log.appendLine('[plan] set_plan called while a plan is active — steering back to the current step');
+              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef] });
+              this._sessions.history.push({
+                role: 'tool',
+                content: 'A plan is already being executed. Continue with the current step only — do not create another plan.',
+                tool_call_id: planCall.toolCallId,
+              });
+              continue;
+            }
+            const planItems = parsePlanItems(planCall.args);
+            if (!planItems) {
+              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef] });
+              this._sessions.history.push({
+                role: 'tool',
+                content: 'Error: set_plan requires a non-empty "items" array of short step strings. Either call set_plan again with valid items, or proceed without a plan.',
+                tool_call_id: planCall.toolCallId,
+              });
+              continue;
+            }
+            this._log.appendLine(`[plan] accepted ${planItems.length}-step plan`);
+            this._postMessage({ type: 'delta', content: `${renderPlanMarkdown(planItems)}\n` });
+            initScratchpad(wsRoot, prompt, planItems);
+            planRun = createPlanRun(
+              planItems,
+              this._sessions.history.slice(0, anchorIndex),
+              this._sessions.history[anchorIndex]
+            );
+            startPlanItem();
+            continue;
+          }
+
           const discoveryCalls = pendingToolCalls.filter(tc => this._isDiscoveryToolCall(tc));
           const substantiveCalls = pendingToolCalls.filter(tc => this._isSubstantiveToolCall(tc));
           if (discoveryCalls.length > 0) {
@@ -1865,7 +2056,9 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           }
 
           const upcomingToolRound = toolRound + 1;
-          const overToolRoundBudget = upcomingToolRound > MAX_EXPLORATION_TOOL_ROUNDS;
+          // In plan mode the per-step budget below governs wrap-up instead of
+          // the turn-wide exploration budget.
+          const overToolRoundBudget = !planRun && upcomingToolRound > MAX_EXPLORATION_TOOL_ROUNDS;
           const overContextBudget = finalAnswerContextThreshold > 0 && contextTokens >= finalAnswerContextThreshold;
           const tooManyDiscoveryGlobs = seenDiscoveryGlobs.size >= 4;
           const excessiveDiscoveryLoop = repetitiveDiscoveryRounds >= 1 && seenDiscoveryGlobs.size >= 3;
@@ -1900,7 +2093,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             // After enough tool rounds the history shape degrades badly (many tool blobs,
             // compressed code, errors). Collapse it into a clean scratch summary so the
             // model sees structured findings rather than a messy transcript.
-            if (!scratchCollapsed && toolRound >= SCRATCH_COLLAPSE_THRESHOLD) {
+            // Skipped in plan mode (would strip the step directive).
+            if (!scratchCollapsed && toolRound >= SCRATCH_COLLAPSE_THRESHOLD && !planRun) {
               scratchCollapsed = true;
               this._log.appendLine(`[tools] collapsing tool history into scratch summary (toolRound=${toolRound})`);
               this._collapseToolHistory(prompt);
@@ -1921,6 +2115,31 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             });
             this._postMessage({ type: 'status', text: 'Context budget reached — generating final answer…' });
             continue;
+          }
+
+          // ── Per-step tool budget (plan mode) ────────────────────────────────
+          // Plan steps are supposed to be narrow; when one exhausts its rounds,
+          // ask it to wrap up in answer-only mode instead of letting it flail.
+          // The resulting plain-text reply is handled as step completion below.
+          if (planRun) {
+            const maxItemRounds = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRoundsPerPlanItem') ?? 6;
+            if (planRun.itemToolRounds >= maxItemRounds && !planRun.itemBudgetNudged) {
+              planRun.itemBudgetNudged = true;
+              forcePlainTextAnswer = true;
+              this._log.appendLine(
+                `[plan] step ${planRun.currentIndex + 1} hit its tool budget (${maxItemRounds} rounds) — requesting wrap-up`
+              );
+              this._sessions.history.push({
+                role: 'user',
+                content:
+                  'Stop. The tool budget for this plan step is used up. Do not call more tools. ' +
+                  'In plain text, state what you completed for this step and what (if anything) is still missing.',
+                internal: true,
+              });
+              this._postMessage({ type: 'status', text: `Step ${planRun.currentIndex + 1} tool budget reached — wrapping up…` });
+              continue;
+            }
+            planRun.itemToolRounds++;
           }
 
           toolRound++;
@@ -2090,6 +2309,11 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             });
           }
 
+          // Sliding-window eviction: once history grows past the threshold,
+          // stub tool results older than the most recent rounds. Batched so the
+          // prefix KV cache breaks once per eviction event, not every round.
+          this._maybeEvictOldToolResults();
+
           // True when this round was all search/discovery (find_files, list_directory,
           // search_file_contents) with no file reads or writes. Used to detect the
           // "broad search → empty response" stall pattern.
@@ -2215,6 +2439,74 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
               `[stream] legacy non-actionable response (${fullResponse.length} chars): ${this._previewForLog(fullResponse)}`
             );
           }
+        }
+
+        // ── Plan step completion (harness-decided) ──────────────────────────
+        // In plan mode, a non-tool response means the current step claims to be
+        // done. Verify it with a one-shot judge call, then retry once or
+        // advance. The model never decides transitions — the harness does.
+        if (planRun && nativeToolMode && fullResponse.trim().length > 0) {
+          const pr = planRun;
+          const item = pr.items[pr.currentIndex];
+          const stepTranscript = this._sessions.history.slice(pr.itemStartIndex);
+          const handoff = buildItemHandoff(item.text, pr.currentIndex, stepTranscript, fullResponse);
+
+          let verdict: { pass: boolean; critique: string } | null = null;
+          const verifyEnabled = vscode.workspace.getConfiguration('agent86').get<boolean>('verifyPlanItems') ?? true;
+          if (verifyEnabled) {
+            this._postMessage({ type: 'status', text: `Verifying step ${pr.currentIndex + 1}/${pr.items.length}…` });
+            verdict = await verifyPlanItem(
+              this._getProvider(),
+              {
+                itemText: item.text,
+                evidence: buildVerifierEvidence(stepTranscript, fullResponse),
+                // Thinking off; no id_slot so the judge call doesn't thrash the
+                // session's llama.cpp cache slot.
+                extraBody: { chat_template_kwargs: { enable_thinking: false } },
+              },
+              this._log
+            );
+          }
+
+          if (verdict && !verdict.pass && !pr.itemRetried) {
+            pr.itemRetried = true;
+            this._postMessage({
+              type: 'delta',
+              content: `\n_Step ${pr.currentIndex + 1} verification failed: ${verdict.critique || 'incomplete'} — retrying._\n`,
+            });
+            startPlanItem(verdict.critique || 'the step was judged incomplete', handoff);
+            continue;
+          }
+
+          // Finalize the step (a null verdict — verifier unavailable — accepts).
+          const failed = !!verdict && !verdict.pass;
+          item.status = failed ? 'failed' : 'done';
+          const responseFirstLine = fullResponse.split(/\r?\n/).find(l => l.trim().length > 0)?.trim().slice(0, 140) ?? '';
+          item.outcome = failed ? `incomplete: ${verdict!.critique || 'failed verification twice'}` : responseFirstLine;
+          pr.handoffNotes.push(handoff);
+          appendScratchpad(wsRoot, handoff);
+          pr.itemRetried = false;
+          this._log.appendLine(`[plan] step ${pr.currentIndex + 1}/${pr.items.length} ${item.status}`);
+
+          pr.currentIndex++;
+          if (pr.currentIndex < pr.items.length) {
+            startPlanItem();
+            continue;
+          }
+
+          // All steps finished: replace the plan transcript with a clean
+          // [task, summary] pair so the next user turn starts from a small,
+          // well-shaped history.
+          const summary = buildPlanSummary(pr);
+          this._postMessage({ type: 'delta', content: `\n\n${summary}` });
+          this._sessions.history = [
+            ...pr.preTurnHistory,
+            pr.anchorMessage,
+            { role: 'assistant', content: summary },
+          ];
+          finalResponse = summary;
+          planRun = null;
+          break;
         }
 
         finalResponse = fullResponse;

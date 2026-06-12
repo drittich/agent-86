@@ -131,6 +131,28 @@
           "minimum": 1,
           "description": "Maximum number of tool-calling rounds per inference cycle before the model is asked to produce a final answer."
         },
+        "agent86.maxToolRoundsPerPlanItem": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "description": "Maximum tool-calling rounds per plan step before the step is asked to wrap up in plain text."
+        },
+        "agent86.verifyPlanItems": {
+          "type": "boolean",
+          "default": true,
+          "description": "After each plan step, run a one-shot verification call that judges whether the step was completed. A failed verdict retries the step once with the critique injected."
+        },
+        "agent86.toolResultEvictionThresholdChars": {
+          "type": "number",
+          "default": 30000,
+          "description": "When the conversation history exceeds this many characters, tool results outside the most recent rounds are stubbed down to one line to keep context small. Set 0 to disable."
+        },
+        "agent86.toolResultEvictionKeepRounds": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "description": "Number of most recent tool rounds whose results are never evicted."
+        },
         "agent86.modelTier": {
           "type": "string",
           "enum": [

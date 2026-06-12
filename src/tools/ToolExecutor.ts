@@ -96,6 +96,9 @@ export class ToolExecutor {
       case 'get_diagnostics':      return this._getDiagnostics(args);
       case 'web_search':           return this._webSearch(args);
       case 'fetch_url':            return this._fetchUrl(args);
+      // set_plan is intercepted by ChatPanel before dispatch; this is a
+      // defensive fallback so a stray call never reads as an unknown tool.
+      case 'set_plan':             return 'Plan recorded.';
       case 'create_task':          return this._createTask(args);
       case 'list_tasks':           return this._listTasks();
       case 'update_task':          return this._updateTask(args);
