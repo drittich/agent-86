@@ -15,7 +15,7 @@ import { ChatPanelSessions } from './ChatPanelSessions';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { buildAgentTools } from '../tools/ToolRegistry';
 import { ToolCallEvent } from '../providers/IProvider';
-import { getSystemPrompt, getNativeToolsPrompt } from '../utils/PromptProcessor';
+import { getSystemPrompt, getNativeToolsPrompt, getLegacyFormatReference, LEGACY_FORMAT_REFERENCE_MARKER } from '../utils/PromptProcessor';
 import { classifyTask, TaskClassification } from '../agent/TaskClassifier';
 import { getModelProfile, ModelProfile } from '../agent/ModelProfile';
 
@@ -388,44 +388,32 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     const globs = new Set<string>();
 
-    if (/\bpython\b|\.py\b|pydantic|django|flask|fastapi|pytest|site-packages/.test(normalized)) {
-      globs.add('**/*.py');
-      globs.add('**/*.pyi');
-      globs.add('**/pyproject.toml');
-      globs.add('**/requirements*.txt');
-
-      if (/\bstartup\b|\blaunch\b|\bbootstrap\b|\bimport\b|\bmodule\b|\bload\b|\bscan\b|\bcache\b/.test(normalized)) {
-        globs.add('web/**/*.py');
-        globs.add('web/pgadmin/**/*.py');
-        globs.add('web/pgAdmin4.py');
-        globs.add('web/setup.py');
-        globs.add('web/version.py');
-      }
-    }
-    if (/\btypescript\b|\bjavascript\b|\bnode\b|\breact\b|\bjsx\b|\btsx\b|\bimport\b|\bnpm\b/.test(normalized)) {
-      globs.add('src/**/*.ts');
-      globs.add('src/**/*.tsx');
-      globs.add('**/*.js');
-      globs.add('**/*.jsx');
-      globs.add('**/package.json');
-      globs.add('**/tsconfig.json');
-    }
-    if (/\bconfig\b|\bstartup\b|\bbuild\b|\blaunch\b|\bbootstrap\b|\bsettings\b/.test(normalized)) {
-      globs.add('**/*.json');
-      globs.add('**/*.yml');
-      globs.add('**/*.yaml');
-      globs.add('**/*.toml');
-    }
-    if (/\bc#\b|\.cs\b|\.sln\b|\.csproj\b/.test(normalized)) {
+    if (/\bc#\b|\bcsharp\b|\.cs\b|\.sln\b|\.csproj\b|\bdotnet\b|\.net\b|\basp\.?net\b|\bef core\b|entity framework|\bcontroller\b|\bbackend\b/.test(normalized)) {
       globs.add('**/*.cs');
       globs.add('**/*.csproj');
       globs.add('**/*.sln');
+      globs.add('**/appsettings*.json');
     }
-    if (/\bc\+\+\b|\bcpp\b|\.cpp\b|\.hpp\b|\.cc\b|\.h\b/.test(normalized)) {
-      globs.add('**/*.cpp');
-      globs.add('**/*.hpp');
-      globs.add('**/*.cc');
-      globs.add('**/*.h');
+    if (/\btypescript\b|\bjavascript\b|\bnode\b|\breact\b|\bjsx\b|\btsx\b|\bvite\b|\bnpm\b|\bfrontend\b|\bfront-end\b|\bcomponent\b/.test(normalized)) {
+      globs.add('src/**/*.ts');
+      globs.add('src/**/*.tsx');
+      globs.add('**/vite.config.*');
+      globs.add('**/package.json');
+      globs.add('**/tsconfig.json');
+    }
+    if (/\bpostgres\b|\bpostgresql\b|\bsql\b|\bdatabase\b|\bmigration\b|\bschema\b|\bnpgsql\b|\bdapper\b/.test(normalized)) {
+      globs.add('**/*.sql');
+      globs.add('**/Migrations/**/*.cs');
+    }
+    if (/\bconfig\b|\bstartup\b|\blaunch\b|\bbootstrap\b|\bsettings\b|\benvironment\b/.test(normalized)) {
+      globs.add('**/appsettings*.json');
+      globs.add('**/*.yml');
+      globs.add('**/*.yaml');
+    }
+    if (/\bpython\b|\.py\b|\bdjango\b|\bflask\b|\bfastapi\b|\bpytest\b/.test(normalized)) {
+      globs.add('**/*.py');
+      globs.add('**/pyproject.toml');
+      globs.add('**/requirements*.txt');
     }
 
     if (globs.size === 0) {
@@ -434,22 +422,20 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
     return [
       '<discovery_hint>',
-      'If the relevant path is unknown, start with recursive discovery across subdirectories.',
-      'Prefer find_files or list_directory with ** globs rather than root-only "*".',
-      'Ignored folders and gitignored files are excluded automatically.',
-      'For Python application startup analysis, prefer app-owned paths like web/ and web/pgadmin/ before bundled runtime or site-packages code.',
-      'Avoid broad workspace-wide content searches such as path="." with generic import patterns when a likely application directory is available.',
-      'Likely relevant globs for this request:',
+      'Start with search_file_contents using keywords from the task — not with find_files or list_directory.',
+      'Only if targeted content searches return zero matches, fall back to find_files with one of these globs:',
       ...Array.from(globs).map(glob => `- ${glob}`),
+      'Skip vendor and build-output directories (node_modules, bin, obj, dist, build).',
+      'Ignored folders and gitignored files are excluded automatically.',
       '</discovery_hint>'
     ].join('\n');
   }
 
   private _createSystemPrompt(agentsMdContent?: string): string {
     const thinkingMode = this._sessions.thinkingMode;
-    const behaviorInstructions = thinkingMode
+    const behaviorInstructions = '## Response style\n\n' + (thinkingMode
       ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
-      : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`;
+      : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`);
     const agentsMdSection = agentsMdContent
       ? `\n\n## AGENTS.md\n${agentsMdContent}`
       : '';
@@ -469,6 +455,25 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     }
 
     return getNativeToolsPrompt(agentsMdSection, behaviorInstructions);
+  }
+
+  /**
+   * Inject the legacy textual-format reference card once per session.
+   * The stable system prompt only mentions that fallback formats exist; the
+   * exact syntax is delivered here so native-tool models never see it.
+   */
+  private _ensureLegacyFormatReference(): void {
+    const alreadyInjected = this._sessions.history.some(
+      m => m.internal && m.content.startsWith(LEGACY_FORMAT_REFERENCE_MARKER)
+    );
+    if (!alreadyInjected) {
+      this._sessions.history.push({
+        role: 'user',
+        content: getLegacyFormatReference(),
+        internal: true,
+      });
+      this._log.appendLine('[fallback] injected legacy format reference into history');
+    }
   }
 
   private _buildMessages(agentsMdContent?: string, useNativeTools = false): ChatMessage[] {
@@ -698,6 +703,8 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     strictDirectAnswer?: boolean;
     reason?: string;
     compact?: boolean;
+    /** True when the task is a comprehension question (no change requested) — answer directly, no change-plan template. */
+    explanationTask?: boolean;
   }): string {
     // Compact mode: short prompt for small models recovering from empty responses.
     if (options?.compact) {
@@ -731,11 +738,28 @@ export class ChatPanel implements vscode.WebviewViewProvider {
         'Done: 1-3 short sentences stating exactly what was changed or executed.',
         mentionUncertainty
           ? 'Issues: write "none" if everything succeeded, otherwise one short sentence describing any problem or partial failure.'
-          : 'Issues: none.'
+          : 'If anything failed or only partially succeeded, add one short sentence labelled "Issues:" describing it; otherwise omit it.'
       ].join(' ');
     }
 
-    // Research task: model only read/searched — describe findings and where to act.
+    const uncertaintyLine = mentionUncertainty
+      ? 'Uncertainty: write "none" unless evidence is clearly insufficient, in which case write one short sentence explaining what is missing.'
+      : 'If evidence is clearly insufficient, add one short sentence labelled "Uncertainty:" explaining what is missing; otherwise omit it.';
+
+    if (options?.explanationTask) {
+      // Comprehension question: answer it directly — no change plan, no recommendation slots.
+      return [
+        `Stop exploring.${noMoreTools ? ' Do not call more tools.' : ''}${reason}`,
+        'Using only the information already gathered in this conversation, answer the original question directly now.',
+        noPropose,
+        'Use this exact structure:',
+        'Answer: 2-5 short sentences that directly answer the question, citing concrete evidence (file paths, function names) already observed.',
+        'Key locations: a short list of the most relevant file path(s) already observed, if any.',
+        uncertaintyLine
+      ].join(' ');
+    }
+
+    // Change-seeking research task: model only read/searched — describe findings and where to act.
     return [
       `Stop exploring.${noMoreTools ? ' Do not call more tools.' : ''}${reason}`,
       'Using only the information already gathered in this conversation, answer the original question directly now.',
@@ -744,9 +768,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       'Findings: 2-4 short sentences with concrete observations from the gathered evidence.',
       'Recommendation: 1-2 short sentences describing the most likely implementation approach.',
       'Where to change: a short list of the most relevant file path(s) or function(s) already observed.',
-      mentionUncertainty
-        ? 'Uncertainty: write "none" unless evidence is clearly insufficient, in which case write one short sentence explaining what is missing.'
-        : 'Uncertainty: none.'
+      uncertaintyLine
     ].join(' ');
   }
 
@@ -824,7 +846,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       return this._normalizeToolPath(String(toolCall.args['path'] ?? ''));
     }
     if (toolCall.toolName === 'find_files' || toolCall.toolName === 'list_directory') {
-      return this._normalizeToolPath(String(toolCall.args['glob'] ?? ''));
+      return this._normalizeToolPath(String(toolCall.args['glob'] ?? toolCall.args['path'] ?? ''));
     }
     return '';
   }
@@ -886,7 +908,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _normalizeDiscoveryGlob(toolCall: ToolCallEvent): string {
-    return String(toolCall.args['glob'] ?? '').trim().toLowerCase();
+    return String(toolCall.args['glob'] ?? toolCall.args['path'] ?? '').trim().toLowerCase();
   }
 
   private _buildClassifierHint(classification: TaskClassification): string | undefined {
@@ -903,7 +925,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       lines.push('For startup/module-loading tasks, search for these patterns first:');
       const terms = classification.domainHints.slice(0, 6);
       lines.push(...terms.map(t => `- ${t}`));
-      lines.push('Prefer app-owned paths: src/, app/, web/, plugins/, utils/');
+      lines.push('Prefer app-owned paths: src/, server/, client/, app/');
       lines.push('Do NOT start with list_directory. Use search_file_contents with these terms first.');
     }
 
@@ -917,7 +939,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       'Skip vendor, runtime, and package manager directories (node_modules, site-packages, dist, build, .venv, etc.).',
       'Using the directory structure already seen in the discovery results, identify the application-owned source directory.',
       'Choose one of these next actions only:',
-      '1. Read the most likely entry-point or initialization file in the application-owned directory (e.g. main.py, app.py, index.ts, __init__.py, or a similarly named top-level file).',
+      '1. Read the most likely entry-point or initialization file in the application-owned directory (e.g. Program.cs, main.tsx, index.ts, main.py, or a similarly named top-level file).',
       '2. Run one targeted content search inside the application-owned directory for terms relevant to the task.',
       'Do not use broad recursive patterns again. Do not use execute_bash for file discovery.'
     ].join(' ');
@@ -1417,6 +1439,13 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const activeProvider = activeProviders[activeIdx];
     const useNativeTools = await this._resolveToolSupport(activeProvider);
 
+    // Legacy-verdict models parse textual formats from the stream; give them
+    // the exact format reference once per session (the stable system prompt
+    // only points at it).
+    if (!useNativeTools) {
+      this._ensureLegacyFormatReference();
+    }
+
     // Build ToolExecutor for native tool dispatch (used only when useNativeTools=true)
     const toolExecutor = useNativeTools
       ? new ToolExecutor(
@@ -1583,6 +1612,9 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             void this._configManager.setToolSupportVerdict(toolSupportKey(activeProvider), false);
             this._log.appendLine(`[probe] recorded legacy verdict for ${toolSupportKey(activeProvider)} (provider rejected tools param)`);
           }
+          // The re-streamed round will be parsed as legacy text — make sure the
+          // model has the exact textual formats before it responds.
+          this._ensureLegacyFormatReference();
           continue;
         }
 
@@ -1785,7 +1817,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
                 noMoreTools: true,
                 mentionUncertainty: true,
                 strictDirectAnswer: true,
-                reason: 'the previous reply was not a direct final answer'
+                reason: 'the previous reply was not a direct final answer',
+                explanationTask: taskClassification.taskType === 'explanation'
               }),
               internal: true,
             });
@@ -1881,7 +1914,8 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
                 strictDirectAnswer: true,
                 reason: discoveryLoopAfterEvidence
                   ? 'the model is repeating broad file discovery instead of synthesizing'
-                  : 'the exploration budget is exhausted'
+                  : 'the exploration budget is exhausted',
+                explanationTask: taskClassification.taskType === 'explanation'
               }),
               internal: true,
             });

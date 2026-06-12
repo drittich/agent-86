@@ -156,11 +156,11 @@ Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version h
  - Never return an empty response after tool results.
 
  ## Discovery (fallback only)
- Use \`find_files\` or \`list_directory\` only when:
+ Use \`find_files\` (recursive glob) or \`list_directory\` (one directory level) only when:
  - All targeted searches returned zero results.
  - The task explicitly asks for directory structure.
  - The repository structure is genuinely unknown and no keyword search is possible.
- Prefer app-owned paths (e.g. \`src/\`, \`app/\`, \`web/\`) over broad workspace-wide globs.
+ Prefer app-owned paths (e.g. \`src/\`, \`server/\`, \`client/\`, \`app/\`) over broad workspace-wide globs.
 
  ## When to stop calling tools
  After reading 2-3 relevant files, synthesize findings and answer directly.
@@ -168,27 +168,25 @@ Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version h
 }
 
 /**
- * Get the legacy system prompt (used when the model does not support native tool calling)
+ * Reference card for the legacy (non-native-tool) textual formats.
+ *
+ * Injected as an internal user message when the runtime falls back to legacy
+ * parsing — either because the cached verdict for the model is legacy, or
+ * because the provider rejected the tools parameter mid-turn. Keeping this out
+ * of the stable system prompt avoids paying its token cost (and risking format
+ * confusion) on models that support native tool calling.
+ *
+ * The leading marker is used to detect whether the reference has already been
+ * injected into the session history.
  */
-export function getLegacyPrompt(agentsMdSection: string, behaviorInstructions: string): string {
-  return `You are a VS Code coding assistant.${agentsMdSection}
+export const LEGACY_FORMAT_REFERENCE_MARKER = '[Fallback formats]';
 
-${behaviorInstructions}
-
-## Files
-Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in \`search_file\` and \`request_chunks\` URIs.
+export function getLegacyFormatReference(): string {
+  return `${LEGACY_FORMAT_REFERENCE_MARKER} Native tool calling is unavailable for this model. Use the exact textual formats below instead. Never mix these with native tool-call syntax.
 
 ## Requesting data
-Before any file search, resolve workspace-relative paths and confirm existence.
 
-If the relevant files are unknown, start with recursive discovery across subdirectories. Prefer \`request_files\` with \`**\` globs rather than root-only \`*\`.
-
-Examples:
-- Python: \`**/*.py\`, \`**/*.pyi\`, \`**/pyproject.toml\`, \`**/requirements*.txt\`
-- TypeScript / JavaScript: \`src/**/*.ts\`, \`src/**/*.tsx\`, \`**/*.js\`, \`**/*.jsx\`
-- Config / build files: \`**/package.json\`, \`**/tsconfig.json\`, \`**/*.yml\`, \`**/*.yaml\`
-
-Ignored files and folders are excluded automatically. If a file path is uncertain, search a directory or the workspace recursively before guessing exact paths.
+If the relevant files are unknown, prefer \`request_files\` with \`**\` globs (e.g. \`src/**/*.ts\`, \`**/*.cs\`) rather than root-only \`*\`. Ignored files and folders are excluded automatically.
 
 Emit ONE of these JSON objects instead of \`edits\` (max 2 rounds each; do not combine with \`edits\` or each other):
 

@@ -89,8 +89,8 @@ export class ToolExecutor {
       case 'move_file':            return this._moveFile(args);
       case 'delete_file':          return this._deleteFile(args);
       case 'create_directory':     return this._createDirectory(args);
-      case 'list_directory':       return this._listDirectory(args);
-      case 'find_files':           return this._listDirectory(args); // same impl
+      case 'list_directory':       return this._listDirectoryShallow(args);
+      case 'find_files':           return this._listDirectory(args);
       case 'execute_bash':         return this._executeBash(args);
       case 'search_file_contents': return this._searchFileContents(args);
       case 'get_diagnostics':      return this._getDiagnostics(args);
@@ -426,14 +426,27 @@ export class ToolExecutor {
       .map(([ext, count]) => `- ${ext}: ${count}`)
       .join('\n');
 
+    // Likely entry points / project anchors, biased toward the typical
+    // .NET backend + TypeScript/Vite frontend stack but generic enough
+    // for other layouts.
+    const ENTRY_POINT_PATTERNS: RegExp[] = [
+      /(^|\/)program\.cs$/,
+      /(^|\/)startup\.cs$/,
+      /\.sln$/,
+      /\.csproj$/,
+      /(^|\/)appsettings\.json$/,
+      /(^|\/)main\.tsx?$/,
+      /(^|\/)index\.tsx?$/,
+      /(^|\/)app\.tsx?$/,
+      /(^|\/)vite\.config\.[tj]s$/,
+      /(^|\/)package\.json$/,
+      /(^|\/)main\.py$/,
+      /(^|\/)app\.py$/,
+      /(^|\/)__init__\.py$/,
+    ];
     const prioritizedCandidates = paths.filter(relPath => {
       const normalized = relPath.toLowerCase();
-      return normalized === 'web/pgadmin4.py' ||
-        normalized === 'web/setup.py' ||
-        normalized === 'web/version.py' ||
-        normalized === 'web/config.py' ||
-        normalized === 'web/pgadmin/__init__.py' ||
-        normalized.endsWith('/__init__.py');
+      return ENTRY_POINT_PATTERNS.some(p => p.test(normalized));
     }).slice(0, 12);
 
     const candidateSection = prioritizedCandidates.length > 0
@@ -442,7 +455,7 @@ export class ToolExecutor {
 
     const nextStep = prioritizedCandidates.length > 0
       ? `Next step: call read_file on the recommended files above — do NOT call list_directory or find_files again.`
-      : `Next step: narrow to the app-owned subdirectory (e.g. web/, src/) with read_file on the entry point.`;
+      : `Next step: narrow to the app-owned subdirectory (e.g. src/, server/, client/) and call read_file on its entry point.`;
 
     return [
       `${paths.length} file(s) matching "${glob}".`,
@@ -487,6 +500,55 @@ export class ToolExecutor {
 
     this._activity(`Find: ${requestedGlob} (${paths.length} file(s))`);
     return `${paths.length} file(s) matching "${requestedGlob}":\n${paths.join('\n')}`;
+  }
+
+  /**
+   * One-level directory listing backing the list_directory tool. Distinct from
+   * find_files (recursive glob): returns the immediate files and subdirectories
+   * of a single directory, with subdirectories marked by a trailing slash.
+   */
+  private async _listDirectoryShallow(args: Record<string, unknown>): Promise<string> {
+    // Schema uses `path`; tolerate `glob` from models replaying the old schema.
+    const requested = String(args['path'] ?? args['glob'] ?? '.').trim();
+    const relDir = requested === '' || requested === '.'
+      ? ''
+      : requested.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+
+    // If the model passed a glob pattern anyway, delegate to the recursive impl.
+    if (/[*?{\[]/.test(relDir)) {
+      return this._listDirectory({ glob: relDir });
+    }
+
+    const resolved = resolveEditPath(relDir || '.', this.wsRoots);
+    if (resolved.error || !resolved.resolvedPath) {
+      return `Error: cannot resolve directory "${requested}". Pass a workspace-relative directory path, e.g. "src".`;
+    }
+
+    let entries: Array<[string, vscode.FileType]>;
+    try {
+      entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(resolved.resolvedPath));
+    } catch (err) {
+      return `Error listing directory "${requested}": ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'bin', 'obj', 'dist', 'build']);
+    const listed = entries
+      .map(([name, type]) => {
+        const isDir = (type & vscode.FileType.Directory) !== 0;
+        return { name, isDir, rel: relDir ? `${relDir}/${name}` : name };
+      })
+      .filter(e => !(e.isDir && EXCLUDED_DIRS.has(e.name)) && !this.gitIgnoreFilter.isIgnored(e.rel))
+      .sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name));
+
+    if (listed.length === 0) {
+      return `Directory "${relDir || '.'}" has no entries (after excluding ignored paths).`;
+    }
+
+    this._activity(`List: ${relDir || '.'} (${listed.length} entries)`);
+    return [
+      `Contents of "${relDir || '.'}" (${listed.length} entries; directories end with /):`,
+      ...listed.map(e => (e.isDir ? `${e.name}/` : e.name))
+    ].join('\n');
   }
 
   // ── Code execution ────────────────────────────────────────────────────────
@@ -544,7 +606,7 @@ export class ToolExecutor {
   private async _searchFileContents(args: Record<string, unknown>): Promise<string> {
     const relPath = String(args['path'] ?? '');
     const pattern = String(args['pattern'] ?? '');
-    const caseSensitive = args['case_sensitive'] !== false;
+    const caseSensitive = args['case_sensitive'] === true;
 
     if (!pattern) { return 'Error: pattern must not be empty.'; }
 

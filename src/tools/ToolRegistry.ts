@@ -189,24 +189,23 @@ const STATIC_TOOLS: ToolSet = {
 
   list_directory: tool({
     description:
-      'List files matching a glob pattern within the workspace. ' +
-      'FALLBACK TOOL: prefer search_file_contents for targeted content search. ' +
-      'Use list_directory only when: (a) the task explicitly asks for directory structure, ' +
-      '(b) all targeted searches returned zero results, or (c) the repo is very small. ' +
-      'Excludes node_modules, .git, dist, build, and gitignored paths.',
+      'List the immediate contents of ONE directory (files and subdirectories, one level only — not recursive). ' +
+      'Subdirectories end with "/". Use find_files for recursive glob searches. ' +
+      'FALLBACK TOOL: prefer search_file_contents for finding code. ' +
+      'Use list_directory only when the task asks about directory structure or targeted searches returned nothing. ' +
+      'Excludes node_modules, .git, bin, obj, dist, build, and gitignored paths.',
     inputSchema: jsonSchema<{
-      glob: string;
+      path: string;
     }>({
       type: 'object',
       properties: {
-        glob: {
+        path: {
           type: 'string',
           description:
-            'Glob pattern relative to workspace root. Use ** to search subdirectories. Use correct extensions: ' +
-            'cs for C#, cpp for C++, fs for F# (not c#, c++, f#).'
+            'Workspace-relative directory path (forward slashes). Use "." for the workspace root.'
         }
       },
-      required: ['glob']
+      required: ['path']
     })
   }),
 
@@ -237,10 +236,10 @@ const STATIC_TOOLS: ToolSet = {
 
   find_files: tool({
     description:
-      'Find files by glob pattern. Returns matching workspace-relative paths. ' +
-      'FALLBACK TOOL: prefer search_file_contents when looking for specific patterns. ' +
-      'Use find_files only when: (a) you need directory structure, ' +
-      '(b) targeted content search returned no results, or (c) the repo structure is genuinely unknown. ' +
+      'Find files recursively by glob pattern. Returns matching workspace-relative paths. ' +
+      'Use list_directory to see one level of a single directory instead. ' +
+      'FALLBACK TOOL: prefer search_file_contents when looking for code or specific patterns. ' +
+      'Use find_files only when targeted content search returned no results or the repo structure is genuinely unknown. ' +
       'Ignored folders and gitignored files are excluded.',
     inputSchema: jsonSchema<{
       glob: string;
@@ -249,7 +248,9 @@ const STATIC_TOOLS: ToolSet = {
       properties: {
         glob: {
           type: 'string',
-          description: 'Glob pattern relative to workspace root. Use ** to search subdirectories.'
+          description:
+            'Glob pattern relative to workspace root, e.g. "src/**/*.ts" or "**/*.csproj". ' +
+            'Use ** to search subdirectories. Use real extensions: cs for C#, fs for F# (not c#, f#).'
         }
       },
       required: ['glob']
@@ -285,7 +286,7 @@ const STATIC_TOOLS: ToolSet = {
         },
         case_sensitive: {
           type: 'boolean',
-          description: 'Whether the search is case-sensitive. Defaults to true.'
+          description: 'Whether the search is case-sensitive. Defaults to false (case-insensitive). Set true only for exact-case matching.'
         }
       },
       required: ['path', 'pattern']
