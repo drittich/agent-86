@@ -97,6 +97,7 @@ const pfBaseUrl          = document.getElementById('pf-base-url') as HTMLInputEl
 const pfModel            = document.getElementById('pf-model') as HTMLInputElement;
 const pfApiKey           = document.getElementById('pf-api-key') as HTMLInputElement;
 const pfContext          = document.getElementById('pf-context') as HTMLInputElement;
+const pfOrProvider       = document.getElementById('pf-or-provider') as HTMLInputElement;
 const btnPfSave          = document.getElementById('btn-pf-save') as HTMLButtonElement;
 const btnPfCancel        = document.getElementById('btn-pf-cancel') as HTMLButtonElement;
 const globalMaxToolRounds = document.getElementById('global-max-tool-rounds') as HTMLInputElement;
@@ -125,6 +126,7 @@ initProviders({
   pfModel,
   pfApiKey,
   pfContext,
+  pfOrProvider,
   vscode,
 });
 
@@ -442,6 +444,7 @@ btnPfSave.addEventListener('click', () => {
     model: pfModel.value.trim(),
     apiKey: pfApiKey.value || undefined,
     context: parseInt(pfContext.value, 10) || 32768,
+    openRouterProvider: pfOrProvider.value.trim() || undefined,
   };
   const editingIdx = getEditingProviderIndex();
   if (editingIdx === -1) {

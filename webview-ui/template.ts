@@ -39,6 +39,8 @@ export const TEMPLATE_HTML: string = `
         <input id="pf-api-key" type="password" placeholder="(none required for local)" />
         <label for="pf-context">Context Window</label>
         <input id="pf-context" type="number" placeholder="32768" value="32768" />
+        <label for="pf-or-provider">OpenRouter Provider (optional)</label>
+        <input id="pf-or-provider" type="text" placeholder="e.g. DeepSeek — pins routing, no fallback" />
         <div id="pf-buttons">
           <button id="btn-pf-save">Save Provider</button>
           <button id="btn-pf-cancel">Cancel</button>

@@ -13,6 +13,13 @@ export interface ProviderConfig {
   model: string;       // e.g., "qwen3-coder:a3b"
   apiKey?: string;     // Optional API key (default: "local")
   context: number;     // Context window size
+  /**
+   * Optional OpenRouter upstream provider to pin (e.g. "DeepSeek", "Fireworks").
+   * When set, routing is forced to this provider with fallbacks disabled, so the
+   * model name's author namespace (e.g. "deepseek/…") doesn't get load-balanced
+   * to whatever upstream is cheapest. Ignored by non-OpenRouter endpoints.
+   */
+  openRouterProvider?: string;
 }
 
 // ── Session schema ────────────────────────────────────────────────────────────

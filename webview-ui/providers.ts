@@ -13,6 +13,7 @@ export interface ProviderConfig {
   model: string;
   apiKey?: string;
   context: number;
+  openRouterProvider?: string;
 }
 
 // ── Module state ──────────────────────────────────────────────────────────────
@@ -33,6 +34,7 @@ let pfBaseUrl: HTMLInputElement;
 let pfModel: HTMLInputElement;
 let pfApiKey: HTMLInputElement;
 let pfContext: HTMLInputElement;
+let pfOrProvider: HTMLInputElement;
 let vscodeApi: { postMessage(msg: unknown): void };
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -48,6 +50,7 @@ export interface ProviderRefs {
   pfModel: HTMLInputElement;
   pfApiKey: HTMLInputElement;
   pfContext: HTMLInputElement;
+  pfOrProvider: HTMLInputElement;
   vscode: { postMessage(msg: unknown): void };
 }
 
@@ -62,6 +65,7 @@ export function initProviders(refs: ProviderRefs): void {
   pfModel = refs.pfModel;
   pfApiKey = refs.pfApiKey;
   pfContext = refs.pfContext;
+  pfOrProvider = refs.pfOrProvider;
   vscodeApi = refs.vscode;
 }
 
@@ -168,6 +172,7 @@ export function openProviderForm(idx: number): void {
     pfModel.value = '';
     pfApiKey.value = '';
     pfContext.value = '32768';
+    pfOrProvider.value = '';
   } else {
     const p = providers[idx];
     providerFormTitle.textContent = 'Edit Provider';
@@ -176,6 +181,7 @@ export function openProviderForm(idx: number): void {
     pfModel.value = p.model;
     pfApiKey.value = p.apiKey ?? '';
     pfContext.value = String(p.context);
+    pfOrProvider.value = p.openRouterProvider ?? '';
   }
   providerForm.hidden = false;
   pfName.focus();

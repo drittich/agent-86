@@ -548,6 +548,27 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     provider: ProviderConfig | undefined,
     thinkingLevel: ThinkingLevel
   ): Record<string, unknown> {
+    const body = this._buildBaseExtraBody(provider, thinkingLevel);
+
+    // Per-model OpenRouter provider pin. Overrides any default routing (including
+    // the DeepSeek-V4 default) so the model's author namespace isn't load-balanced
+    // to whatever upstream is cheapest. allow_fallbacks: false makes the pin hard.
+    const pinned = provider?.openRouterProvider?.trim();
+    if (pinned) {
+      body.provider = {
+        order: [pinned],
+        allow_fallbacks: false,
+        require_parameters: true,
+      };
+    }
+
+    return body;
+  }
+
+  private _buildBaseExtraBody(
+    provider: ProviderConfig | undefined,
+    thinkingLevel: ThinkingLevel
+  ): Record<string, unknown> {
     // DeepSeek V4 via OpenRouter: thinking is the unified top-level `reasoning`
     // object and routing is pinned to DeepSeek so its on-disk context cache is
     // reachable. This replaces the llama.cpp-style chat_template_kwargs body.
