@@ -558,6 +558,7 @@ interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  cachedInputTokens?: number;
 }
 
 window.addEventListener('message', (event: MessageEvent) => {
@@ -623,7 +624,9 @@ window.addEventListener('message', (event: MessageEvent) => {
         const frSuffix = fr ? ` · ${fr}` : '';
         const u = msg.usage;
         if (u && u.totalTokens > 0) {
-          setStatusBadge('completed', 'Done', `${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} + ${u.completionTokens.toLocaleString()})${frSuffix}`);
+          const cached = u.cachedInputTokens ?? 0;
+          const cacheSuffix = cached > 0 ? `, ${cached.toLocaleString()} cached` : '';
+          setStatusBadge('completed', 'Done', `${u.totalTokens.toLocaleString()} tokens (${u.promptTokens.toLocaleString()} + ${u.completionTokens.toLocaleString()}${cacheSuffix})${frSuffix}`);
         } else if (msg.contextTokens) {
           setStatusBadge('completed', 'Done', `~${msg.contextTokens.toLocaleString()} ctx tokens${frSuffix}`);
         } else {

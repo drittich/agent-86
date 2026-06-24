@@ -4,6 +4,8 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** Prompt tokens served from the provider's cache (cache hit), when reported. */
+  cachedInputTokens?: number;
 }
 
 // Messages sent from the extension host to the webview

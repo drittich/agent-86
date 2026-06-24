@@ -15,9 +15,10 @@ import { ChatPanelSessions } from './ChatPanelSessions';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { buildAgentTools } from '../tools/ToolRegistry';
 import { ToolCallEvent } from '../providers/IProvider';
-import { getSystemPrompt, getNativeToolsPrompt, getLegacyFormatReference, LEGACY_FORMAT_REFERENCE_MARKER } from '../utils/PromptProcessor';
+import { getSystemPrompt, getProfilePrompt, getNativeToolsPrompt, getLegacyFormatReference, LEGACY_FORMAT_REFERENCE_MARKER } from '../utils/PromptProcessor';
 import { classifyTask, TaskClassification } from '../agent/TaskClassifier';
 import { getModelProfile, ModelProfile } from '../agent/ModelProfile';
+import { isDeepSeekV4, resolveProfileKey, buildDeepSeekExtraBody, ThinkingLevel } from '../agent/DeepSeekProfile';
 import {
   PlanRunState,
   parsePlanItems,
@@ -299,10 +300,18 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _getProvider(): AIProvider {
+    const providerConfig = this._getActiveProviderConfig();
+    return new AIProvider(providerConfig!, this._log);
+  }
+
+  /** The currently selected provider config, or undefined if none are configured. */
+  private _getActiveProviderConfig(): ProviderConfig | undefined {
     const providers = this._getProviders();
+    if (providers.length === 0) {
+      return undefined;
+    }
     const idx = Math.min(this._activeProviderIndex, providers.length - 1);
-    const providerConfig = providers[idx];
-    return new AIProvider(providerConfig, this._log);
+    return providers[idx];
   }
 
   /**
@@ -447,7 +456,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const thinkingMode = this._sessions.thinkingMode;
     const behaviorInstructions = '## Response style\n\n' + (thinkingMode
       ? `Deliberate before acting. When done, briefly summarize what changed (and why if not obvious).`
-      : `Act without preamble. No planning narration; no repetition. Afterward: one brief confirmation or nothing.`);
+      : `Act without preamble — no planning narration, no repetition. If a mid-task update is genuinely needed, one sentence is enough. Afterward: one brief confirmation of what changed, or nothing.`);
     const agentsMdSection = agentsMdContent
       ? `\n\n## AGENTS.md\n${agentsMdContent}`
       : '';
@@ -460,13 +469,32 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       console.warn('** Custom system prompt not found, using fallback prompts.');
     }
 
+    // Model-profile delta: a small per-model fragment (autonomy / planning
+    // cadence / tool-call pacing). Stable per session/provider, so it stays
+    // inside the cached system prompt and does not perturb the cache prefix.
+    const profileSection = this._buildProfileSection();
+
     // Keep one stable system prompt for the entire turn/session, even if the runtime
     // path falls back from native tool-calling to legacy parsing behavior.
     if (customSystemPrompt) {
-      return `${customSystemPrompt.trim()}${agentsMdSection}\n\n${behaviorInstructions}`;
+      return `${customSystemPrompt.trim()}${agentsMdSection}${profileSection}\n\n${behaviorInstructions}`;
     }
 
-    return getNativeToolsPrompt(agentsMdSection, behaviorInstructions);
+    return getNativeToolsPrompt(agentsMdSection, behaviorInstructions) + profileSection;
+  }
+
+  /**
+   * Resolve and load the model-profile delta for the active provider's model.
+   * Returns an empty string for non-DeepSeek models (no extra prompt weight).
+   */
+  private _buildProfileSection(): string {
+    const provider = this._getActiveProviderConfig();
+    const profileKey = resolveProfileKey(provider?.model, this._configManager.getModelTier());
+    if (!profileKey) {
+      return '';
+    }
+    const profile = getProfilePrompt(profileKey, this.context.extensionUri.fsPath);
+    return profile ? `\n\n${profile}` : '';
   }
 
   /**
@@ -515,8 +543,18 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    * For local llama.cpp-style OpenAI endpoints, send cache hints so repeated turns
    * can reuse KV state when prompts are append-only.
    */
-  private _buildExtraBody(provider: ProviderConfig | undefined, thinkingMode?: boolean): Record<string, unknown> {
-    const enableThinking = thinkingMode ?? this._sessions.thinkingMode;
+  private _buildExtraBody(
+    provider: ProviderConfig | undefined,
+    thinkingLevel: ThinkingLevel
+  ): Record<string, unknown> {
+    // DeepSeek V4 via OpenRouter: thinking is the unified top-level `reasoning`
+    // object and routing is pinned to DeepSeek so its on-disk context cache is
+    // reachable. This replaces the llama.cpp-style chat_template_kwargs body.
+    if (isDeepSeekV4(provider?.model)) {
+      return buildDeepSeekExtraBody(thinkingLevel);
+    }
+
+    const enableThinking = thinkingLevel !== 'off';
     const body: Record<string, unknown> = {
       chat_template_kwargs: { enable_thinking: enableThinking }
     };
@@ -1529,6 +1567,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const activeProviders = this._getProviders();
     const activeIdx = Math.min(this._activeProviderIndex, activeProviders.length - 1);
     const activeProvider = activeProviders[activeIdx];
+    // DeepSeek V4 requires its own chain-of-thought echoed back on assistant
+    // messages across tool-loop turns; gate reasoning round-trip on this.
+    const isDeepSeekProvider = isDeepSeekV4(activeProvider?.model);
     const useNativeTools = await this._resolveToolSupport(activeProvider);
 
     // Legacy-verdict models parse textual formats from the stream; give them
@@ -1698,15 +1739,23 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           break;
         }
         let fullResponse = '';
+        // Chain-of-thought from this round's response, stored on the assistant
+        // turn so it can be echoed back on later tool-loop turns (DeepSeek V4).
+        let capturedReasoning: string | undefined;
         const pendingToolCalls: ToolCallEvent[] = [];
         const nativeToolMode = useNativeTools && !toolsFallbackActive;
         const bufferPlainTextOnlyResponse = forcePlainTextAnswer;
         const toolsEnabledThisRound = nativeToolMode && !forcePlainTextAnswer;
         const thinkingModeThisRound = forcePlainTextAnswer ? false : this._sessions.thinkingMode;
+        // Graded thinking by phase: off when thinking is disabled, max during
+        // plan-step execution (code-gen / edit / recovery), high otherwise
+        // (planning / general). Maps to OpenRouter reasoning effort for DeepSeek.
+        const thinkingLevelThisRound: ThinkingLevel =
+          !thinkingModeThisRound ? 'off' : (planRun ? 'max' : 'high');
         this._abortController = new AbortController();
 
         this._log.appendLine(
-          `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode}, plainTextOnly=${forcePlainTextAnswer}, thinkingMode=${thinkingModeThisRound})`
+          `[stream] starting request (chunk round ${chunkRound}, tool round ${toolRound}, nativeToolMode=${nativeToolMode}, plainTextOnly=${forcePlainTextAnswer}, thinkingMode=${thinkingModeThisRound}, thinkingLevel=${thinkingLevelThisRound})`
         );
         const messages = this._buildMessages(agentsMdContent, toolsEnabledThisRound);
         const contextTokens = await this.tokenCounter.countMessages(messages);
@@ -1730,9 +1779,14 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             } else if (event.type === 'tool-call') {
               pendingToolCalls.push(event);
             } else if (event.type === 'done') {
-              this._log.appendLine(`[stream] done, fullResponse.length=${fullResponse.length}, toolCalls=${pendingToolCalls.length}`);
+              const cached = event.usage?.cachedInputTokens ?? 0;
+              this._log.appendLine(
+                `[stream] done, fullResponse.length=${fullResponse.length}, toolCalls=${pendingToolCalls.length}, ` +
+                `promptTokens=${event.usage?.promptTokens ?? 0}, cacheHitTokens=${cached}`
+              );
               lastUsage = event.usage;
               lastFinishReason = event.finishReason;
+              capturedReasoning = event.reasoning;
             } else if (event.type === 'tool-unsupported') {
               this._log.appendLine(`[stream] tool-unsupported: falling back to legacy prompt`);
               toolsFallbackActive = true;
@@ -1744,7 +1798,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           {
             tools: toolsEnabledThisRound ? buildAgentTools() : undefined,
             thinkingMode: thinkingModeThisRound,
-            extraBody: this._buildExtraBody(activeProvider, thinkingModeThisRound)
+            extraBody: this._buildExtraBody(activeProvider, thinkingLevelThisRound)
           }
         );
         this._log.appendLine(`[stream] stream() resolved, fullResponse.length=${fullResponse.length}`);
@@ -2005,7 +2059,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             };
             if (planRun) {
               this._log.appendLine('[plan] set_plan called while a plan is active — steering back to the current step');
-              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef] });
+              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef], reasoning: isDeepSeekProvider ? capturedReasoning : undefined });
               this._sessions.history.push({
                 role: 'tool',
                 content: 'A plan is already being executed. Continue with the current step only — do not create another plan.',
@@ -2015,7 +2069,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             }
             const planItems = parsePlanItems(planCall.args);
             if (!planItems) {
-              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef] });
+              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef], reasoning: isDeepSeekProvider ? capturedReasoning : undefined });
               this._sessions.history.push({
                 role: 'tool',
                 content: 'Error: set_plan requires a non-empty "items" array of short step strings. Either call set_plan again with valid items, or proceed without a plan.',
@@ -2177,6 +2231,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
               toolName: tc.toolName,
               input: tc.args,
             })),
+            reasoning: isDeepSeekProvider ? capturedReasoning : undefined,
           });
 
           // Log first-tool quality for observability

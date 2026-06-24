@@ -123,6 +123,14 @@ export class AIProvider implements IProvider {
 
       if (msg.role === 'assistant') {
         const contentParts: Array<any> = [];
+        // Echo prior chain-of-thought back so models that require it keep
+        // reasoning continuity across tool-loop turns (DeepSeek V4).
+        if (typeof msg.reasoning === 'string' && msg.reasoning.length > 0) {
+          contentParts.push({
+            type: 'reasoning',
+            text: msg.reasoning
+          });
+        }
         if (typeof msg.content === 'string' && msg.content.length > 0) {
           contentParts.push({
             type: 'text',
@@ -141,8 +149,11 @@ export class AIProvider implements IProvider {
           }
         }
 
-        // Skip assistant messages with no serializable content — don't emit a blank turn.
-        if (contentParts.length === 0) {
+        // Skip assistant messages with no serializable content — don't emit a blank
+        // turn. A lone reasoning part doesn't count: it must accompany text or a
+        // tool call, never stand alone.
+        const hasNonReasoning = contentParts.some(p => p.type !== 'reasoning');
+        if (!hasNonReasoning) {
           continue;
         }
 
@@ -327,9 +338,15 @@ export class AIProvider implements IProvider {
         usage: {
           promptTokens: usage.inputTokens ?? 0,
           completionTokens: usage.outputTokens ?? 0,
-          totalTokens: usage.totalTokens ?? 0
+          totalTokens: usage.totalTokens ?? 0,
+          // Prompt/KV cache hit tokens, when the provider reports them (DeepSeek
+          // via OpenRouter surfaces cached prompt tokens here).
+          cachedInputTokens: (usage as { cachedInputTokens?: number }).cachedInputTokens ?? 0
         },
-        finishReason
+        finishReason,
+        // Surface the buffered chain-of-thought so the caller can store it on the
+        // assistant turn and echo it back on later tool-loop turns.
+        reasoning: reasoningText.trim().length > 0 ? reasoningText : undefined
       });
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {

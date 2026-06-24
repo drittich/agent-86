@@ -133,6 +133,33 @@ export function getSystemPrompt(extensionPath?: string): string {
 }
 
 /**
+ * Load a model-profile delta fragment from `prompts/profiles/<key>.md`.
+ * Prefers a per-project override in the opened workspace, then the fragment
+ * bundled with the extension. Returns an empty string when none exists so
+ * non-DeepSeek providers carry no extra prompt weight.
+ */
+export function getProfilePrompt(profileKey: string, extensionPath?: string): string {
+  const candidates: string[] = [];
+  const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (wsRoot) {
+    candidates.push(path.join(wsRoot, 'prompts', 'profiles', `${profileKey}.md`));
+  }
+  if (extensionPath) {
+    candidates.push(path.join(extensionPath, 'prompts', 'profiles', `${profileKey}.md`));
+  }
+
+  const profilePath = candidates.find(p => fs.existsSync(p));
+  if (profilePath) {
+    try {
+      return fs.readFileSync(profilePath, 'utf-8').trim();
+    } catch (error) {
+      console.error(`Failed to load profile prompt from ${profilePath}:`, error);
+    }
+  }
+  return '';
+}
+
+/**
  * Get the native tools system prompt (used when the model supports native tool calling)
  */
 export function getNativeToolsPrompt(agentsMdSection: string, behaviorInstructions: string): string {

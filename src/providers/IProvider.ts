@@ -16,12 +16,21 @@ export interface ChatMessage {
   displayContent?: string;
   /** When true, this message was injected by the extension (steering nudge, tool result, etc.) and should not be rendered in the UI. */
   internal?: boolean;
+  /**
+   * Chain-of-thought captured from this assistant turn. Echoed back on the
+   * assistant message in subsequent tool-loop turns for models that require it
+   * (DeepSeek V4: `requiresReasoningContentOnAssistantMessages`). Stored once
+   * with the turn and never rewritten, preserving the append-only invariant.
+   */
+  reasoning?: string;
 }
 
 export interface ProviderUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** Input tokens served from the provider's prompt/KV cache (cache hit), when reported. */
+  cachedInputTokens?: number;
 }
 
 export interface ToolCallEvent {
@@ -34,7 +43,7 @@ export interface ToolCallEvent {
 export type ProviderEvent =
   | { type: 'delta'; content: string }
   | ToolCallEvent
-  | { type: 'done'; usage?: ProviderUsage; finishReason?: string }
+  | { type: 'done'; usage?: ProviderUsage; finishReason?: string; reasoning?: string }
   | { type: 'error'; message: string }
   | { type: 'tool-unsupported' };
 
