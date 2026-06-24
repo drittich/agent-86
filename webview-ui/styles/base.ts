@@ -412,23 +412,17 @@ export const BASE_CSS: string = `
   #settings-overlay {
     position: fixed;
     inset: 0;
-    background: color-mix(in srgb, var(--vscode-sideBar-background, #000) 50%, transparent);
+    background: var(--vscode-sideBar-background, #252526);
     z-index: 100;
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
   }
   #settings-overlay[hidden] { display: none; }
 
-  #settings-overlay { padding: 12px; }
-
   #settings-panel {
     background: var(--vscode-sideBar-background, #252526);
-    border: 1px solid var(--vscode-widget-border, #454545);
-    border-radius: 4px;
     width: 100%;
-    max-width: 760px;
-    max-height: calc(100vh - 24px);
+    height: 100%;
     display: flex;
     flex-direction: column;
     gap: 0;
@@ -462,7 +456,10 @@ export const BASE_CSS: string = `
     padding: 12px;
     display: flex;
     flex-direction: column;
+    justify-content: flex-start;
     gap: 6px;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
   }
   #settings-body label {
@@ -1124,13 +1121,13 @@ export const BASE_CSS: string = `
     animation: chip-enter 0.18s ease-out both;
   }
 
-  /* Settings panel — fade + slide down on open */
+  /* Settings pane — fade in on open */
   @keyframes panel-enter {
-    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
-    to   { opacity: 1; transform: none; }
+    from { opacity: 0; }
+    to   { opacity: 1; }
   }
   #settings-overlay:not([hidden]) #settings-panel {
-    animation: panel-enter 0.2s cubic-bezier(0.25, 1, 0.5, 1) both;
+    animation: panel-enter 0.15s ease-out both;
   }
 
   /* Approval/warning card entrance */

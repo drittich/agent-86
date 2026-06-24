@@ -16,7 +16,7 @@ export const TEMPLATE_HTML: string = `
 </div>
 
 <div id="settings-overlay" hidden>
-  <div id="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div id="settings-panel" role="region" aria-labelledby="settings-title">
     <div id="settings-header">
       <span id="settings-title">Settings</span>
       <button id="btn-settings-close" title="Close">×</button>
