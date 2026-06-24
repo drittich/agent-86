@@ -23,8 +23,22 @@ const RENDER_INTERVAL_MS = 100;
 /** Tracks edit outcomes by URI so accordions can show "Edited" vs "Editing". */
 export const editOutcomes = new Map<string, 'applied' | 'cancelled'>();
 
+const LOGO_ASCII = [
+  ' .d8888b.   .d8888b.  ',
+  'd88P  Y88b d88P  Y88b ',
+  'Y88b. d88P 888        ',
+  ' "Y88888"  888d888b.  ',
+  '.d8P""Y8b. 888P "Y88b ',
+  '888    888 888    888 ',
+  'Y88b  d88P Y88b  d88P ',
+  ' "Y8888P"   "Y8888P"  ',
+].join('\n');
+
 const EMPTY_STATE_HTML = DOMPurify.sanitize(
-  '<p class="empty-state">Configure a provider in settings, then type a message to get started.</p>'
+  `<div class="empty-state">` +
+    `<pre class="empty-state-logo" aria-label="Agent 86">${escapeHtml(LOGO_ASCII)}</pre>` +
+    `<p class="empty-state-text">Configure a provider in settings, then type a message to get started.</p>` +
+  `</div>`
 );
 
 // Known tool keys and their display labels

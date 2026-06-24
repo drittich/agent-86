@@ -222,9 +222,47 @@ export const BASE_CSS: string = `
   }
 
   .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 60vh;
     color: var(--vscode-descriptionForeground);
     margin: 0;
+  }
+
+  .empty-state-logo {
+    margin: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 9px;
+    line-height: 1.1;
+    white-space: pre;
+    color: var(--vscode-foreground);
+    opacity: 0.85;
+    user-select: none;
+  }
+
+  .empty-state-text {
+    margin: 0;
     font-size: 12px;
+    text-align: center;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .empty-state {
+      animation: empty-state-in 240ms ease-out;
+    }
+  }
+
+  @keyframes empty-state-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
   /* User prompt bubbles */
