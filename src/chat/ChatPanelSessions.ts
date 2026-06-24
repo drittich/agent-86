@@ -79,6 +79,15 @@ export class ChatPanelSessions {
   }
 
   /**
+   * Discard the cached system prompt so the next turn rebuilds it. Used when a
+   * setting that feeds the prompt (e.g. the custom system-prompt addendum)
+   * changes mid-session.
+   */
+  public clearSystemPromptCache(): void {
+    this._systemPrompt = undefined;
+  }
+
+  /**
    * Load the last session from the in-memory cache (sync after init).
    */
   loadLastSession(): Session | null {

@@ -110,6 +110,59 @@ function md5(text: string): string {
 }
 
 /**
+ * Canonical key for a workspace-relative file path: forward slashes, no leading
+ * `./`, trimmed, lowercased. Used so every delivery path (read_file,
+ * request_chunks, initial attachments) records and looks up the same key in the
+ * delivered-ranges view.
+ */
+export function normalizeFilePathKey(target: string): string {
+  return target.replace(/\\/g, '/').replace(/^\.\/?/, '').trim().toLowerCase();
+}
+
+/** A delivered line range; `evicted` marks content no longer in context. */
+export interface DeliveredRange {
+  start: number;
+  end: number;
+  evicted?: boolean;
+}
+
+/**
+ * True when [reqStart, reqEnd] is fully covered by a non-evicted delivered range
+ * already in `ranges`. Used both by the read_file duplicate guard and the
+ * request_chunks dedup so they agree on "already in context".
+ */
+export function rangeIsCovered(
+  ranges: DeliveredRange[] | undefined,
+  reqStart: number,
+  reqEnd: number
+): boolean {
+  if (!ranges || ranges.length === 0) { return false; }
+  return ranges.some(r => !r.evicted && r.start <= reqStart && r.end >= reqEnd);
+}
+
+/**
+ * Describe the line ranges of a file that have NOT yet been delivered, as a
+ * compact string for model guidance (e.g. "1-120, 361-825"). Returns '' when the
+ * whole file is already covered.
+ */
+export function describeUndeliveredRanges(ranges: DeliveredRange[] | undefined, totalLines: number): string {
+  if (totalLines <= 0) { return ''; }
+  const covered = (ranges ?? [])
+    .filter(r => !r.evicted)
+    .map(r => ({ start: Math.max(1, r.start), end: Math.min(totalLines, r.end) }))
+    .filter(r => r.start <= r.end)
+    .sort((a, b) => a.start - b.start);
+  const gaps: string[] = [];
+  let cursor = 1;
+  for (const r of covered) {
+    if (r.start > cursor) { gaps.push(`${cursor}-${r.start - 1}`); }
+    cursor = Math.max(cursor, r.end + 1);
+  }
+  if (cursor <= totalLines) { gaps.push(`${cursor}-${totalLines}`); }
+  return gaps.join(', ');
+}
+
+/**
  * Slice `fileContent` into overlapping 120-line chunks.
  *
  * - Lines are 1-indexed in returned metadata.
@@ -166,6 +219,113 @@ export function formatChunkBlock(chunk: FileChunk): string {
     chunk.content +
     `\n</file_chunk>`
   );
+}
+
+/**
+ * Number of context-scaled pages delivered verbatim in a single read window.
+ * Matches the default `maxChunks` budget of `selectExactLineRangeChunks`, so the
+ * read_file path and the request_chunks path agree on how much content a single
+ * delivery may carry (240 / 800 / 2400 lines depending on the context window).
+ */
+export const MAX_DELIVERY_CHUNKS = 2;
+
+/**
+ * A verbatim window of a file delivered to the model, with pagination metadata.
+ * Unlike a grid `FileChunk`, the content is exactly the requested span (clamped
+ * to the context-scaled window) and is NEVER structurally compacted.
+ */
+export interface DeliveredSlice {
+  uri: string;
+  /** 1-based inclusive. */
+  lineStart: number;
+  /** 1-based inclusive. */
+  lineEnd: number;
+  /** Total line count of the whole file. */
+  totalLines: number;
+  docVersion: number;
+  hash: string;
+  /** Verbatim content of lines [lineStart, lineEnd]. */
+  content: string;
+  /** True when the requested span exceeded the window cap and was clamped. */
+  truncated: boolean;
+  /** lineEnd + 1 when truncated; the next line the model should request. */
+  nextStart?: number;
+}
+
+/**
+ * Build a verbatim, context-scaled window of a file for delivery to the model.
+ *
+ * - `requested.start`/`requested.end` are 1-based inclusive; omit either to mean
+ *   "from the beginning" / "to the end".
+ * - The window is capped at `chunkLinesForContext(contextTokens) * MAX_DELIVERY_CHUNKS`
+ *   lines. A span longer than the cap is clamped and `truncated`/`nextStart` are set.
+ * - Content is sliced verbatim — callers must not compact it further.
+ *
+ * Uses the same `split('\n')` as `chunkFile` and `ToolExecutor._readFile` so line
+ * numbers and totals agree across every delivery path.
+ */
+export function buildDeliveredSlice(
+  uri: string,
+  fileContent: string,
+  docVersion: number,
+  requested: { start?: number; end?: number },
+  contextTokens: number
+): DeliveredSlice {
+  const lines = fileContent.split('\n');
+  const totalLines = lines.length;
+  const maxWindow = Math.max(1, chunkLinesForContext(contextTokens) * MAX_DELIVERY_CHUNKS);
+
+  const clamp = (n: number): number => Math.min(totalLines, Math.max(1, Math.floor(n)));
+
+  let start = typeof requested.start === 'number' && requested.start > 0 ? clamp(requested.start) : 1;
+  let end = typeof requested.end === 'number' && requested.end > 0 ? clamp(requested.end) : totalLines;
+  if (start > end) { [start, end] = [end, start]; }
+
+  let truncated = false;
+  if (end - start + 1 > maxWindow) {
+    end = start + maxWindow - 1;
+    truncated = true;
+  }
+  end = Math.min(end, totalLines);
+
+  const content = lines.slice(start - 1, end).join('\n');
+  return {
+    uri,
+    lineStart: start,
+    lineEnd: end,
+    totalLines,
+    docVersion,
+    hash: md5(content),
+    content,
+    truncated,
+    nextStart: truncated ? end + 1 : undefined,
+  };
+}
+
+/**
+ * Render a `DeliveredSlice` for injection into history: the verbatim content in
+ * the shared `<file_chunk>` envelope, followed by a machine-readable footer that
+ * tells the model the total line count and (when truncated) the EXACT next call.
+ */
+export function formatDeliveredSlice(slice: DeliveredSlice): string {
+  const windowLen = Math.max(1, slice.lineEnd - slice.lineStart + 1);
+  const totalChunks = Math.max(1, Math.ceil(slice.totalLines / windowLen));
+  const index = Math.floor((slice.lineStart - 1) / windowLen);
+  const block = formatChunkBlock({
+    chunkId: `${slice.uri}:chunk:${index}`,
+    uri: slice.uri,
+    lineStart: slice.lineStart,
+    lineEnd: slice.lineEnd,
+    totalChunks,
+    docVersion: slice.docVersion,
+    hash: slice.hash,
+    content: slice.content,
+  });
+  const footer = slice.truncated
+    ? `<file_more total_lines="${slice.totalLines}" delivered="${slice.lineStart}-${slice.lineEnd}" ` +
+      `next='read_file(path="${slice.uri}", start_line=${slice.nextStart})' />`
+    : `<file_complete total_lines="${slice.totalLines}" delivered="${slice.lineStart}-${slice.lineEnd}" />`;
+  return `${block}\n${footer}`;
 }
 
 /** Extract FileChunkMeta from a fully-chunked file. */

@@ -601,6 +601,35 @@ export const BASE_CSS: string = `
 
   .settings-pane[hidden] { display: none; }
 
+  /* System Prompt pane */
+  #system-prompt-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  #system-prompt-text {
+    flex: 1 1 auto;
+    min-height: 160px;
+    resize: vertical;
+    width: 100%;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, #555);
+    padding: 6px 8px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    border-radius: 2px;
+    box-sizing: border-box;
+  }
+  #system-prompt-text:focus { outline: 1px solid var(--vscode-focusBorder); }
+  .system-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
   #providers-list,
   #models-list {
     list-style: none;

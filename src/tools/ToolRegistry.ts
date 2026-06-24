@@ -34,8 +34,11 @@ const STATIC_TOOLS: ToolSet = {
 
   read_file: tool({
     description:
-      'Read the contents of a file. Returns the file content, optionally limited to a line range. ' +
-      'Use this to inspect source files before making edits.',
+      'Read the contents of a file. Returns the requested lines verbatim (never summarized), ' +
+      'optionally limited to a line range. Large reads are delivered one context-sized window at a ' +
+      'time: a <file_more …> footer gives the exact next call (e.g. start_line=B+1) to page forward, ' +
+      'and <file_complete …> signals the whole file is in context. Use this to inspect source files ' +
+      'before making edits — never shell out to page through a file.',
     inputSchema: jsonSchema<{
       path: string;
       start_line?: number;

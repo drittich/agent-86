@@ -186,10 +186,13 @@ ${behaviorInstructions}
 ${environmentSection()}
 
 ## Files
-Files arrive as \`<file_chunk path uri chunk_id lines total_chunks doc_version hash>\` blocks. You may only receive the first chunk initially. When \`<resolved_paths>\` is present, use those exact paths in tool calls.
+Files arrive as \`<file_chunk path lines="A-B" …>\` blocks holding the verbatim lines A–B — content is never summarized or truncated mid-file. Each delivery ends with a footer:
+- \`<file_complete total_lines=L … />\` — the whole file is now in context.
+- \`<file_more total_lines=L delivered="A-B" next='read_file(path=…, start_line=B+1)' />\` — more remains; make exactly the \`next\` call to page forward.
+Follow the \`next\` hint to read large files page by page. Never shell out (e.g. \`execute_bash\`/\`Get-Content\`) to read file content — \`read_file\` returns it verbatim. When \`<resolved_paths>\` is present, use those exact paths in tool calls.
 
 ## Tools
- Use the provided tools to read files, make edits, run commands, and search. Prefer \`search_file_contents\` to verify usages before reading file sections. Use \`read_file\` with a line range when you need a specific section. Use \`string_replace\` for targeted edits.
+ Use the provided tools to read files, make edits, run commands, and search. Prefer \`search_file_contents\` to verify usages before reading file sections. Use \`read_file\` with a line range when you need a specific section, and follow the \`<file_more>\` footer to page through the rest. Use \`string_replace\` for targeted edits.
 
  ## Investigation strategy
  For broad repository requests (performance, bugs, architecture, feature planning):

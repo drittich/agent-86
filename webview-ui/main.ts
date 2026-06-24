@@ -103,10 +103,14 @@ const btnAddProvider     = document.getElementById('btn-add-provider') as HTMLBu
 const btnAddModel        = document.getElementById('btn-add-model') as HTMLButtonElement;
 const tabProviders       = document.getElementById('tab-providers') as HTMLButtonElement;
 const tabModels          = document.getElementById('tab-models') as HTMLButtonElement;
+const tabSystemPrompt    = document.getElementById('tab-system-prompt') as HTMLButtonElement;
 const tabProvidersCount  = document.getElementById('tab-providers-count')!;
 const tabModelsCount     = document.getElementById('tab-models-count')!;
 const providersPane      = document.getElementById('providers-pane')!;
 const modelsPane         = document.getElementById('models-pane')!;
+const systemPromptPane   = document.getElementById('system-prompt-pane')!;
+const systemPromptText   = document.getElementById('system-prompt-text') as HTMLTextAreaElement;
+const btnSystemPromptSave = document.getElementById('btn-system-prompt-save') as HTMLButtonElement;
 // Provider dialog
 const providerDialog     = document.getElementById('provider-dialog')!;
 const providerDialogTitle = document.getElementById('provider-dialog-title')!;
@@ -163,10 +167,12 @@ initProviders({
   providerStatusDot,
   tabProviders,
   tabModels,
+  tabSystemPrompt,
   tabProvidersCount,
   tabModelsCount,
   providersPane,
   modelsPane,
+  systemPromptPane,
   providerDialog,
   providerDialogTitle,
   pfTypeChips,
@@ -225,6 +231,17 @@ setGenerating(false);
 
 function setStatus(text: string): void {
   statusBar.textContent = text;
+}
+
+/** Briefly confirm a save by swapping a button's label, then restoring it. */
+function flashSaved(btn: HTMLButtonElement): void {
+  const original = btn.textContent ?? 'Save';
+  btn.textContent = 'Saved';
+  btn.disabled = true;
+  setTimeout(() => {
+    btn.textContent = original;
+    btn.disabled = false;
+  }, 1200);
 }
 
 function setStatusBadge(badgeClass: string, badgeText: string, detail?: string): void {
@@ -315,7 +332,7 @@ let _settingsReturnFocus: HTMLElement | null = null;
 function getSettingsFocusable(): HTMLElement[] {
   const panel = document.getElementById('settings-panel')!;
   return Array.from(panel.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
   )).filter(el => !el.closest('[hidden]'));
 }
 
@@ -468,6 +485,11 @@ btnSettingsSave.addEventListener('click', () => {
   const rounds = parseInt(globalMaxToolRounds.value, 10);
   vscode.postMessage({ type: 'saveSettings', maxToolRounds: isNaN(rounds) ? undefined : rounds });
   closeSettings();
+});
+
+btnSystemPromptSave.addEventListener('click', () => {
+  vscode.postMessage({ type: 'saveSettings', customSystemPrompt: systemPromptText.value });
+  flashSaved(btnSystemPromptSave);
 });
 
 settingsOverlay.addEventListener('click', (e) => {
@@ -664,6 +686,7 @@ window.addEventListener('message', (event: MessageEvent) => {
     detail?: string;
     providerName?: string;
     maxToolRounds?: number;
+    customSystemPrompt?: string;
     status?: 'online' | 'offline' | 'checking';
   };
 
@@ -787,6 +810,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       renderSettings();
       renderModelDropdown();
       globalMaxToolRounds.value = String(msg.maxToolRounds ?? 40);
+      systemPromptText.value = msg.customSystemPrompt ?? '';
       openSettingsPanel();
       break;
     }

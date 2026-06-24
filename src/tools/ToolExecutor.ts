@@ -26,6 +26,24 @@ export interface ToolExecutorDeps {
 export interface ToolResult {
   toolCallId: string;
   result: string;
+  /**
+   * Structured payload for `read_file`, present only on success. Carries the raw
+   * file content so the caller can deliver a verbatim, context-scaled, paginated
+   * window instead of a lossy compacted blob. Absent on error.
+   */
+  read?: ReadResultPayload;
+}
+
+/** Raw read_file payload handed to the caller for verbatim windowing. */
+export interface ReadResultPayload {
+  /** Workspace-relative path as supplied by the model (used as the delivery key). */
+  uri: string;
+  /** Full file content, verbatim. */
+  content: string;
+  /** VS Code document version, or 0 when read from disk. */
+  docVersion: number;
+  /** Total line count of the whole file. */
+  totalLines: number;
 }
 
 // ── Task types ─────────────────────────────────────────────────────────────────
@@ -72,6 +90,12 @@ export class ToolExecutor {
     this.deps.log.appendLine(`[tool] ${toolName} ${JSON.stringify(args).slice(0, 200)}`);
 
     try {
+      // read_file returns a structured payload so the caller can deliver a
+      // verbatim, paginated window rather than a compacted blob.
+      if (toolName === 'read_file') {
+        const { result, read } = await this._readFile(args);
+        return { toolCallId, result, read };
+      }
       const result = await this._dispatch(toolName, args);
       return { toolCallId, result };
     } catch (err) {
@@ -83,7 +107,7 @@ export class ToolExecutor {
 
   private async _dispatch(toolName: string, args: Record<string, unknown>): Promise<string> {
     switch (toolName) {
-      case 'read_file':            return this._readFile(args);
+      case 'read_file':            return (await this._readFile(args)).result;
       case 'write_file':           return this._writeFile(args);
       case 'string_replace':       return this._stringReplace(args);
       case 'copy_file':            return this._copyFile(args);
@@ -123,42 +147,47 @@ export class ToolExecutor {
 
   // ── File operations ───────────────────────────────────────────────────────
 
-  private async _readFile(args: Record<string, unknown>): Promise<string> {
+  /**
+   * Read a file and return its raw content for verbatim windowing by the caller.
+   *
+   * Slicing/pagination is deliberately NOT done here — the caller (ChatPanel)
+   * owns the context-scaled window via `buildDeliveredSlice`, so there is a
+   * single source of truth for how much content a delivery carries. This method
+   * only reads bytes and reports the total line count.
+   */
+  private async _readFile(args: Record<string, unknown>): Promise<{ result: string; read?: ReadResultPayload }> {
     const relPath = String(args['path'] ?? '');
     const resolved = resolveEditPath(relPath, this.wsRoots);
-    if (resolved.error) { return `Error: ${resolved.error}`; }
+    if (resolved.error) { return { result: `Error: ${resolved.error}` }; }
 
     if (this.gitIgnoreFilter.isIgnored(relPath)) {
-      return `Error: "${relPath}" is excluded by .gitignore.`;
+      return { result: `Error: "${relPath}" is excluded by .gitignore.` };
     }
 
     const fileUri = vscode.Uri.file(resolved.resolvedPath!);
     let content: string;
+    let docVersion = 0;
     try {
       const doc = await vscode.workspace.openTextDocument(fileUri);
       content = doc.getText();
+      docVersion = doc.version;
     } catch {
       try {
         const bytes = await vscode.workspace.fs.readFile(fileUri);
         content = Buffer.from(bytes).toString('utf8');
       } catch (err) {
-        return `Error reading file: ${err instanceof Error ? err.message : String(err)}`;
+        return { result: `Error reading file: ${err instanceof Error ? err.message : String(err)}` };
       }
     }
 
-    const lines = content.split('\n');
-    const startLine = typeof args['start_line'] === 'number' ? args['start_line'] - 1 : 0;
-    const endLine = typeof args['end_line'] === 'number' ? args['end_line'] - 1 : lines.length - 1;
-    const slice = lines.slice(
-      Math.max(0, startLine),
-      Math.min(lines.length - 1, endLine) + 1
-    );
-
-    const actualStart = Math.max(1, startLine + 1);
-    const rangeStr = slice.length === lines.length ? '' : ` lines ${actualStart}–${actualStart + slice.length - 1}`;
+    const totalLines = content.split('\n').length;
+    const startLine = typeof args['start_line'] === 'number' ? args['start_line'] : undefined;
+    const endLine = typeof args['end_line'] === 'number' ? args['end_line'] : undefined;
+    const rangeStr = startLine !== undefined || endLine !== undefined
+      ? ` lines ${startLine ?? 1}–${endLine ?? totalLines}`
+      : '';
     this._activity(`Read: ${relPath}${rangeStr}`, relPath);
-    const header = `File: ${relPath} (lines ${actualStart}-${actualStart + slice.length - 1} of ${lines.length})`;
-    return `${header}\n\`\`\`\n${slice.join('\n')}\n\`\`\``;
+    return { result: content, read: { uri: relPath, content, docVersion, totalLines } };
   }
 
   private async _writeFile(args: Record<string, unknown>): Promise<string> {

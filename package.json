@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.2.35",
+  "version": "0.2.37",
   "engines": {
     "vscode": "^1.111.0"
   },
@@ -130,6 +130,12 @@
           "default": 40,
           "minimum": 1,
           "description": "Maximum number of tool-calling rounds per inference cycle before the model is asked to produce a final answer."
+        },
+        "agent86.customSystemPrompt": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "description": "Custom text appended to the system prompt on every request. Use it for standing instructions (style, conventions, constraints)."
         },
         "agent86.maxToolRoundsPerPlanItem": {
           "type": "number",

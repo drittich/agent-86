@@ -24,6 +24,7 @@ export const TEMPLATE_HTML: string = `
     <div id="settings-tabs" role="tablist">
       <button id="tab-providers" class="settings-tab" role="tab" aria-selected="true">Providers<span id="tab-providers-count" class="settings-tab-count">0</span></button>
       <button id="tab-models" class="settings-tab" role="tab" aria-selected="false">Models<span id="tab-models-count" class="settings-tab-count">0</span></button>
+      <button id="tab-system-prompt" class="settings-tab" role="tab" aria-selected="false">System Prompt</button>
     </div>
     <div id="settings-body">
       <!-- ── Providers (connections) ─────────────────────────────── -->
@@ -36,6 +37,16 @@ export const TEMPLATE_HTML: string = `
       <div id="models-pane" class="settings-pane" role="tabpanel" hidden>
         <ul id="models-list"></ul>
         <button id="btn-add-model" class="btn-add-row">+ Add model</button>
+      </div>
+
+      <!-- ── System Prompt ───────────────────────────────────────── -->
+      <div id="system-prompt-pane" class="settings-pane" role="tabpanel" hidden>
+        <label for="system-prompt-text">Custom instructions</label>
+        <textarea id="system-prompt-text" placeholder="Standing instructions appended to the system prompt on every request — style, conventions, constraints."></textarea>
+        <div class="form-hint">Appended under a “User instructions” heading. Leave empty to use the base prompt only.</div>
+        <div class="system-prompt-actions">
+          <button id="btn-system-prompt-save">Save</button>
+        </div>
       </div>
     </div>
     <details id="settings-advanced">

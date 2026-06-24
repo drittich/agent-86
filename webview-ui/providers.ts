@@ -57,7 +57,8 @@ export let connections: ProviderConnection[] = [];
 export let models: ModelConfig[] = [];
 export let activeModelIndex = 0;
 
-let activeTab: 'providers' | 'models' = 'providers';
+export type SettingsTab = 'providers' | 'models' | 'system';
+let activeTab: SettingsTab = 'providers';
 
 // Open dialog (mirrors the prototype's single-dialog model with a working draft).
 type ProviderDraft = { type: ProviderType['key']; name: string; baseUrl: string; apiKey: string };
@@ -98,10 +99,12 @@ let providerStatusDot: HTMLElement;
 
 let tabProviders: HTMLButtonElement;
 let tabModels: HTMLButtonElement;
+let tabSystemPrompt: HTMLButtonElement;
 let tabProvidersCount: HTMLElement;
 let tabModelsCount: HTMLElement;
 let providersPane: HTMLElement;
 let modelsPane: HTMLElement;
+let systemPromptPane: HTMLElement;
 
 // Provider dialog
 let providerDialog: HTMLElement;
@@ -144,10 +147,12 @@ export interface ProviderRefs {
   providerStatusDot: HTMLElement;
   tabProviders: HTMLButtonElement;
   tabModels: HTMLButtonElement;
+  tabSystemPrompt: HTMLButtonElement;
   tabProvidersCount: HTMLElement;
   tabModelsCount: HTMLElement;
   providersPane: HTMLElement;
   modelsPane: HTMLElement;
+  systemPromptPane: HTMLElement;
   providerDialog: HTMLElement;
   providerDialogTitle: HTMLElement;
   pfTypeChips: HTMLElement;
@@ -184,10 +189,12 @@ export function initProviders(refs: ProviderRefs): void {
   providerStatusDot = refs.providerStatusDot;
   tabProviders = refs.tabProviders;
   tabModels = refs.tabModels;
+  tabSystemPrompt = refs.tabSystemPrompt;
   tabProvidersCount = refs.tabProvidersCount;
   tabModelsCount = refs.tabModelsCount;
   providersPane = refs.providersPane;
   modelsPane = refs.modelsPane;
+  systemPromptPane = refs.systemPromptPane;
   providerDialog = refs.providerDialog;
   providerDialogTitle = refs.providerDialogTitle;
   pfTypeChips = refs.pfTypeChips;
@@ -219,6 +226,7 @@ export function initProviders(refs: ProviderRefs): void {
   // Tabs
   tabProviders.addEventListener('click', () => setSettingsTab('providers'));
   tabModels.addEventListener('click', () => setSettingsTab('models'));
+  tabSystemPrompt.addEventListener('click', () => setSettingsTab('system'));
 
   // Provider dialog inputs
   pfName.addEventListener('input', () => { if (providerDraft) { providerDraft.draft.name = pfName.value; } });
@@ -324,13 +332,14 @@ function maskKey(k: string | undefined): string {
 
 // ── Tabs ─────────────────────────────────────────────────────────────────────────
 
-export function setSettingsTab(tab: 'providers' | 'models'): void {
+export function setSettingsTab(tab: SettingsTab): void {
   activeTab = tab;
-  const onProviders = tab === 'providers';
-  tabProviders.setAttribute('aria-selected', String(onProviders));
-  tabModels.setAttribute('aria-selected', String(!onProviders));
-  providersPane.hidden = !onProviders;
-  modelsPane.hidden = onProviders;
+  tabProviders.setAttribute('aria-selected', String(tab === 'providers'));
+  tabModels.setAttribute('aria-selected', String(tab === 'models'));
+  tabSystemPrompt.setAttribute('aria-selected', String(tab === 'system'));
+  providersPane.hidden = tab !== 'providers';
+  modelsPane.hidden = tab !== 'models';
+  systemPromptPane.hidden = tab !== 'system';
 }
 
 // ── Rendering: lists ──────────────────────────────────────────────────────────────

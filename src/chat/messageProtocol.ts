@@ -30,7 +30,7 @@ export type ExtensionToWebview =
   | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' }
   | { type: 'agentsMdAvailable'; available: boolean }
   | { type: 'checkboxState'; thinkingMode: boolean; includeAgentsMd: boolean }
-  | { type: 'openSettings'; connections: ProviderConnection[]; models: ModelConfig[]; activeModelIndex: number; maxToolRounds: number }
+  | { type: 'openSettings'; connections: ProviderConnection[]; models: ModelConfig[]; activeModelIndex: number; maxToolRounds: number; customSystemPrompt: string }
   | { type: 'providerStatus'; providerName: string; status: 'online' | 'offline' | 'checking' }
   | { type: 'providers'; connections: ProviderConnection[]; models: ModelConfig[]; activeModelIndex: number }
   | { type: 'modelCatalog'; baseUrl: string; models: CatalogModel[]; error?: string }
@@ -61,7 +61,7 @@ export type WebviewToExtension =
   | { type: 'question/response'; questionId: string; answer: string }
   | { type: 'pick/response'; pickId: string; indices: number[] }
   | { type: 'checkboxChange'; includeAgentsMd?: boolean }
-  | { type: 'saveSettings'; connections?: ProviderConnection[]; models?: ModelConfig[]; activeModelIndex?: number; maxToolRounds?: number }
+  | { type: 'saveSettings'; connections?: ProviderConnection[]; models?: ModelConfig[]; activeModelIndex?: number; maxToolRounds?: number; customSystemPrompt?: string }
   | { type: 'selectModel'; providerIndex: number }
   | { type: 'fetchModelCatalog'; baseUrl: string }
   | { type: 'open-file'; relativePath: string };

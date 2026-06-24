@@ -6,7 +6,8 @@ import {
   parseSearchRequests, formatSearchResultBlock, searchFileWithRg,
   extractPromptTokens, selectBestChunk, selectExactLineRangeChunks,
   chunkLinesForContext,
-  FileChunkMeta, FileChunk, ChunkRequest,
+  normalizeFilePathKey, rangeIsCovered, describeUndeliveredRanges,
+  FileChunkMeta, FileChunk, ChunkRequest, DeliveredRange,
 } from '../tools/ChunkManager';
 import { resolveEditPath } from '../tools/editParser';
 import { FILE_EXCLUDE_GLOB, FILE_CAP_BYTES, TOTAL_CAP_BYTES } from '../tools/FileTools';
@@ -363,7 +364,7 @@ export class ChatPanelChunks {
     wsRoots: string[],
     maxChunkRounds: number,
     currentRound: number,
-    sentChunkIds: Set<string>,
+    deliveredRanges: Map<string, DeliveredRange[]>,
     maxChunkNoOpRounds: number,
     currentNoOpRounds: number
   ): Promise<{
@@ -374,7 +375,7 @@ export class ChatPanelChunks {
     nextNoOpRounds: number;
   }> {
     const chunkRequests = parseChunkRequests(fullResponse);
-    
+
     if (!chunkRequests) {
       return { done: true, noOp: false, nextRound: currentRound, nextNoOpRounds: currentNoOpRounds };
     }
@@ -392,13 +393,25 @@ export class ChatPanelChunks {
     this.deps.postMessage({ type: 'status', text: `Fetching ${chunkRequests.length} requested chunk(s)…` });
 
     const parts: string[] = [];
+    // Reasons no content was sent, for precise no-op guidance.
+    const notFound: string[] = [];
+    const alreadyHave: Array<{ uri: string; totalLines: number }> = [];
+
+    const recordDelivered = (uri: string, start: number, end: number): void => {
+      const key = normalizeFilePathKey(uri);
+      if (!deliveredRanges.has(key)) { deliveredRanges.set(key, []); }
+      deliveredRanges.get(key)!.push({ start, end });
+    };
+
     for (const req of chunkRequests) {
       const chunks = await this.getChunksForUri(req.uri, wsRoots);
       if (!chunks) {
-        this.deps.log.appendLine(`[chunks] could not read "${req.uri}" — skipping`);
+        this.deps.log.appendLine(`[chunks] could not read "${req.uri}" — file not found or ambiguous`);
+        notFound.push(req.uri);
         continue;
       }
 
+      const totalLines = chunks[chunks.length - 1]?.lineEnd ?? 0;
       const maxNew = req.preferred?.max_chunks ?? 2;
       let newSent = 0;
       const selected = this.selectChunksForRequest(chunks, req.preferred);
@@ -407,19 +420,25 @@ export class ChatPanelChunks {
         this.deps.log.appendLine(`[chunks] using line_range ${start}-${end} for "${req.uri}"`);
       }
 
+      let sentForThisReq = 0;
+      const key = normalizeFilePathKey(req.uri);
       for (const chunk of selected) {
-        if (sentChunkIds.has(chunk.chunkId)) {
-          this.deps.log.appendLine(`[chunks] skipping already-sent chunk ${chunk.chunkId}`);
+        if (rangeIsCovered(deliveredRanges.get(key), chunk.lineStart, chunk.lineEnd)) {
+          this.deps.log.appendLine(`[chunks] skipping already-delivered ${chunk.uri} ${chunk.lineStart}-${chunk.lineEnd}`);
           continue;
         }
         if (newSent >= maxNew) {
           this.deps.log.appendLine(`[chunks] max_chunks cap (${maxNew}) reached for "${req.uri}"`);
           break;
         }
-        sentChunkIds.add(chunk.chunkId);
+        recordDelivered(req.uri, chunk.lineStart, chunk.lineEnd);
         parts.push(formatChunkBlock(chunk));
-        this.deps.log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (${chunk.chunkId}, total=${chunk.totalChunks})`);
+        this.deps.log.appendLine(`[chunks] sending ${chunk.uri} lines ${chunk.lineStart}-${chunk.lineEnd} (total=${chunk.totalChunks})`);
         newSent++;
+        sentForThisReq++;
+      }
+      if (sentForThisReq === 0) {
+        alreadyHave.push({ uri: req.uri, totalLines });
       }
     }
 
@@ -428,7 +447,7 @@ export class ChatPanelChunks {
       this.deps.log.appendLine(`[chunks] no new chunks to send (noop ${nextNoOpRounds}/${maxChunkNoOpRounds})`);
       this.deps.postMessage({
         type: 'status',
-        text: 'No new chunks to send. Try specifying near_line/line_range or attaching more of the file.',
+        text: 'No new chunks to send — requested content is already in context or the path was not found.',
       });
 
       if (nextNoOpRounds >= maxChunkNoOpRounds) {
@@ -438,14 +457,40 @@ export class ChatPanelChunks {
       return {
         done: false,
         noOp: true,
-        content: '<tool_guidance>No new chunks were available for your request. ' +
-          'If you need a different section, request a different near_line/line_range, or provide a workspace-relative URI.</tool_guidance>',
+        content: this._buildNoOpGuidance(notFound, alreadyHave, deliveredRanges),
         nextRound,
         nextNoOpRounds
       };
     }
 
     return { done: false, noOp: false, content: parts.join('\n\n'), nextRound, nextNoOpRounds: 0 };
+  }
+
+  /**
+   * Build precise guidance when a chunk request yielded no new content,
+   * distinguishing already-delivered files (with the ranges still missing) from
+   * paths that could not be resolved.
+   */
+  private _buildNoOpGuidance(
+    notFound: string[],
+    alreadyHave: Array<{ uri: string; totalLines: number }>,
+    deliveredRanges: Map<string, DeliveredRange[]>
+  ): string {
+    const lines: string[] = [];
+    for (const { uri, totalLines } of alreadyHave) {
+      const undelivered = describeUndeliveredRanges(deliveredRanges.get(normalizeFilePathKey(uri)), totalLines);
+      if (undelivered) {
+        lines.push(`${uri}: the requested lines are already in context above. Not yet delivered: ${undelivered}. ` +
+          `Request one of those ranges with preferred.line_range to get new content.`);
+      } else {
+        lines.push(`${uri}: the entire file (${totalLines} line(s)) is already in context above — use it directly.`);
+      }
+    }
+    for (const uri of notFound) {
+      lines.push(`${uri}: could not be resolved (not found, ambiguous basename, or outside the workspace). ` +
+        `Provide a more specific workspace-relative path.`);
+    }
+    return `<tool_guidance>No new content was sent.\n${lines.join('\n')}</tool_guidance>`;
   }
 
   /**
@@ -462,12 +507,10 @@ export class ChatPanelChunks {
     chunkBlocks: string[];
     resolvedPaths: string[];
     skippedDueToInjectionCap: string[];
-    initialChunkIds: string[];
   }> {
     const chunkBlocks: string[] = [];
     const resolvedPaths: string[] = [];
     const skippedDueToInjectionCap: string[] = [];
-    const initialChunkIds: string[] = [];
     const promptTokens = extractPromptTokens(prompt);
     const wsRoot = wsRoots[0] ?? '';
     let injectedChars = 0;
@@ -488,12 +531,10 @@ export class ChatPanelChunks {
           this.deps.postMessage({ type: 'status', text: `Searching ${f.relativePath}…` });
           const best = await selectBestChunk(chunks, absolutePath, promptTokens);
           block = formatChunkBlock(best);
-          initialChunkIds.push(best.chunkId);
           log.appendLine(`[chunks] sending ${best.uri} lines ${best.lineStart}-${best.lineEnd} (rg-scored, total=${best.totalChunks})`);
         } else {
           const first = chunks[0];
           block = formatChunkBlock(first);
-          initialChunkIds.push(first.chunkId);
           log.appendLine(`[chunks] sending ${first.uri} lines ${first.lineStart}-${first.lineEnd} (manual attach, initial=1, total=${first.totalChunks})`);
         }
       } else {
@@ -516,7 +557,7 @@ export class ChatPanelChunks {
       resolvedPaths.push(`  - ${f.relativePath}`);
     }
 
-    return { chunkBlocks, resolvedPaths, skippedDueToInjectionCap, initialChunkIds };
+    return { chunkBlocks, resolvedPaths, skippedDueToInjectionCap };
   }
 }
 

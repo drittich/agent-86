@@ -13,6 +13,14 @@ import { ChatPanelEdits } from './ChatPanelEdits';
 import { ChatPanelActions } from './ChatPanelActions';
 import { ChatPanelSessions } from './ChatPanelSessions';
 import { ToolExecutor } from '../tools/ToolExecutor';
+import {
+  buildDeliveredSlice,
+  formatDeliveredSlice,
+  normalizeFilePathKey,
+  rangeIsCovered,
+  describeUndeliveredRanges,
+  DeliveredRange,
+} from '../tools/ChunkManager';
 import { buildAgentTools } from '../tools/ToolRegistry';
 import { ToolCallEvent } from '../providers/IProvider';
 import { getSystemPrompt, getProfilePrompt, getNativeToolsPrompt, getLegacyFormatReference, LEGACY_FORMAT_REFERENCE_MARKER } from '../utils/PromptProcessor';
@@ -226,13 +234,16 @@ export class ChatPanel implements vscode.WebviewViewProvider {
 
   public openSettings(): void {
     const { connections, models } = this._getProviderData();
-    const maxToolRounds = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRounds') ?? 40;
+    const cfg = vscode.workspace.getConfiguration('agent86');
+    const maxToolRounds = cfg.get<number>('maxToolRounds') ?? 40;
+    const customSystemPrompt = cfg.get<string>('customSystemPrompt') ?? '';
     this._postMessage({
       type: 'openSettings',
       connections,
       models,
       activeModelIndex: this._activeProviderIndex,
       maxToolRounds,
+      customSystemPrompt,
     });
   }
 
@@ -581,13 +592,27 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     // inside the cached system prompt and does not perturb the cache prefix.
     const profileSection = this._buildProfileSection();
 
+    // User-authored standing instructions (Settings → System Prompt), appended
+    // verbatim under a clear header so the model treats them as the operator's.
+    const userInstructions = this._buildUserInstructionsSection();
+
     // Keep one stable system prompt for the entire turn/session, even if the runtime
     // path falls back from native tool-calling to legacy parsing behavior.
     if (customSystemPrompt) {
-      return `${customSystemPrompt.trim()}${agentsMdSection}${profileSection}\n\n${behaviorInstructions}`;
+      return `${customSystemPrompt.trim()}${agentsMdSection}${profileSection}\n\n${behaviorInstructions}${userInstructions}`;
     }
 
-    return getNativeToolsPrompt(agentsMdSection, behaviorInstructions) + profileSection;
+    return getNativeToolsPrompt(agentsMdSection, behaviorInstructions) + profileSection + userInstructions;
+  }
+
+  /**
+   * Build the custom-system-prompt addendum from the `agent86.customSystemPrompt`
+   * setting. Returns an empty string when unset so the cached prompt prefix is
+   * unaffected for users who don't use the feature.
+   */
+  private _buildUserInstructionsSection(): string {
+    const custom = vscode.workspace.getConfiguration('agent86').get<string>('customSystemPrompt')?.trim();
+    return custom ? `\n\n## User instructions\n\n${custom}` : '';
   }
 
   /**
@@ -959,7 +984,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   private _normalizeToolPath(target: string): string {
-    return target.replace(/\\/g, '/').replace(/^\.\/?/, '').trim().toLowerCase();
+    return normalizeFilePathKey(target);
   }
 
   private _dedupePaths(paths: Iterable<string>): string[] {
@@ -1030,51 +1055,47 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Builds a map of files already read in this session's history.
-   * Key: normalized path. Value: array of covered ranges [{start, end}].
-   * A missing start_line/end_line is treated as full-file (0 → Infinity).
+   * Build the unified view of file line-ranges already delivered to the model and
+   * still in context. Derived by scanning history for `<file_chunk … lines="A-B">`
+   * blocks, which every delivery path emits: read_file (verbatim windows),
+   * request_chunks, and initial attachments. Evicted tool results have their
+   * content replaced by an `[elided …]` stub (no `<file_chunk>` block) so they
+   * drop out automatically — re-reading an evicted file is therefore allowed.
+   * Plan-mode safe: history replaced at step boundaries simply isn't scanned.
+   *
+   * Key: normalized path. Value: delivered ranges [{start, end}].
    */
-  private _buildReadFileCache(fromIndex = 0): Map<string, Array<{ start: number; end: number }>> {
-    const cache = new Map<string, Array<{ start: number; end: number }>>();
+  private _buildDeliveredRanges(fromIndex = 0): Map<string, DeliveredRange[]> {
+    const ranges = new Map<string, DeliveredRange[]>();
+    const re = /<file_chunk\s+path="([^"]+)"[^>]*\slines="(\d+)-(\d+)"/g;
     for (const msg of this._sessions.history.slice(fromIndex)) {
-      if (msg.role === 'assistant' && msg.tool_calls) {
-        for (const tc of msg.tool_calls) {
-          // Evicted results are no longer in context — the model must be
-          // allowed to re-read those files.
-          if (tc.toolName === 'read_file' && !tc.resultEvicted) {
-            const p = this._normalizeToolPath(String(tc.input['path'] ?? ''));
-            if (!p) { continue; }
-            const start = typeof tc.input['start_line'] === 'number' ? tc.input['start_line'] : 0;
-            const end   = typeof tc.input['end_line']   === 'number' ? tc.input['end_line']   : Infinity;
-            if (!cache.has(p)) { cache.set(p, []); }
-            cache.get(p)!.push({ start, end });
-          }
-        }
+      if (!msg.content) { continue; }
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(msg.content)) !== null) {
+        const p = this._normalizeToolPath(m[1]);
+        const start = parseInt(m[2], 10);
+        const end = parseInt(m[3], 10);
+        if (!p || !Number.isFinite(start) || !Number.isFinite(end)) { continue; }
+        if (!ranges.has(p)) { ranges.set(p, []); }
+        ranges.get(p)!.push({ start, end });
       }
     }
-    return cache;
+    return ranges;
   }
 
   /**
-   * Returns true if the requested read is fully covered by a prior read in the cache.
-   * A full-file read (no range) is only blocked by another full-file read.
-   * A ranged read is blocked if a prior read covers its range or is a full-file read.
+   * Returns true if the requested read is fully covered by a range already
+   * delivered and still in context. A full-file read (no range) maps to
+   * [1, Infinity] and is only covered by another full-file delivery.
    */
   private _isDuplicateRead(
     path: string,
     reqStart: number,
     reqEnd: number,
-    cache: Map<string, Array<{ start: number; end: number }>>
+    delivered: Map<string, DeliveredRange[]>
   ): boolean {
-    const normalized = this._normalizeToolPath(path);
-    const ranges = cache.get(normalized);
-    if (!ranges || ranges.length === 0) { return false; }
-    for (const r of ranges) {
-      if (r.start <= reqStart && r.end >= reqEnd) {
-        return true;
-      }
-    }
-    return false;
+    return rangeIsCovered(delivered.get(this._normalizeToolPath(path)), reqStart, reqEnd);
   }
 
   private _isLikelyVendorOrRuntimePath(target: string): boolean {
@@ -1421,20 +1442,11 @@ export class ChatPanel implements vscode.WebviewViewProvider {
    *   - keeps lines matching user prompt tokens + surrounding context
    * For listing/search tools, uses head/tail truncation (content is already line-oriented).
    */
-  private _compactToolResultForHistory(toolName: string, result: string, userPrompt = ''): string {
+  private _compactToolResultForHistory(toolName: string, result: string): string {
     const strictTools = new Set(['find_files', 'list_directory', 'search_file_contents']);
     const maxChars = strictTools.has(toolName) ? 4000 : 6000;
     if (result.length <= maxChars) {
       return result;
-    }
-
-    // Structural compaction for code files
-    if (toolName === 'read_file') {
-      const structural = this._structuralCompactCode(result, userPrompt, maxChars);
-      if (structural.length <= maxChars) {
-        return structural;
-      }
-      // If still too large, fall through to head/tail below
     }
 
     const lines = result.split(/\r?\n/);
@@ -1460,94 +1472,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       `[... truncated ${result.length - (half * 2)} char(s) ...]\n` +
       `${result.slice(result.length - half)}`
     );
-  }
-
-  /**
-   * Structural compaction for code file content.
-   *
-   * Keeps:
-   *   1. All import/require/use/include lines (language agnostic)
-   *   2. Top-level structural lines: class, function, def, const/let/var exports,
-   *      type/interface/enum declarations, method signatures
-   *   3. Lines matching user prompt tokens (identifiers > 3 chars) + CONTEXT_LINES around them
-   *
-   * Omitted spans are replaced with a single `[... N lines omitted ...]` marker.
-   */
-  private _structuralCompactCode(content: string, userPrompt: string, maxChars: number): string {
-    const CONTEXT_LINES = 3;
-
-    const lines = content.split(/\r?\n/);
-    const total = lines.length;
-
-    // Regex patterns for "structural" lines worth always keeping
-    const IMPORT_RE = /^\s*(import\b|from\s+\S+\s+import|require\s*\(|#include|use\s+\w|using\s+\w)/;
-    const SIGNATURE_RE = /^\s*(export\s+)?(default\s+)?(async\s+)?(function\b|class\b|interface\b|type\b|enum\b|const\b|let\b|var\b|def\b|fn\b|pub\s+(fn|struct|enum|trait|impl)\b|struct\b|impl\b|trait\b|abstract\b|override\b|static\b|public\b|private\b|protected\b)[\s<(]/;
-    const METHOD_RE = /^\s{2,}(async\s+)?[\w$#][\w$]*\s*[(<]/;
-    const DECORATOR_RE = /^\s*@[\w]/;
-
-    // Extract meaningful tokens from the user prompt
-    const promptTokens: string[] = [];
-    const seen = new Set<string>();
-    for (const w of (userPrompt.match(/[A-Za-z_$][\w$]*/g) ?? [])) {
-      const lw = w.toLowerCase();
-      if (lw.length > 3 && !seen.has(lw)) {
-        seen.add(lw);
-        promptTokens.push(lw);
-      }
-    }
-
-    const isStructural = (line: string): boolean =>
-      IMPORT_RE.test(line) || SIGNATURE_RE.test(line) || METHOD_RE.test(line) || DECORATOR_RE.test(line);
-
-    const matchesPrompt = (line: string): boolean => {
-      if (promptTokens.length === 0) { return false; }
-      const lower = line.toLowerCase();
-      return promptTokens.some(t => lower.includes(t));
-    };
-
-    // Build a set of line indices to keep
-    const keep = new Set<number>();
-
-    for (let i = 0; i < total; i++) {
-      const line = lines[i];
-      if (isStructural(line)) {
-        keep.add(i);
-      } else if (matchesPrompt(line)) {
-        // Keep the matching line plus surrounding context
-        for (let j = Math.max(0, i - CONTEXT_LINES); j <= Math.min(total - 1, i + CONTEXT_LINES); j++) {
-          keep.add(j);
-        }
-      }
-    }
-
-    // Always keep first few lines (file header / shebang / module doc)
-    for (let i = 0; i < Math.min(5, total); i++) { keep.add(i); }
-
-    // Reconstruct, collapsing omitted spans into markers
-    const output: string[] = [];
-    let omitStart = -1;
-    let omitCount = 0;
-
-    const flushOmit = () => {
-      if (omitCount > 0) {
-        output.push(`[... ${omitCount} line(s) omitted ...]`);
-        omitCount = 0;
-        omitStart = -1;
-      }
-    };
-
-    for (let i = 0; i < total; i++) {
-      if (keep.has(i)) {
-        flushOmit();
-        output.push(lines[i]);
-      } else {
-        omitCount++;
-        if (omitStart === -1) { omitStart = i; }
-      }
-    }
-    flushOmit();
-
-    return output.join('\n');
   }
 
   private async _handleSend(prompt: string): Promise<void> {
@@ -1611,8 +1535,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     let userContent = prompt;
     const wsRoots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
     const newFiles = this._sessions.attachedFiles.filter(f => !this._injectedFileUris.has(f.uri));
-    /** Chunk IDs delivered in the initial user message — seeded into sentChunkIds below. */
-    const initialChunkIds: string[] = [];
 
     // Context meter: attachment bytes (capped per-file to align with FileTools total cap accounting)
     const attachmentBytes = this._sessions.attachedFiles.reduce(
@@ -1624,7 +1546,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       : 0;
     if (newFiles.length > 0) {
       const MAX_INJECTED_CHARS = 18_000;
-      const { chunkBlocks, resolvedPaths, skippedDueToInjectionCap, initialChunkIds: ids } =
+      const { chunkBlocks, resolvedPaths, skippedDueToInjectionCap } =
         await this._chunks.prepareFileChunks(
           newFiles as ChunkAttachedFile[],
           wsRoots,
@@ -1633,8 +1555,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
           MAX_INJECTED_CHARS,
           this._log
         );
-      
-      initialChunkIds.push(...ids);
 
       if (chunkBlocks.length > 0) {
         this._postMessage({ type: 'status', text: `Sending chunks for ${chunkBlocks.length} file(s)…` });
@@ -1737,8 +1657,6 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const MAX_SEARCH_FIRST_REDIRECTS = 2;
     let searchFirstRedirects = 0;
     const enforceSearchFirst = /\b(unused|usage|used|reference|references|import|call[- ]?site|where\s+used)\b/i.test(prompt);
-    /** Chunk IDs that have already been sent to the model in this turn. */
-    const sentChunkIds = new Set<string>(initialChunkIds);
     let finalResponse = '';
     let lastUsage: import('../providers/IProvider').ProviderUsage | undefined;
     let lastFinishReason: string | undefined;
@@ -2381,49 +2299,83 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           let searchRegressionRecovery:
             | { pattern: string; paths: string[] }
             | undefined;
-          // Snapshot of files already read before this round (used for duplicate-read guard)
-          const readCache = this._buildReadFileCache(turnHistoryStartIndex);
+          // Unified view of line-ranges already delivered and still in context
+          // (read_file windows, request_chunks, initial attachments). Drives the
+          // duplicate-read guard and pagination guidance.
+          const deliveredRanges = this._buildDeliveredRanges(turnHistoryStartIndex);
           for (const toolCall of pendingToolCalls) {
             this._log.appendLine(`[tools] executing ${toolCall.toolName} (${toolCall.toolCallId})`);
             this._postMessage({ type: 'status', text: `Tool: ${toolCall.toolName}…` });
 
-            // Duplicate-read guard: skip re-reading a file that is already fully in history
-            // unless the request narrows to a range not previously fetched.
-            let compactResult: string;
+            const toolResult = await toolExecutor.execute(toolCall);
+
+            // read_file: deliver a verbatim, context-scaled, paginated window via
+            // the shared delivery primitive. Never compacted/skeletonized.
             if (toolCall.toolName === 'read_file') {
-              const reqPath  = String(toolCall.args['path'] ?? '');
-              const reqStart = typeof toolCall.args['start_line'] === 'number' ? toolCall.args['start_line'] : 0;
-              const reqEnd   = typeof toolCall.args['end_line']   === 'number' ? toolCall.args['end_line']   : Infinity;
+              const reqPath = String(toolCall.args['path'] ?? '');
               const normalizedReqPath = this._normalizeToolPath(reqPath);
-              const isDuplicateRead = this._isDuplicateRead(reqPath, reqStart, reqEnd, readCache);
-              const allowSearchNamedReread = isDuplicateRead && searchNamedReadTargets.has(normalizedReqPath);
-              if (allowSearchNamedReread) {
-                searchNamedReadTargets.delete(normalizedReqPath);
-                this._log.appendLine(`[tools] duplicate-read bypassed for search-named file: ${reqPath}`);
-              } else if (isDuplicateRead) {
-                const rangeNote = reqStart === 0 && reqEnd === Infinity
-                  ? 'in full'
-                  : `lines ${reqStart}–${reqEnd === Infinity ? 'end' : reqEnd}`;
-                const steerMsg = `[guardrail] ${reqPath} was already read ${rangeNote} earlier in this session. ` +
-                  `Use the content already in context. If you need a specific line range that hasn't been read, ` +
-                  `call read_file with explicit start_line and end_line that do not overlap the prior read.`;
-                this._log.appendLine(`[tools] duplicate-read blocked: ${reqPath} (${rangeNote})`);
-                compactResult = steerMsg;
+
+              if (!toolResult.read) {
+                // Error (resolve/gitignore/read failure) — surface it verbatim.
+                lastToolResultWasError = true;
                 this._sessions.history.push({
                   role: 'tool',
-                  content: compactResult,
-                  tool_call_id: toolCall.toolCallId,
+                  content: toolResult.result,
+                  tool_call_id: toolResult.toolCallId,
                 });
                 continue;
               }
+
+              const { content: rawContent, docVersion, totalLines, uri } = toolResult.read;
+              const rawStart = typeof toolCall.args['start_line'] === 'number' ? toolCall.args['start_line'] : undefined;
+              const rawEnd = typeof toolCall.args['end_line'] === 'number' ? toolCall.args['end_line'] : undefined;
+
+              // Out-of-range start: tell the model the valid range instead of
+              // silently clamping to the last line.
+              if (rawStart !== undefined && rawStart > totalLines) {
+                const steer = `[read_file] ${reqPath} has ${totalLines} line(s); start_line=${rawStart} is past the end. Valid range is 1-${totalLines}.`;
+                this._log.appendLine(`[tools] read out-of-range: ${reqPath} start=${rawStart} total=${totalLines}`);
+                this._sessions.history.push({ role: 'tool', content: steer, tool_call_id: toolResult.toolCallId });
+                continue;
+              }
+
+              const slice = buildDeliveredSlice(uri, rawContent, docVersion, { start: rawStart, end: rawEnd }, providerContextWindow);
+              const ranges = deliveredRanges.get(normalizedReqPath);
+              const alreadyDelivered = rangeIsCovered(ranges, slice.lineStart, slice.lineEnd);
+              const allowSearchNamedReread = alreadyDelivered && searchNamedReadTargets.has(normalizedReqPath);
+
+              if (alreadyDelivered && !allowSearchNamedReread) {
+                const undelivered = describeUndeliveredRanges(ranges, totalLines);
+                const nextHint = undelivered
+                  ? ` Not yet delivered: ${undelivered}. To continue, call read_file(path="${reqPath}", start_line=${parseInt(undelivered, 10)}).`
+                  : ` The entire file (${totalLines} line(s)) is already in context above.`;
+                const steer = `[read_file] lines ${slice.lineStart}-${slice.lineEnd} of ${reqPath} are already in context above — reusing them, not re-sending.${nextHint}`;
+                this._log.appendLine(`[tools] read already-delivered: ${reqPath} ${slice.lineStart}-${slice.lineEnd}`);
+                this._sessions.history.push({ role: 'tool', content: steer, tool_call_id: toolResult.toolCallId });
+                continue;
+              }
+
+              if (allowSearchNamedReread) {
+                searchNamedReadTargets.delete(normalizedReqPath);
+                this._log.appendLine(`[tools] duplicate-read bypassed for search-named file: ${reqPath}`);
+              }
+
+              successfulReadTargets.add(this._extractToolTarget(toolCall));
+              const block = formatDeliveredSlice(slice);
+              // Record locally so a second read of the same window in this same
+              // batch also dedupes (history scan only sees prior rounds).
+              if (!deliveredRanges.has(normalizedReqPath)) { deliveredRanges.set(normalizedReqPath, []); }
+              deliveredRanges.get(normalizedReqPath)!.push({ start: slice.lineStart, end: slice.lineEnd });
+              this._log.appendLine(
+                `[tools] read ${reqPath} delivered lines ${slice.lineStart}-${slice.lineEnd} of ${totalLines}${slice.truncated ? ` (truncated, next ${slice.nextStart})` : ''}`
+              );
+              this._sessions.history.push({ role: 'tool', content: block, tool_call_id: toolResult.toolCallId });
+              continue;
             }
 
-            const toolResult = await toolExecutor.execute(toolCall);
+            let compactResult: string;
             if (toolResult.result.startsWith('Error') || toolResult.result.startsWith('No files matched')) {
               lastToolResultWasError = true;
-            }
-            if (toolCall.toolName === 'read_file' && !toolResult.result.startsWith('Error')) {
-              successfulReadTargets.add(this._extractToolTarget(toolCall));
             }
             if (toolCall.toolName === 'search_file_contents' && !toolResult.result.startsWith('Error') && !toolResult.result.startsWith('No matches')) {
               anySuccessfulSearch = true;
@@ -2460,7 +2412,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
                 }
               }
             }
-            compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result, prompt);
+            compactResult = this._compactToolResultForHistory(toolCall.toolName, toolResult.result);
             if (compactResult.length !== toolResult.result.length) {
               this._log.appendLine(
                 `[tools] compacted ${toolCall.toolName} result for history: ${toolResult.result.length} -> ${compactResult.length} chars`
@@ -2570,13 +2522,14 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             break;
           }
 
-          // Check if the model is requesting more file chunks
+          // Check if the model is requesting more file chunks. Dedup against the
+          // same delivered-ranges view the read_file path uses.
           const chunkResult = await this._chunks.processChunkRequests(
             fullResponse,
             wsRoots,
             MAX_CHUNK_ROUNDS,
             chunkRound,
-            sentChunkIds,
+            this._buildDeliveredRanges(turnHistoryStartIndex),
             MAX_CHUNK_NOOP_ROUNDS,
             chunkNoOpRounds
           );
@@ -2904,7 +2857,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
         break;
       }
       case 'saveSettings': {
-        this._handleSaveSettings(message.connections, message.models, message.activeModelIndex, message.maxToolRounds).catch((err: unknown) => {
+        this._handleSaveSettings(message.connections, message.models, message.activeModelIndex, message.maxToolRounds, message.customSystemPrompt).catch((err: unknown) => {
           this._log.appendLine(`[saveSettings] handler error: ${err}`);
         });
         break;
@@ -2953,6 +2906,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     models: ModelConfig[] | undefined,
     activeModelIndex: number | undefined,
     maxToolRounds: number | undefined,
+    customSystemPrompt: string | undefined,
   ): Promise<void> {
     const cfg = vscode.workspace.getConfiguration('agent86');
 
@@ -2972,6 +2926,13 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
       if (maxToolRounds !== undefined && maxToolRounds >= 1) {
         await cfg.update('maxToolRounds', maxToolRounds, vscode.ConfigurationTarget.Global);
         this._log.appendLine(`[_handleSaveSettings] maxToolRounds saved: ${maxToolRounds}`);
+      }
+      if (customSystemPrompt !== undefined) {
+        // Empty string is a valid value — it clears the addendum.
+        await cfg.update('customSystemPrompt', customSystemPrompt, vscode.ConfigurationTarget.Global);
+        this._log.appendLine(`[_handleSaveSettings] customSystemPrompt saved: ${customSystemPrompt.length} chars`);
+        // Drop the cached per-session prompt so the next turn rebuilds with the new text.
+        this._sessions.clearSystemPromptCache();
       }
     } catch (err) {
       this._log.appendLine(`[_handleSaveSettings] update FAILED`);
