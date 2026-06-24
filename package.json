@@ -3,7 +3,7 @@
   "publisher": "darcy",
   "displayName": "Agent 86",
   "description": "Local LLM agentic coding assistant with file read/write and terminal approval",
-  "version": "0.2.28",
+  "version": "0.2.32",
   "engines": {
     "vscode": "^1.111.0"
   },
@@ -183,7 +183,7 @@
         "agent86.providers": {
           "type": "array",
           "default": [],
-          "description": "List of LLM provider configurations for multi-provider support",
+          "markdownDescription": "Legacy combined provider+model list. Superseded by `#agent86.providerConnections#` and `#agent86.models#`; kept only for one-time migration.",
           "items": {
             "type": "object",
             "required": [
@@ -213,6 +213,78 @@
                 "type": "number",
                 "default": 32768,
                 "description": "Context window size in tokens"
+              }
+            }
+          }
+        },
+        "agent86.providerConnections": {
+          "type": "array",
+          "default": [],
+          "description": "Provider connections (endpoint + credentials). Each can host many models.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "baseUrl"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier referenced by models"
+              },
+              "name": {
+                "type": "string",
+                "description": "Display name, e.g. 'OpenRouter'"
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "Base URL for the endpoint, e.g. 'https://openrouter.ai/api/v1'"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API key (optional, defaults to 'local')"
+              }
+            }
+          }
+        },
+        "agent86.models": {
+          "type": "array",
+          "default": [],
+          "description": "Configured models, each attached to a provider connection.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "connectionId",
+              "model",
+              "context"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier"
+              },
+              "connectionId": {
+                "type": "string",
+                "description": "Id of the provider connection this model runs on"
+              },
+              "model": {
+                "type": "string",
+                "description": "Model id sent to the API, e.g. 'deepseek/deepseek-chat'"
+              },
+              "label": {
+                "type": "string",
+                "description": "Optional display name shown in the model picker"
+              },
+              "context": {
+                "type": "number",
+                "default": 32768,
+                "description": "Context window size in tokens"
+              },
+              "openRouterProvider": {
+                "type": "string",
+                "description": "Optional OpenRouter upstream provider to pin (no fallback)"
               }
             }
           }

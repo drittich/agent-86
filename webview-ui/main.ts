@@ -18,19 +18,28 @@ import {
 } from './output';
 import {
   initProviders,
-  renderProvidersList,
+  renderSettings,
   renderModelDropdown,
   setProviderStatus,
   getProviderStatus,
-  openProviderForm,
-  closeProviderForm,
-  setProviders,
+  setSettingsTab,
+  openProviderDialog,
+  closeProviderDialog,
+  saveProviderDialog,
+  openModelDialog,
+  closeModelDialog,
+  saveModelDialog,
+  setProviderData,
   setActiveProviderIndex,
-  getEditingProviderIndex,
+  setModelCatalog,
   triggerProviderStatusCheck,
-  providers,
-  activeProviderIndex,
-  type ProviderConfig,
+  updateProviderStatusVisibility,
+  closeOpenDialog,
+  models,
+  activeModelIndex,
+  type ProviderConnection,
+  type ModelConfig,
+  type CatalogModel,
 } from './providers';
 import {
   initApprovals,
@@ -89,17 +98,49 @@ const modelSelect        = document.getElementById('model-select') as HTMLSelect
 const providerStatusDot  = document.getElementById('provider-status-dot')!;
 const modelSelectorRowEl  = document.getElementById('model-selector-row')!;
 const providersList      = document.getElementById('providers-list') as HTMLUListElement;
+const modelsList         = document.getElementById('models-list') as HTMLUListElement;
 const btnAddProvider     = document.getElementById('btn-add-provider') as HTMLButtonElement;
-const providerForm       = document.getElementById('provider-form')!;
-const providerFormTitle  = document.getElementById('provider-form-title')!;
+const btnAddModel        = document.getElementById('btn-add-model') as HTMLButtonElement;
+const tabProviders       = document.getElementById('tab-providers') as HTMLButtonElement;
+const tabModels          = document.getElementById('tab-models') as HTMLButtonElement;
+const tabProvidersCount  = document.getElementById('tab-providers-count')!;
+const tabModelsCount     = document.getElementById('tab-models-count')!;
+const providersPane      = document.getElementById('providers-pane')!;
+const modelsPane         = document.getElementById('models-pane')!;
+// Provider dialog
+const providerDialog     = document.getElementById('provider-dialog')!;
+const providerDialogTitle = document.getElementById('provider-dialog-title')!;
+const pfTypeChips        = document.getElementById('pf-type-chips')!;
 const pfName             = document.getElementById('pf-name') as HTMLInputElement;
 const pfBaseUrl          = document.getElementById('pf-base-url') as HTMLInputElement;
-const pfModel            = document.getElementById('pf-model') as HTMLInputElement;
 const pfApiKey           = document.getElementById('pf-api-key') as HTMLInputElement;
-const pfContext          = document.getElementById('pf-context') as HTMLInputElement;
-const pfOrProvider       = document.getElementById('pf-or-provider') as HTMLInputElement;
+const pfDetect           = document.getElementById('pf-detect')!;
+const btnPfToggleKey     = document.getElementById('btn-pf-toggle-key') as HTMLButtonElement;
 const btnPfSave          = document.getElementById('btn-pf-save') as HTMLButtonElement;
 const btnPfCancel        = document.getElementById('btn-pf-cancel') as HTMLButtonElement;
+const btnPfClose         = document.getElementById('btn-pf-close') as HTMLButtonElement;
+// Model dialog
+const modelDialog        = document.getElementById('model-dialog')!;
+const modelDialogTitle   = document.getElementById('model-dialog-title')!;
+const mfNoProviders      = document.getElementById('mf-no-providers')!;
+const mfFields           = document.getElementById('mf-fields')!;
+const mfProviderBtn      = document.getElementById('mf-provider-btn') as HTMLButtonElement;
+const mfProviderLabel    = document.getElementById('mf-provider-label')!;
+const mfProviderBadge    = document.getElementById('mf-provider-badge')!;
+const mfProviderMenu     = document.getElementById('mf-provider-menu')!;
+const mfModelGroup       = document.getElementById('mf-model-group')!;
+const mfModel            = document.getElementById('mf-model') as HTMLInputElement;
+const mfModelCaret       = document.getElementById('mf-model-caret') as HTMLButtonElement;
+const mfModelSuggestions = document.getElementById('mf-model-suggestions') as HTMLUListElement;
+const mfModelHint        = document.getElementById('mf-model-hint')!;
+const mfLabel            = document.getElementById('mf-label') as HTMLInputElement;
+const mfContext          = document.getElementById('mf-context') as HTMLInputElement;
+const mfOrRow            = document.getElementById('mf-or-row')!;
+const mfOrProvider       = document.getElementById('mf-or-provider') as HTMLInputElement;
+const btnMfSave          = document.getElementById('btn-mf-save') as HTMLButtonElement;
+const btnMfCancel        = document.getElementById('btn-mf-cancel') as HTMLButtonElement;
+const btnMfClose         = document.getElementById('btn-mf-close') as HTMLButtonElement;
+const btnMfAddProvider   = document.getElementById('btn-mf-add-provider') as HTMLButtonElement;
 const globalMaxToolRounds = document.getElementById('global-max-tool-rounds') as HTMLInputElement;
 const btnSettingsSave    = document.getElementById('btn-settings-save') as HTMLButtonElement;
 
@@ -117,16 +158,41 @@ outputEl.addEventListener('click', (e) => {
 
 initProviders({
   providersList,
+  modelsList,
   modelSelect,
   providerStatusDot,
-  providerForm,
-  providerFormTitle,
+  tabProviders,
+  tabModels,
+  tabProvidersCount,
+  tabModelsCount,
+  providersPane,
+  modelsPane,
+  providerDialog,
+  providerDialogTitle,
+  pfTypeChips,
   pfName,
   pfBaseUrl,
-  pfModel,
   pfApiKey,
-  pfContext,
-  pfOrProvider,
+  pfDetect,
+  btnPfToggleKey,
+  modelDialog,
+  modelDialogTitle,
+  mfNoProviders,
+  mfFields,
+  mfProviderBtn,
+  mfProviderLabel,
+  mfProviderBadge,
+  mfProviderMenu,
+  mfModelGroup,
+  mfModel,
+  mfModelCaret,
+  mfModelSuggestions,
+  mfModelHint,
+  mfLabel,
+  mfContext,
+  mfOrRow,
+  mfOrProvider,
+  btnMfSave,
   vscode,
 });
 
@@ -432,38 +498,36 @@ chkAgentsMd.addEventListener('change', () => {
   vscode.postMessage({ type: 'checkboxChange', includeAgentsMd: chkAgentsMd.checked });
 });
 
-// Provider form handlers
-btnAddProvider.addEventListener('click', () => openProviderForm(-1));
-
-btnPfCancel.addEventListener('click', closeProviderForm);
-
-btnPfSave.addEventListener('click', () => {
-  const p: ProviderConfig = {
-    name: pfName.value.trim() || pfModel.value.trim() || 'unnamed',
-    baseUrl: pfBaseUrl.value.trim(),
-    model: pfModel.value.trim(),
-    apiKey: pfApiKey.value || undefined,
-    context: parseInt(pfContext.value, 10) || 32768,
-    openRouterProvider: pfOrProvider.value.trim() || undefined,
-  };
-  const editingIdx = getEditingProviderIndex();
-  if (editingIdx === -1) {
-    providers.push(p);
-  } else {
-    providers[editingIdx] = p;
-  }
-  vscode.postMessage({ type: 'saveSettings', providers });
-  renderProvidersList();
-  renderModelDropdown();
-  closeProviderForm();
-  triggerProviderStatusCheck();
+// Provider dialog handlers (tab clicks are wired inside initProviders)
+btnAddProvider.addEventListener('click', () => openProviderDialog(null));
+btnPfCancel.addEventListener('click', closeProviderDialog);
+btnPfClose.addEventListener('click', closeProviderDialog);
+btnPfSave.addEventListener('click', saveProviderDialog);
+providerDialog.addEventListener('mousedown', (e) => {
+  if (e.target === providerDialog) { closeProviderDialog(); }
 });
+
+// Model dialog handlers
+btnAddModel.addEventListener('click', () => openModelDialog(null));
+btnMfCancel.addEventListener('click', closeModelDialog);
+btnMfClose.addEventListener('click', closeModelDialog);
+btnMfSave.addEventListener('click', saveModelDialog);
+btnMfAddProvider.addEventListener('click', () => openProviderDialog(null));
+modelDialog.addEventListener('mousedown', (e) => {
+  if (e.target === modelDialog) { closeModelDialog(); }
+});
+
+// Escape closes an open add/edit dialog (before the settings panel itself).
+document.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && closeOpenDialog()) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 
 // Model dropdown selection
 modelSelect.addEventListener('change', () => {
   const idx = parseInt(modelSelect.value, 10);
   if (!isNaN(idx)) {
     setActiveProviderIndex(idx);
+    updateProviderStatusVisibility();
     setProviderStatus('checking');
     vscode.postMessage({ type: 'selectModel', providerIndex: idx });
   }
@@ -543,7 +607,7 @@ function sendPrompt(): void {
     // Re-check before giving up — store the pending send and trigger a health check
     pendingSend = { prompt, thinkingMode: chkThinking.checked, includeAgentsMd: chkAgentsMd.checked };
     setProviderStatus('checking');
-    vscode.postMessage({ type: 'selectModel', providerIndex: activeProviderIndex });
+    vscode.postMessage({ type: 'selectModel', providerIndex: activeModelIndex });
     return;
   }
 
@@ -593,8 +657,9 @@ window.addEventListener('message', (event: MessageEvent) => {
     baseUrl?: string;
     model?: string;
     apiKey?: string;
-    providers?: ProviderConfig[];
-    activeProviderIndex?: number;
+    connections?: ProviderConnection[];
+    models?: ModelConfig[];
+    activeModelIndex?: number;
     label?: string;
     detail?: string;
     providerName?: string;
@@ -717,26 +782,28 @@ window.addEventListener('message', (event: MessageEvent) => {
     }
 
     case 'openSettings': {
-      if (msg.providers) {
-        setProviders(msg.providers, msg.activeProviderIndex ?? 0);
-        renderProvidersList();
-        renderModelDropdown();
-      }
+      setProviderData(msg.connections ?? [], msg.models ?? [], msg.activeModelIndex ?? 0);
+      setSettingsTab('providers');
+      renderSettings();
+      renderModelDropdown();
       globalMaxToolRounds.value = String(msg.maxToolRounds ?? 40);
       openSettingsPanel();
       break;
     }
 
     case 'providers': {
-      if (msg.providers) {
-        setProviders(msg.providers, msg.activeProviderIndex ?? 0);
-        renderModelDropdown();
-        // Check health of active provider on load
-        if (providers.length > 0) {
-          setProviderStatus('checking');
-          vscode.postMessage({ type: 'selectModel', providerIndex: activeProviderIndex });
-        }
+      setProviderData(msg.connections ?? [], msg.models ?? [], msg.activeModelIndex ?? 0);
+      renderModelDropdown();
+      // Check health of active model on load
+      if (models.length > 0) {
+        setProviderStatus('checking');
+        vscode.postMessage({ type: 'selectModel', providerIndex: activeModelIndex });
       }
+      break;
+    }
+
+    case 'modelCatalog': {
+      setModelCatalog(msg.baseUrl ?? '', (msg.models ?? []) as unknown as CatalogModel[]);
       break;
     }
 

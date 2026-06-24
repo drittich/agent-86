@@ -21,30 +21,21 @@ export const TEMPLATE_HTML: string = `
       <span id="settings-title">Settings</span>
       <button id="btn-settings-close" title="Close">×</button>
     </div>
+    <div id="settings-tabs" role="tablist">
+      <button id="tab-providers" class="settings-tab" role="tab" aria-selected="true">Providers<span id="tab-providers-count" class="settings-tab-count">0</span></button>
+      <button id="tab-models" class="settings-tab" role="tab" aria-selected="false">Models<span id="tab-models-count" class="settings-tab-count">0</span></button>
+    </div>
     <div id="settings-body">
-      <div id="providers-section">
-        <div id="providers-header">Providers</div>
+      <!-- ── Providers (connections) ─────────────────────────────── -->
+      <div id="providers-pane" class="settings-pane" role="tabpanel">
         <ul id="providers-list"></ul>
-        <button id="btn-add-provider">+ Add Provider</button>
+        <button id="btn-add-provider" class="btn-add-row">+ Add provider</button>
       </div>
-      <div id="provider-form" hidden>
-        <div id="provider-form-title">Add Provider</div>
-        <label for="pf-name">Name</label>
-        <input id="pf-name" type="text" placeholder="e.g. qwen3-coder:a3b" />
-        <label for="pf-base-url">Base URL</label>
-        <input id="pf-base-url" type="text" placeholder="http://localhost:8080/v1" />
-        <label for="pf-model">Model</label>
-        <input id="pf-model" type="text" placeholder="model name" />
-        <label for="pf-api-key">API Key (optional)</label>
-        <input id="pf-api-key" type="password" placeholder="(none required for local)" />
-        <label for="pf-context">Context Window</label>
-        <input id="pf-context" type="number" placeholder="32768" value="32768" />
-        <label for="pf-or-provider">OpenRouter Provider (optional)</label>
-        <input id="pf-or-provider" type="text" placeholder="e.g. DeepSeek — pins routing, no fallback" />
-        <div id="pf-buttons">
-          <button id="btn-pf-save">Save Provider</button>
-          <button id="btn-pf-cancel">Cancel</button>
-        </div>
+
+      <!-- ── Models ──────────────────────────────────────────────── -->
+      <div id="models-pane" class="settings-pane" role="tabpanel" hidden>
+        <ul id="models-list"></ul>
+        <button id="btn-add-model" class="btn-add-row">+ Add model</button>
       </div>
     </div>
     <details id="settings-advanced">
@@ -53,10 +44,89 @@ export const TEMPLATE_HTML: string = `
         <label for="global-max-tool-rounds">Max Tool Rounds</label>
         <input id="global-max-tool-rounds" type="number" min="1" placeholder="40" value="40" />
       </div>
+      <div class="settings-advanced-actions">
+        <button id="btn-settings-save">Save</button>
+      </div>
     </details>
     <div id="settings-footer">
-      <button id="btn-settings-save">Save</button>
       <button id="btn-settings-cancel">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Provider dialog ─────────────────────────────────────────── -->
+<div id="provider-dialog" class="dialog-overlay" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="provider-dialog-title">
+    <div class="dialog-header">
+      <span id="provider-dialog-title" class="dialog-title">Add provider</span>
+      <button id="btn-pf-close" class="dialog-close" title="Close">×</button>
+    </div>
+    <div class="dialog-body">
+      <label>Provider type</label>
+      <div id="pf-type-chips" class="chip-row"></div>
+      <label for="pf-name">Name</label>
+      <input id="pf-name" type="text" placeholder="e.g. OpenRouter" />
+      <label for="pf-base-url">Base URL</label>
+      <input id="pf-base-url" type="text" placeholder="https://openrouter.ai/api/v1" />
+      <div id="pf-detect" class="form-hint" hidden></div>
+      <label for="pf-api-key">API key</label>
+      <div class="key-input">
+        <input id="pf-api-key" type="password" placeholder="sk-…" />
+        <button id="btn-pf-toggle-key" class="key-toggle" type="button">Show</button>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btn-pf-cancel" class="btn-secondary">Cancel</button>
+      <button id="btn-pf-save">Save provider</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Model dialog ────────────────────────────────────────────── -->
+<div id="model-dialog" class="dialog-overlay" hidden>
+  <div class="dialog dialog-overflow" role="dialog" aria-modal="true" aria-labelledby="model-dialog-title">
+    <div class="dialog-header">
+      <span id="model-dialog-title" class="dialog-title">Add model</span>
+      <button id="btn-mf-close" class="dialog-close" title="Close">×</button>
+    </div>
+    <div class="dialog-body">
+      <div id="mf-no-providers" class="dialog-empty" hidden>
+        <div class="dialog-empty-title">No providers configured</div>
+        <div class="form-hint">Add a provider before you can attach a model.</div>
+        <button id="btn-mf-add-provider" class="btn-inline-primary">+ Add provider</button>
+      </div>
+      <div id="mf-fields">
+        <label>Provider</label>
+        <div id="mf-provider-dd" class="dd" data-dd>
+          <button id="mf-provider-btn" class="dd-button" type="button">
+            <span id="mf-provider-label" class="dd-label">Select a provider…</span>
+            <span id="mf-provider-badge" class="provider-badge" hidden></span>
+            <span class="dd-caret">▾</span>
+          </button>
+          <div id="mf-provider-menu" class="dd-menu" hidden></div>
+        </div>
+        <div id="mf-model-group" hidden>
+          <label for="mf-model">Model</label>
+          <div id="mf-model-wrap" class="dd" data-dd>
+            <input id="mf-model" type="text" placeholder="model name" autocomplete="off" />
+            <button id="mf-model-caret" class="dd-caret-btn" type="button" hidden>▾</button>
+            <ul id="mf-model-suggestions" class="dd-menu" hidden></ul>
+          </div>
+          <div id="mf-model-hint" class="form-hint" hidden></div>
+          <label for="mf-label">Display name <span class="label-opt">· optional</span></label>
+          <input id="mf-label" type="text" placeholder="Shown in the model picker" />
+          <label for="mf-context">Context window</label>
+          <input id="mf-context" type="number" placeholder="32768" value="32768" />
+          <div id="mf-or-row" hidden>
+            <label for="mf-or-provider">OpenRouter provider <span class="label-opt">· optional</span></label>
+            <input id="mf-or-provider" type="text" placeholder="e.g. DeepSeek — pins routing, no fallback" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="dialog-footer">
+      <button id="btn-mf-cancel" class="btn-secondary">Cancel</button>
+      <button id="btn-mf-save">Save model</button>
     </div>
   </div>
 </div>

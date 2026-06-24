@@ -7,6 +7,13 @@ import { ModelTier } from '../agent/ModelProfile';
 
 // ── Provider schema ───────────────────────────────────────────────────────────
 
+/**
+ * Resolved runtime shape for a single model on a single connection. This is the
+ * currency the rest of the extension (AIProvider, ProviderFactory, health checks,
+ * tool-support probe, model dropdown) operates on. It is *derived* from a
+ * {@link ProviderConnection} + {@link ModelConfig} pair — see
+ * `ChatPanel._getProviders()`.
+ */
 export interface ProviderConfig {
   name: string;        // Display name, e.g., "qwen3-coder:a3b"
   baseUrl: string;     // e.g., "http://localhost:8080/v1"
@@ -20,6 +27,30 @@ export interface ProviderConfig {
    * to whatever upstream is cheapest. Ignored by non-OpenRouter endpoints.
    */
   openRouterProvider?: string;
+}
+
+/**
+ * A provider *connection*: an endpoint + credentials, with no model bound to it.
+ * One connection (e.g. "OpenRouter") can host many {@link ModelConfig} entries.
+ */
+export interface ProviderConnection {
+  id: string;          // Stable id, referenced by ModelConfig.connectionId
+  name: string;        // Display name, e.g. "OpenRouter"
+  baseUrl: string;     // e.g. "https://openrouter.ai/api/v1"
+  apiKey?: string;     // Optional API key (default: "local")
+}
+
+/**
+ * A configured model, attached to a {@link ProviderConnection}. The pair resolves
+ * to a runtime {@link ProviderConfig}.
+ */
+export interface ModelConfig {
+  id: string;              // Stable id
+  connectionId: string;    // FK → ProviderConnection.id
+  model: string;           // Model id sent to the API, e.g. "deepseek/deepseek-chat"
+  label?: string;          // Optional display name shown in the model picker
+  context: number;         // Context window size in tokens
+  openRouterProvider?: string; // See ProviderConfig.openRouterProvider
 }
 
 // ── Session schema ────────────────────────────────────────────────────────────

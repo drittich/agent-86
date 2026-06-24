@@ -5,7 +5,7 @@ import { AIProvider } from '../providers/AIProvider';
 import { probeToolSupport, toolSupportKey } from '../providers/ToolSupportProbe';
 import { ChatMessage, ToolCallRef } from '../providers/IProvider';
 import { readActiveEditor, autoDetectAndAttachFiles, FILE_EXCLUDE_GLOB, FILE_CAP_BYTES, TOTAL_CAP_BYTES } from '../tools/FileTools';
-import { ConfigManager, Session, ProviderConfig } from '../config/ConfigManager';
+import { ConfigManager, Session, ProviderConfig, ProviderConnection, ModelConfig } from '../config/ConfigManager';
 import { TokenCounter } from '../tools/TokenCounter';
 import { DiffContentProvider } from './DiffContentProvider';
 import { ChatPanelChunks, AttachedFile as ChunkAttachedFile } from './ChatPanelChunks';
@@ -225,9 +225,15 @@ export class ChatPanel implements vscode.WebviewViewProvider {
   }
 
   public openSettings(): void {
-    const providers = this._getProviders();
+    const { connections, models } = this._getProviderData();
     const maxToolRounds = vscode.workspace.getConfiguration('agent86').get<number>('maxToolRounds') ?? 40;
-    this._postMessage({ type: 'openSettings', providers, activeProviderIndex: this._activeProviderIndex, maxToolRounds });
+    this._postMessage({
+      type: 'openSettings',
+      connections,
+      models,
+      activeModelIndex: this._activeProviderIndex,
+      maxToolRounds,
+    });
   }
 
   public attachFiles(): void {
@@ -284,20 +290,120 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     return this._configManager;
   }
 
-  private _getProviders(): ProviderConfig[] {
+  /**
+   * Read the separated provider-connection + model schema, migrating from the
+   * legacy combined `agent86.providers` list (or the even older single
+   * baseUrl/model settings) in memory when the new schema is empty. Migration is
+   * non-destructive: the derived shape is returned, and the new schema is only
+   * persisted once the user saves settings (see `_handleSaveSettings`).
+   */
+  private _getProviderData(): { connections: ProviderConnection[]; models: ModelConfig[] } {
     const cfg = vscode.workspace.getConfiguration('agent86');
-    const inspected = cfg.inspect<ProviderConfig[]>('providers');
-    const globalProviders = inspected?.globalValue;
-    
-    if (globalProviders && globalProviders.length > 0) {
-      return globalProviders;
+    const connections = cfg.inspect<ProviderConnection[]>('providerConnections')?.globalValue ?? [];
+    const models = cfg.inspect<ModelConfig[]>('models')?.globalValue ?? [];
+
+    if (connections.length > 0 || models.length > 0) {
+      return { connections, models };
     }
 
-    // Legacy fallback: build a single provider from old settings
-    const baseUrl = cfg.get<string>('baseUrl') ?? 'http://127.0.0.1:8083/v1';
-    const model = cfg.get<string>('model') ?? 'gpt-3.5-turbo';
-    const apiKey = cfg.get<string>('apiKey') ?? 'local';
-    return [{ name: model, baseUrl, model, apiKey, context: 32768 }];
+    return this._migrateLegacyProviderData(cfg);
+  }
+
+  /**
+   * Build connections + models from the legacy combined-provider settings, or
+   * the even-older single baseUrl/model triple. Returns empty lists on a clean
+   * install (nothing explicitly configured) so the UI starts empty rather than
+   * synthesizing a phantom default model.
+   */
+  private _migrateLegacyProviderData(
+    cfg: vscode.WorkspaceConfiguration,
+  ): { connections: ProviderConnection[]; models: ModelConfig[] } {
+    const legacy = cfg.inspect<ProviderConfig[]>('providers')?.globalValue ?? [];
+
+    let source: ProviderConfig[];
+    if (legacy.length > 0) {
+      source = legacy;
+    } else {
+      // Oldest format: a single baseUrl/model/apiKey triple. Only migrate when
+      // the user actually set them (inspect global value, not get() defaults).
+      const oldBaseUrl = cfg.inspect<string>('baseUrl')?.globalValue;
+      const oldModel = cfg.inspect<string>('model')?.globalValue;
+      if (!oldBaseUrl && !oldModel) {
+        return { connections: [], models: [] };
+      }
+      const model = oldModel ?? 'gpt-3.5-turbo';
+      source = [{
+        name: model,
+        baseUrl: oldBaseUrl ?? 'http://127.0.0.1:8083/v1',
+        model,
+        apiKey: cfg.inspect<string>('apiKey')?.globalValue ?? 'local',
+        context: 32768,
+      }];
+    }
+
+    const connections: ProviderConnection[] = [];
+    const models: ModelConfig[] = [];
+
+    for (let i = 0; i < source.length; i++) {
+      const p = source[i];
+      // Coalesce connections sharing the same endpoint + credentials.
+      const connKey = `${p.baseUrl} ${p.apiKey ?? ''}`;
+      let conn = connections.find(c => `${c.baseUrl} ${c.apiKey ?? ''}` === connKey);
+      if (!conn) {
+        conn = {
+          id: `conn-${i}-${this._slug(p.baseUrl)}`,
+          name: this._connectionNameFor(p.baseUrl),
+          baseUrl: p.baseUrl,
+          apiKey: p.apiKey,
+        };
+        connections.push(conn);
+      }
+      models.push({
+        id: `model-${i}-${this._slug(p.model)}`,
+        connectionId: conn.id,
+        model: p.model,
+        label: p.name && p.name !== p.model ? p.name : undefined,
+        context: p.context ?? 32768,
+        openRouterProvider: p.openRouterProvider,
+      });
+    }
+
+    return { connections, models };
+  }
+
+  private _slug(s: string): string {
+    return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'x';
+  }
+
+  /** A sensible default connection name inferred from the endpoint host. */
+  private _connectionNameFor(baseUrl: string): string {
+    const u = (baseUrl || '').toLowerCase();
+    if (u.includes('openrouter.ai')) { return 'OpenRouter'; }
+    if (u.includes('api.openai.com')) { return 'OpenAI'; }
+    if (u.includes('anthropic.com')) { return 'Anthropic'; }
+    if (u.includes('localhost') || u.includes('127.0.0.1')) { return 'Local'; }
+    try { return new URL(baseUrl).hostname; } catch { return 'Provider'; }
+  }
+
+  /**
+   * Derive the flat, runtime {@link ProviderConfig} list (one entry per model,
+   * in model order) by resolving each model against its connection. This is the
+   * shape the rest of the extension consumes; `_activeProviderIndex` indexes into
+   * it (equivalently, into the models array).
+   */
+  private _getProviders(): ProviderConfig[] {
+    const { connections, models } = this._getProviderData();
+    return models.map(m => {
+      const c = connections.find(x => x.id === m.connectionId);
+      return {
+        name: m.label || m.model,
+        baseUrl: c?.baseUrl ?? '',
+        model: m.model,
+        apiKey: c?.apiKey,
+        context: m.context ?? 32768,
+        openRouterProvider: m.openRouterProvider,
+      };
+    });
   }
 
   private _getProvider(): AIProvider {
@@ -2798,8 +2904,14 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
         break;
       }
       case 'saveSettings': {
-        this._handleSaveSettings(message.providers, message.maxToolRounds).catch((err: unknown) => {
+        this._handleSaveSettings(message.connections, message.models, message.activeModelIndex, message.maxToolRounds).catch((err: unknown) => {
           this._log.appendLine(`[saveSettings] handler error: ${err}`);
+        });
+        break;
+      }
+      case 'fetchModelCatalog': {
+        this._handleFetchModelCatalog(message.baseUrl).catch((err: unknown) => {
+          this._log.appendLine(`[fetchModelCatalog] handler error: ${err}`);
         });
         break;
       }
@@ -2836,14 +2948,26 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     }
   }
 
-  private async _handleSaveSettings(providers: ProviderConfig[] | undefined, maxToolRounds: number | undefined): Promise<void> {
-    this._log.appendLine(`[_handleSaveSettings] received providers: ${JSON.stringify(providers, null, 2)}`);
+  private async _handleSaveSettings(
+    connections: ProviderConnection[] | undefined,
+    models: ModelConfig[] | undefined,
+    activeModelIndex: number | undefined,
+    maxToolRounds: number | undefined,
+  ): Promise<void> {
     const cfg = vscode.workspace.getConfiguration('agent86');
 
     try {
-      if (providers && providers.length > 0) {
-        await cfg.update('providers', providers, vscode.ConfigurationTarget.Global);
-        this._log.appendLine(`[_handleSaveSettings] providers saved`);
+      if (connections !== undefined) {
+        await cfg.update('providerConnections', connections, vscode.ConfigurationTarget.Global);
+        this._log.appendLine(`[_handleSaveSettings] ${connections.length} connection(s) saved`);
+      }
+      if (models !== undefined) {
+        await cfg.update('models', models, vscode.ConfigurationTarget.Global);
+        this._log.appendLine(`[_handleSaveSettings] ${models.length} model(s) saved`);
+      }
+      if (activeModelIndex !== undefined && activeModelIndex >= 0) {
+        this._activeProviderIndex = activeModelIndex;
+        this._configManager.setActiveProviderIndex(activeModelIndex);
       }
       if (maxToolRounds !== undefined && maxToolRounds >= 1) {
         await cfg.update('maxToolRounds', maxToolRounds, vscode.ConfigurationTarget.Global);
@@ -2856,6 +2980,44 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
       if (err instanceof Error && err.stack) {
         this._log.appendLine(`[_handleSaveSettings] error stack: ${err.stack}`);
       }
+    }
+  }
+
+  /** Per-session cache of fetched model catalogs, keyed by base URL. */
+  private _modelCatalogCache = new Map<string, import('./messageProtocol').CatalogModel[]>();
+
+  /**
+   * Fetch a provider's model catalog (currently OpenRouter's `/models`, which
+   * needs no API key) and post it to the webview for autocomplete. Cached for the
+   * session; failures send an empty list with an error so the webview can fall
+   * back to its bundled static list.
+   */
+  private async _handleFetchModelCatalog(baseUrl: string): Promise<void> {
+    const cached = this._modelCatalogCache.get(baseUrl);
+    if (cached) {
+      this._postMessage({ type: 'modelCatalog', baseUrl, models: cached });
+      return;
+    }
+
+    try {
+      const url = `${baseUrl.replace(/\/+$/, '')}/models`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      const res = await fetch(url, { method: 'GET', signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) { throw new Error(`HTTP ${res.status}`); }
+      const json = await res.json() as { data?: Array<{ id: string; name?: string; context_length?: number }> };
+      const models = (json.data ?? []).map(m => ({
+        id: m.id,
+        name: m.name,
+        context: typeof m.context_length === 'number' ? m.context_length : undefined,
+      })).filter(m => !!m.id);
+      this._modelCatalogCache.set(baseUrl, models);
+      this._log.appendLine(`[fetchModelCatalog] ${models.length} models from ${url}`);
+      this._postMessage({ type: 'modelCatalog', baseUrl, models });
+    } catch (err) {
+      this._log.appendLine(`[fetchModelCatalog] failed for ${baseUrl}: ${err instanceof Error ? err.message : String(err)}`);
+      this._postMessage({ type: 'modelCatalog', baseUrl, models: [], error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -2905,8 +3067,11 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
     this._postMessage({ type: 'editorState', hasActiveEditor: this._hasActiveEditor });
     // Send checkbox states so the UI reflects the restored session
     this._postMessage({ type: 'checkboxState', thinkingMode: this._sessions.thinkingMode, includeAgentsMd: this._sessions.includeAgentsMd });
-    // Send providers so the model dropdown is populated
-    this._postMessage({ type: 'providers', providers: this._getProviders(), activeProviderIndex: this._activeProviderIndex });
+    // Send connections + models so the model dropdown is populated
+    {
+      const { connections, models } = this._getProviderData();
+      this._postMessage({ type: 'providers', connections, models, activeModelIndex: this._activeProviderIndex });
+    }
 
     if (this._sessions.attachedFiles.length > 0) {
       this._postMessage({ type: 'attachments', files: this._sessions.attachedFiles });

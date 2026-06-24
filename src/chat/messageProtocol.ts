@@ -1,4 +1,11 @@
-import { ProviderConfig } from '../config/ConfigManager';
+import { ProviderConnection, ModelConfig } from '../config/ConfigManager';
+
+/** A model entry returned by a provider's catalog (e.g. OpenRouter `/models`). */
+export interface CatalogModel {
+  id: string;        // Model id, e.g. "anthropic/claude-sonnet-4"
+  name?: string;     // Human-friendly name, e.g. "Claude Sonnet 4"
+  context?: number;  // Context window in tokens, when known
+}
 
 export interface TokenUsage {
   promptTokens: number;
@@ -23,9 +30,10 @@ export type ExtensionToWebview =
   | { type: 'editResult'; uri: string; outcome: 'applied' | 'cancelled' }
   | { type: 'agentsMdAvailable'; available: boolean }
   | { type: 'checkboxState'; thinkingMode: boolean; includeAgentsMd: boolean }
-  | { type: 'openSettings'; providers: ProviderConfig[]; activeProviderIndex: number; maxToolRounds: number }
+  | { type: 'openSettings'; connections: ProviderConnection[]; models: ModelConfig[]; activeModelIndex: number; maxToolRounds: number }
   | { type: 'providerStatus'; providerName: string; status: 'online' | 'offline' | 'checking' }
-  | { type: 'providers'; providers: ProviderConfig[]; activeProviderIndex: number }
+  | { type: 'providers'; connections: ProviderConnection[]; models: ModelConfig[]; activeModelIndex: number }
+  | { type: 'modelCatalog'; baseUrl: string; models: CatalogModel[]; error?: string }
   | { type: 'tool-activity'; text?: string; label?: string; detail?: string; filePath?: string }
   | { type: 'userPrompt'; content: string }
   | { type: 'newSession' }
@@ -53,8 +61,9 @@ export type WebviewToExtension =
   | { type: 'question/response'; questionId: string; answer: string }
   | { type: 'pick/response'; pickId: string; indices: number[] }
   | { type: 'checkboxChange'; includeAgentsMd?: boolean }
-  | { type: 'saveSettings'; providers?: ProviderConfig[]; maxToolRounds?: number }
+  | { type: 'saveSettings'; connections?: ProviderConnection[]; models?: ModelConfig[]; activeModelIndex?: number; maxToolRounds?: number }
   | { type: 'selectModel'; providerIndex: number }
+  | { type: 'fetchModelCatalog'; baseUrl: string }
   | { type: 'open-file'; relativePath: string };
 
 export interface AttachedFile {
