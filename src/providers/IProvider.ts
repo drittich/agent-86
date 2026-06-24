@@ -67,4 +67,11 @@ export interface StreamOptions {
   tools?: import('ai').ToolSet;
   /** Override thinking mode for this request. When false, disables chain-of-thought/thinking (e.g. in answer-only mode). */
   thinkingMode?: boolean;
+  /**
+   * Echo stored assistant `reasoning` back to the model. Default false: most
+   * providers (DeepSeek included) advise against re-sending reasoning, and it
+   * changes the cached request prefix, hurting prompt-cache hit rates. Enable
+   * only for models that require preserved reasoning (e.g. Kimi-for-Coding).
+   */
+  preserveReasoning?: boolean;
 }

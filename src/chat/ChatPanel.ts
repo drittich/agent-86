@@ -109,6 +109,7 @@ export class ChatPanel implements vscode.WebviewViewProvider {
       log: this._log,
       getWorkspaceFolders: () => vscode.workspace.workspaceFolders ?? [],
       postMessage: (msg) => this._postMessage(msg as ExtensionToWebview),
+      getContextWindow: () => this._getActiveProviderConfig()?.context ?? 0,
     });
 
     this._edits = new ChatPanelEdits({
@@ -1567,9 +1568,9 @@ export class ChatPanel implements vscode.WebviewViewProvider {
     const activeProviders = this._getProviders();
     const activeIdx = Math.min(this._activeProviderIndex, activeProviders.length - 1);
     const activeProvider = activeProviders[activeIdx];
-    // DeepSeek V4 requires its own chain-of-thought echoed back on assistant
-    // messages across tool-loop turns; gate reasoning round-trip on this.
-    const isDeepSeekProvider = isDeepSeekV4(activeProvider?.model);
+    // Re-sending reasoning_content is OFF by default — it breaks the cached
+    // request prefix and DeepSeek advises against it. Opt-in only (e.g. Kimi).
+    const preserveReasoning = vscode.workspace.getConfiguration('agent86').get<boolean>('preserveReasoning') ?? false;
     const useNativeTools = await this._resolveToolSupport(activeProvider);
 
     // Legacy-verdict models parse textual formats from the stream; give them
@@ -1798,6 +1799,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
           {
             tools: toolsEnabledThisRound ? buildAgentTools() : undefined,
             thinkingMode: thinkingModeThisRound,
+            preserveReasoning,
             extraBody: this._buildExtraBody(activeProvider, thinkingLevelThisRound)
           }
         );
@@ -2059,7 +2061,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             };
             if (planRun) {
               this._log.appendLine('[plan] set_plan called while a plan is active — steering back to the current step');
-              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef], reasoning: isDeepSeekProvider ? capturedReasoning : undefined });
+              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef], reasoning: preserveReasoning ? capturedReasoning : undefined });
               this._sessions.history.push({
                 role: 'tool',
                 content: 'A plan is already being executed. Continue with the current step only — do not create another plan.',
@@ -2069,7 +2071,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
             }
             const planItems = parsePlanItems(planCall.args);
             if (!planItems) {
-              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef], reasoning: isDeepSeekProvider ? capturedReasoning : undefined });
+              this._sessions.history.push({ role: 'assistant', content: fullResponse, tool_calls: [planCallRef], reasoning: preserveReasoning ? capturedReasoning : undefined });
               this._sessions.history.push({
                 role: 'tool',
                 content: 'Error: set_plan requires a non-empty "items" array of short step strings. Either call set_plan again with valid items, or proceed without a plan.',
@@ -2231,7 +2233,7 @@ const MAX_NATIVE_FINAL_ANSWER_RETRIES = 1;
               toolName: tc.toolName,
               input: tc.args,
             })),
-            reasoning: isDeepSeekProvider ? capturedReasoning : undefined,
+            reasoning: preserveReasoning ? capturedReasoning : undefined,
           });
 
           // Log first-tool quality for observability

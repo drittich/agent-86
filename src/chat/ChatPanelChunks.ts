@@ -5,6 +5,7 @@ import {
   parseFileRequests, formatFileListBlock,
   parseSearchRequests, formatSearchResultBlock, searchFileWithRg,
   extractPromptTokens, selectBestChunk, selectExactLineRangeChunks,
+  chunkLinesForContext,
   FileChunkMeta, FileChunk, ChunkRequest,
 } from '../tools/ChunkManager';
 import { resolveEditPath } from '../tools/editParser';
@@ -22,6 +23,8 @@ export interface ChunkManagerDeps {
   log: vscode.OutputChannel;
   getWorkspaceFolders: () => readonly vscode.WorkspaceFolder[];
   postMessage: (message: unknown) => void;
+  /** Active provider context window (tokens); drives context-aware chunk sizing. */
+  getContextWindow: () => number;
 }
 
 export class ChatPanelChunks {
@@ -112,7 +115,8 @@ export class ChatPanelChunks {
       }
     }
 
-    const chunks = chunkFile(resolvedRelativePath, content, docVersion);
+    const chunkLines = chunkLinesForContext(this.deps.getContextWindow());
+    const chunks = chunkFile(resolvedRelativePath, content, docVersion, chunkLines);
     this._chunkMeta.set(resolvedRelativePath, buildChunkMeta(chunks));
     return chunks;
   }
@@ -131,7 +135,8 @@ export class ChatPanelChunks {
     const maxChunks = preferred?.max_chunks ?? 2;
     const lineRange = preferred?.line_range;
     if (lineRange) {
-      return selectExactLineRangeChunks(chunks, lineRange, maxChunks);
+      const chunkLines = chunkLinesForContext(this.deps.getContextWindow());
+      return selectExactLineRangeChunks(chunks, lineRange, maxChunks, chunkLines);
     }
     const nearLine = preferred?.near_line;
     if (!nearLine) {

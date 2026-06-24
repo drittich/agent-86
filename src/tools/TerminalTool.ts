@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { ResolvedShell, resolveShell } from './shell';
 
 /** Maximum bytes captured from stdout + stderr combined. */
 const OUTPUT_CAP_BYTES = 32 * 1024; // 32 KB
@@ -103,19 +104,16 @@ export function parseRunBlocks(text: string): RunBlock[] {
  *
  * Never throws — errors are reflected in the returned `RunResult`.
  */
-export function runCommand(command: string, cwd: string): Promise<RunResult> {
+export function runCommand(command: string, cwd: string, shell: ResolvedShell = resolveShell()): Promise<RunResult> {
   return new Promise<RunResult>((resolve) => {
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     let truncated = false;
     let timedOut = false;
 
-    // Use the platform shell so that built-ins (cd, echo, etc.) work.
-    const isWin = process.platform === 'win32';
-    const shell = isWin ? 'cmd.exe' : '/bin/sh';
-    const shellFlag = isWin ? '/c' : '-c';
-
-    const child = spawn(shell, [shellFlag, command], {
+    // Spawn the configured shell (PowerShell / cmd / POSIX) so that built-ins
+    // and the user's preferred command syntax work.
+    const child = spawn(shell.file, shell.buildArgs(command), {
       cwd,
       windowsHide: true,
       // Merge stderr into a separate stream so we can label it.

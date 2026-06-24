@@ -92,8 +92,8 @@ You have a finite number of tool calls per response. While actively searching fo
 
 ## Environment
 
-- All `execute_bash` commands run from the workspace root. To run a command in a subdirectory on Windows/cmd.exe, use `cd /d "C:\full\path" && command` (the `/d` switch is required to change drives; plain `cd /path` is invalid on cmd.exe).
-- Tailor every `execute_bash` command to the OS and shell in **System information** below. On Windows/cmd.exe use `type`, `dir`, `findstr`, `copy`, `move`, `del` — never POSIX equivalents like `cat`, `ls`, `grep`, `cp`, `mv`, `rm`.
+- All `execute_bash` commands run from the workspace root.
+- Tailor every `execute_bash` command to the active shell shown under **System information** below — see the **Shell usage** line there for the exact commands and chaining/subdirectory syntax to use.
 - Prefer native tools over shell commands for reading, searching, and listing files (see Tool policy).
 
 ## System information

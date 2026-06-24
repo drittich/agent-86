@@ -100,7 +100,7 @@ export class AIProvider implements IProvider {
    * Follows nanocoder's approach: preserve rich assistant/tool content parts
    * so fallback mode keeps full conversational context.
    */
-  private toModelMessages(messages: ChatMessage[], preserveToolCalls: boolean): Array<any> {
+  private toModelMessages(messages: ChatMessage[], preserveToolCalls: boolean, preserveReasoning: boolean): Array<any> {
     const result: Array<any> = [];
     for (const msg of messages) {
       if (msg.role === 'tool') {
@@ -123,9 +123,11 @@ export class AIProvider implements IProvider {
 
       if (msg.role === 'assistant') {
         const contentParts: Array<any> = [];
-        // Echo prior chain-of-thought back so models that require it keep
-        // reasoning continuity across tool-loop turns (DeepSeek V4).
-        if (typeof msg.reasoning === 'string' && msg.reasoning.length > 0) {
+        // Re-sending reasoning is OFF by default: it changes the cached request
+        // prefix (hurting prompt-cache hits) and DeepSeek advises against it.
+        // Only echoed when the caller opts in (models that require continuity,
+        // e.g. Kimi-for-Coding).
+        if (preserveReasoning && typeof msg.reasoning === 'string' && msg.reasoning.length > 0) {
           contentParts.push({
             type: 'reasoning',
             text: msg.reasoning
@@ -242,7 +244,7 @@ export class AIProvider implements IProvider {
       // Keep full conversation history regardless of native-tools mode so fallback requests
       // retain prior tool context (native tool calls and tool results).
       const sanitizedMessages = this.sanitizeConversation(messages);
-      const modelMessages = this.toModelMessages(sanitizedMessages, true);
+      const modelMessages = this.toModelMessages(sanitizedMessages, true, options?.preserveReasoning ?? false);
 
       const streamArgs: Parameters<typeof streamText>[0] = {
         model: languageModel,

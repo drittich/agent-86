@@ -163,6 +163,23 @@
           "default": "balanced",
           "description": "Model tier for tool selection policy. 'small' enforces strict search-first with aggressive recovery (9B-class models). 'balanced' is the default for 35B-class models. 'high' allows broader exploration for capable hosted models."
         },
+        "agent86.preserveReasoning": {
+          "type": "boolean",
+          "default": false,
+          "description": "Echo the model's prior reasoning_content back on assistant messages in multi-turn tool loops. Leave OFF for DeepSeek and most models: DeepSeek's docs advise against re-sending reasoning, and doing so changes the cached request prefix and collapses prompt-cache hit rates. Enable ONLY for models that require preserved reasoning (e.g. Kimi-for-Coding)."
+        },
+        "agent86.shell": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "pwsh",
+            "powershell",
+            "cmd",
+            "bash"
+          ],
+          "default": "auto",
+          "description": "Shell used for the execute_bash tool. 'auto' prefers PowerShell 7+ (pwsh), then Windows PowerShell (powershell.exe), then cmd.exe on Windows / the system shell elsewhere. Pin a specific shell to override. Affects both how commands run and the command guidance given to the model."
+        },
         "agent86.providers": {
           "type": "array",
           "default": [],

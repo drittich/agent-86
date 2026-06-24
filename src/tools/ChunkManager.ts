@@ -38,10 +38,23 @@ export function initRgPath(extensionPath: string): string {
   return 'fallback: rg (on PATH)';
 }
 
-/** Chunk size in lines. */
+/** Default chunk size in lines (small-context fallback). */
 export const CHUNK_LINES = 120;
 /** Overlap between adjacent chunks in lines. */
 export const CHUNK_OVERLAP = 15;
+
+/**
+ * Chunk size scaled to the model's context window. Small local models (≤48k)
+ * keep the conservative 120-line page; mid-context models get larger pages;
+ * very-large-context models (e.g. DeepSeek V4, 1M) get pages big enough that
+ * most files arrive whole in a single chunk — avoiding wasteful drip-feeding.
+ */
+export function chunkLinesForContext(contextTokens: number): number {
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) { return CHUNK_LINES; }
+  if (contextTokens <= 48_000) { return CHUNK_LINES; }
+  if (contextTokens <= 256_000) { return 400; }
+  return 1200;
+}
 
 /** A single chunk of a file. */
 export interface FileChunk {
@@ -106,26 +119,28 @@ function md5(text: string): string {
 export function chunkFile(
   uri: string,
   fileContent: string,
-  docVersion: number
+  docVersion: number,
+  chunkLines: number = CHUNK_LINES
 ): FileChunk[] {
   const lines = fileContent.split('\n');
   const totalLines = lines.length;
+  const overlap = Math.min(CHUNK_OVERLAP, Math.max(0, chunkLines - 1));
 
   // Build chunk start indices (0-based)
   const starts: number[] = [];
   let pos = 0;
   while (pos < totalLines) {
     starts.push(pos);
-    if (pos + CHUNK_LINES >= totalLines) {
+    if (pos + chunkLines >= totalLines) {
       break;
     }
-    pos += CHUNK_LINES - CHUNK_OVERLAP;
+    pos += chunkLines - overlap;
   }
 
   const totalChunks = starts.length;
 
   return starts.map((start, index) => {
-    const end = Math.min(start + CHUNK_LINES - 1, totalLines - 1); // 0-based inclusive
+    const end = Math.min(start + chunkLines - 1, totalLines - 1); // 0-based inclusive
     const content = lines.slice(start, end + 1).join('\n');
     return {
       chunkId: `${uri}:chunk:${index}`,
@@ -511,7 +526,8 @@ export function parseChunkRequests(text: string): ChunkRequest[] | null {
 export function selectExactLineRangeChunks(
   chunks: FileChunk[],
   lineRange: { start: number; end: number },
-  maxChunks = 2
+  maxChunks = 2,
+  chunkLines: number = CHUNK_LINES
 ): FileChunk[] {
   if (chunks.length === 0) {
     return [];

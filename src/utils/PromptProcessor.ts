@@ -2,23 +2,41 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { resolveShell } from '../tools/shell';
 
 /**
- * Get the default shell for the current platform
+ * Get a label for the shell that the execute_bash tool will actually use,
+ * honoring the agent86.shell preference (auto → pwsh → powershell → cmd).
  */
 function getDefaultShell(): string {
-  const shellEnv = process.env.SHELL;
-  if (shellEnv) {
-    return shellEnv;
+  return resolveShell().label;
+}
+
+/**
+ * Shell-specific command guidance for the active shell, so the model emits
+ * commands that work in the shell execute_bash actually spawns.
+ */
+function shellGuidance(): string {
+  const shell = resolveShell();
+  if (shell.isPowerShell) {
+    return (
+      'You are using PowerShell. Use PowerShell cmdlets/aliases — `Get-ChildItem` (dir/ls), ' +
+      '`Get-Content` (cat/type), `Select-String` (grep), `Copy-Item`, `Move-Item`, `Remove-Item`, ' +
+      '`Test-Path`, `New-Item`. POSIX aliases (`cat`, `ls`, `rm`, `cp`, `mv`, `pwd`) also work. ' +
+      'There is no `head`/`tail`/`touch`/`which` — use `Get-Content -TotalCount/-Tail N`, ' +
+      '`New-Item`, and `Get-Command`. Chain steps with `;` (or `&&` in pwsh 7+); run in a ' +
+      "subdirectory with `Set-Location 'C:\\full\\path'; <command>`."
+    );
   }
-  switch (process.platform) {
-    case 'win32':
-      return process.env.COMSPEC || 'cmd.exe';
-    case 'darwin':
-      return '/bin/zsh';
-    default:
-      return '/bin/bash';
+  if (shell.kind === 'cmd') {
+    return (
+      'You are on Windows (cmd.exe). Use Windows commands (`type`, `dir`, `findstr`, `copy`, ' +
+      '`move`, `del`) — NOT POSIX equivalents (`cat`, `ls`, `grep`, `cp`, `mv`, `rm`). ' +
+      'Run in a subdirectory with `cd /d "C:\\full\\path" && command` (the `/d` switch is ' +
+      'required to change drives).'
+    );
   }
+  return `You are using ${shell.label}. Use POSIX commands.`;
 }
 
 /**
@@ -42,9 +60,13 @@ function getOSName(): string {
  * Generate system information string
  */
 function generateSystemInfo(): string {
+  // NOTE: deliberately no clock time here. The system prompt is the cached
+  // prefix of every request; a time-of-day string changes the prefix and
+  // collapses the provider's prompt-cache hit rate to ~0%. Date is included at
+  // day granularity (a stable prefix within a day, useful to the model) — drop
+  // it too if you want a prefix that survives across days.
   const now = new Date();
   const dateStr = now.toISOString().split('T')[0];
-  const timeStr = now.toTimeString().split(' ')[0];
 
   // Use the workspace root when available so the prompt reflects the active project.
   const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
@@ -56,7 +78,8 @@ Default Shell: ${getDefaultShell()}
 Home Directory: ${os.homedir()}
 Current Working Directory: ${wsRoot}
 Current Date: ${dateStr}
-Current Time: ${timeStr}`;
+
+Shell usage: ${shellGuidance()}`;
 }
 
 /**
@@ -64,20 +87,13 @@ Current Time: ${timeStr}`;
  * for the current platform. Used to harden the inline fallback prompt.
  */
 function environmentSection(): string {
-  const isWin = process.platform === 'win32';
-  const shellNote = isWin
-    ? 'You are on Windows (cmd.exe). For `execute_bash`, use Windows commands ' +
-      '(`type`, `dir`, `findstr`, `copy`, `move`, `del`) — NOT POSIX equivalents ' +
-      '(`cat`, `ls`, `grep`, `cp`, `mv`, `rm`).'
-    : `You are on ${getOSName()} (${getDefaultShell()}). For \`execute_bash\`, use POSIX commands.`;
-
   return `## Environment
 
 ${generateSystemInfo()}
 
 Prefer native tools (\`read_file\`, \`search_file_contents\`, \`list_directory\`) over shell ` +
     `commands for reading, searching, and listing files. When you must use \`execute_bash\`, ` +
-    `tailor commands to the OS and shell above. ${shellNote}`;
+    `tailor commands to the shell shown above.`;
 }
 
 /**

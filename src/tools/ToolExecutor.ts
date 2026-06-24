@@ -7,7 +7,8 @@ import { execFile } from 'child_process';
 import { ToolCallEvent } from '../providers/IProvider';
 import { runWebSearch, formatWebSearchOutput, HttpGetFn, SearchIntent } from './webSearch/index';
 import { runCommand } from './TerminalTool';
-import { isReadOnlySafe, commandAllowKey, windowsCommandCorrection } from './safeCommands';
+import { isReadOnlySafe, commandAllowKey, shellCommandCorrection } from './safeCommands';
+import { resolveShell } from './shell';
 import { resolveMoveBlockPath, moveFile } from './MoveFileTool';
 import { resolveDeleteBlockPath, deleteFile } from './DeleteFileTool';
 import { searchFileWithRg } from './ChunkManager';
@@ -561,14 +562,14 @@ export class ToolExecutor {
     if (!command) { return 'Error: command must not be empty.'; }
     if (!this.wsRoot) { return 'Error: no workspace folder is open.'; }
 
-    // On Windows, refuse POSIX commands that won't work under cmd.exe and tell
-    // the model the correct Windows command / native tool, so it self-corrects.
-    if (process.platform === 'win32') {
-      const correction = windowsCommandCorrection(command);
-      if (correction) {
-        this._activity(`Refused (POSIX on Windows): ${command}`);
-        return correction;
-      }
+    // Refuse commands that won't work in the active shell (e.g. POSIX-only tools
+    // with no equivalent) and tell the model the correct approach so it can
+    // self-correct. Shell-aware: PowerShell aliases like `cat`/`ls` are allowed.
+    const shell = resolveShell();
+    const correction = shellCommandCorrection(command, shell.kind);
+    if (correction) {
+      this._activity(`Refused (won't run in ${shell.label}): ${command}`);
+      return correction;
     }
 
     // Read-only / harmless commands run without an approval gate. Anything that
@@ -585,7 +586,7 @@ export class ToolExecutor {
     }
 
     this.deps.postMessage({ type: 'status', text: `Running: ${command}` });
-    const result = await runCommand(command, this.wsRoot);
+    const result = await runCommand(command, this.wsRoot, shell);
 
     const status = result.timedOut
       ? 'timed out (killed after 30s)'

@@ -23,6 +23,11 @@ const SAFE_PROGRAMS = new Set([
   'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'findstr', 'sort',
   // file metadata (read-only)
   'stat', 'file',
+  // PowerShell read-only cmdlets + aliases (single-stage; pipelines still gate
+  // via SHELL_OPERATOR, which catches `|`).
+  'get-content', 'gc', 'get-childitem', 'gci', 'get-item', 'gi',
+  'get-location', 'gl', 'get-command', 'gcm', 'get-help', 'get-member', 'gm',
+  'test-path', 'resolve-path', 'select-string', 'sls', 'measure-object',
 ]);
 
 /**
@@ -126,12 +131,15 @@ export function commandAllowKey(command: string): string {
   return `runCommand:${commandFamily(command)}`;
 }
 
+/** Shell kinds the correction layer distinguishes. */
+export type CorrectionShellKind = 'pwsh' | 'powershell' | 'cmd' | 'posix';
+
 /**
  * POSIX programs that don't exist (or behave differently) under Windows cmd.exe,
  * mapped to the preferred Windows command and/or native tool. `cat`/`ls`/`grep`
  * may exist via Git/coreutils, but the native tools are always the better path.
  */
-const POSIX_CORRECTIONS: Record<string, string> = {
+const CMD_CORRECTIONS: Record<string, string> = {
   cat:   'Use the `read_file` tool to read files (preferred), or the Windows `type` command.',
   ls:    'Use the `list_directory` tool, or the Windows `dir` command.',
   ll:    'Use the `list_directory` tool, or the Windows `dir` command.',
@@ -150,34 +158,63 @@ const POSIX_CORRECTIONS: Record<string, string> = {
   tail:  'Use the `read_file` tool with a line range; cmd.exe has no `tail`.',
 };
 
+/**
+ * Commands with no PowerShell equivalent (alias or cmdlet). Note that PowerShell
+ * DOES alias cat/ls/cp/mv/rm/pwd/clear/cd → so those are intentionally absent
+ * here: refusing them would be wrong. Only genuinely-missing commands are listed.
+ */
+const POWERSHELL_CORRECTIONS: Record<string, string> = {
+  grep:  'Use the `search_file_contents` tool, or PowerShell `Select-String` (alias `sls`).',
+  egrep: 'Use the `search_file_contents` tool, or PowerShell `Select-String`.',
+  fgrep: 'Use the `search_file_contents` tool, or PowerShell `Select-String -SimpleMatch`.',
+  head:  'Use the `read_file` tool with a line range, or `Get-Content file -TotalCount N`.',
+  tail:  'Use the `read_file` tool with a line range, or `Get-Content file -Tail N`.',
+  touch: 'Use the `write_file` tool to create a file, or `New-Item -ItemType File <name>`.',
+  which: 'Use PowerShell `Get-Command <name>` (alias `gcm`).',
+  man:   'Use PowerShell `Get-Help <command>`.',
+};
+
 /** POSIX `find` flags that indicate the file-finder (vs Windows `find`, a text search). */
 const POSIX_FIND_FLAGS = /(?:^|\s)-(?:name|iname|type|path|maxdepth|mindepth|exec|delete)\b/;
 
-function correctionMessage(prog: string, suggestion: string): string {
-  return `Refused: \`${prog}\` is a POSIX command but this is Windows (cmd.exe). ${suggestion} Re-issue the command using the suggested approach.`;
+function correctionMessage(prog: string, shellLabel: string, suggestion: string): string {
+  return `Refused: \`${prog}\` does not work in ${shellLabel}. ${suggestion} Re-issue the command using the suggested approach.`;
 }
 
 /**
- * For a Windows host, returns a corrective message when the command leads with a
- * POSIX tool that has no cmd.exe equivalent, so the model can self-correct from
- * the tool result. Returns null when the command is fine to run.
+ * Returns a corrective message when the command leads with a tool that won't
+ * work in the active shell, so the model can self-correct from the tool result.
+ * Returns null when the command is fine to run.
  *
- * Platform-agnostic by design (so it is unit-testable); the caller is
- * responsible for only applying it on Windows.
+ * Shell-aware: under PowerShell, POSIX aliases (cat/ls/rm/…) work and are NOT
+ * refused; only genuinely-missing commands are corrected. Under cmd.exe, the
+ * classic POSIX→Windows guidance applies. POSIX shells get no corrections.
  */
-export function windowsCommandCorrection(command: string): string | null {
+export function shellCommandCorrection(command: string, shell: CorrectionShellKind): string | null {
+  if (shell === 'posix') { return null; }
+
   const tokens = tokenize(command.trim());
   if (tokens.length === 0) { return null; }
 
   const prog = programName(tokens[0]);
+  const isPowerShell = shell === 'pwsh' || shell === 'powershell';
+  const shellLabel = isPowerShell ? 'PowerShell' : 'this shell (cmd.exe)';
 
+  // POSIX `find` (the file-finder) works in neither cmd.exe nor PowerShell.
   if (prog === 'find' && POSIX_FIND_FLAGS.test(command)) {
     return correctionMessage(
       'find',
+      shellLabel,
       'Use the `find_files` tool (glob) or `search_file_contents`. Windows `find` is a text search, not a file finder — POSIX flags like `-name`/`-type` will not work.'
     );
   }
 
-  const suggestion = POSIX_CORRECTIONS[prog];
-  return suggestion ? correctionMessage(prog, suggestion) : null;
+  const map = isPowerShell ? POWERSHELL_CORRECTIONS : CMD_CORRECTIONS;
+  const suggestion = map[prog];
+  return suggestion ? correctionMessage(prog, shellLabel, suggestion) : null;
+}
+
+/** @deprecated Use shellCommandCorrection(command, 'cmd'). Kept for callers/tests. */
+export function windowsCommandCorrection(command: string): string | null {
+  return shellCommandCorrection(command, 'cmd');
 }
