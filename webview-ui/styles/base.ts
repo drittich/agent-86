@@ -488,20 +488,48 @@ export const BASE_CSS: string = `
     padding: 8px 12px;
     border-top: 1px solid var(--vscode-widget-border, #454545);
   }
-  #settings-global {
+  #settings-advanced {
+    border-top: 1px solid var(--vscode-widget-border, #454545);
+  }
+  #settings-advanced > summary {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  #settings-advanced > summary::-webkit-details-marker { display: none; }
+  #settings-advanced > summary::before {
+    content: '';
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    opacity: 0.7;
+    transition: transform 0.12s ease-out;
+  }
+  #settings-advanced[open] > summary::before { transform: rotate(90deg); }
+  #settings-advanced > summary:hover { color: var(--vscode-foreground); }
+  .settings-advanced-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 12px;
-    border-top: 1px solid var(--vscode-widget-border, #454545);
+    padding: 0 12px 10px;
   }
-  #settings-global label {
+  .settings-advanced-row label {
     font-size: 11px;
     color: var(--vscode-descriptionForeground);
     white-space: nowrap;
     flex-shrink: 0;
   }
-  #settings-global input {
+  .settings-advanced-row input {
     width: 72px;
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);
@@ -511,7 +539,7 @@ export const BASE_CSS: string = `
     font-size: inherit;
     border-radius: 2px;
   }
-  #settings-global input:focus { outline: 1px solid var(--vscode-focusBorder); }
+  .settings-advanced-row input:focus { outline: 1px solid var(--vscode-focusBorder); }
   #btn-settings-save {
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
