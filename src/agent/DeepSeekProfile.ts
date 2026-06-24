@@ -66,7 +66,7 @@ export function buildDeepSeekExtraBody(level: ThinkingLevel): Record<string, unk
   return {
     reasoning,
     provider: {
-      order: ['DeepSeek'],
+      order: ['deepseek'],
       allow_fallbacks: false,
       require_parameters: true,
     },

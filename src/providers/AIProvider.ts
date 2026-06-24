@@ -214,6 +214,29 @@ export class AIProvider implements IProvider {
   }
 
   /**
+   * Resolve the providerOptions key under which extra request-body fields must
+   * be nested so the Vercel AI SDK forwards them into the HTTP request.
+   *
+   * The `@ai-sdk/openai-compatible` provider (used for OpenRouter, local
+   * llama.cpp, and other OpenAI-compatible endpoints) merges body fields found
+   * at providerOptions[<name>], where <name> is the `name` passed to
+   * createOpenAICompatible. ProviderFactory passes `config.name ||
+   * 'openai-compatible'`, so we mirror that exactly here — the key must match
+   * the provider name byte-for-byte or the fields are dropped. The official
+   * OpenAI and Anthropic providers key on their own fixed names.
+   */
+  private providerOptionsKey(): string {
+    const url = (this.config.baseUrl ?? '').toLowerCase();
+    if (url.includes('anthropic.com')) {
+      return 'anthropic';
+    }
+    if (url.includes('api.openai.com')) {
+      return 'openai';
+    }
+    return this.config.name || 'openai-compatible';
+  }
+
+  /**
    * Internal stream implementation with fallback support.
    * @param provider The AI provider to use
    * @param messages Chat messages
@@ -246,11 +269,20 @@ export class AIProvider implements IProvider {
       const sanitizedMessages = this.sanitizeConversation(messages);
       const modelMessages = this.toModelMessages(sanitizedMessages, true, options?.preserveReasoning ?? false);
 
+      // Extra request-body fields (OpenRouter provider routing, the `reasoning`
+      // object, llama.cpp cache hints) must be nested under
+      // providerOptions[<name>] — NOT spread as top-level streamText args. The
+      // Vercel AI SDK only forwards body fields it finds at that key; unknown
+      // top-level args are silently dropped and never reach the wire. See
+      // providerOptionsKey() for how <name> is resolved.
+      const extraBody = options?.extraBody;
       const streamArgs: Parameters<typeof streamText>[0] = {
         model: languageModel,
         messages: modelMessages as any,
         abortSignal: signal,
-        ...(options?.extraBody ?? {})
+        ...(extraBody && Object.keys(extraBody).length > 0
+          ? { providerOptions: { [this.providerOptionsKey()]: extraBody as Record<string, any> } }
+          : {})
       };
 
       if (useNativeTools) {
